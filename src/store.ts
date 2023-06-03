@@ -1,9 +1,18 @@
+import { writable, type Readable } from 'svelte/store';
 import { pipe, filter } from 'rxjs';
 import type { Observable, OperatorFunction } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
 export type RxReqBase = RxReq & RxReqController;
+
+export interface ReqResult<A> {
+  data: Observable<A>,
+  isLoading: Readable<boolean>,
+  isSuccess: Readable<boolean>,
+  isError: Readable<boolean>,
+  error: Readable<Error | undefined>,
+}
 
 function composeOperators<A>(
   preOperator: OperatorFunction<A, A> | undefined,
@@ -29,7 +38,7 @@ export function useEvents(
   req?: RxReqBase | undefined,
   preOperator?: OperatorFunction<EventPacket, EventPacket> | undefined,
   postOperator?: OperatorFunction<EventPacket, EventPacket> | undefined
-): Observable<EventPacket> {
+): ReqResult<EventPacket> {
   let _req: RxReq;
   if (req) {
     req.emit(filters);
@@ -39,7 +48,31 @@ export function useEvents(
   }
 
   const opeartor = composeOperators(preOperator, verify(), postOperator);
-  return client.use(_req).pipe(opeartor);
+  const data = client.use(_req).pipe(opeartor);
+
+  const isLoading = writable(true);
+  const isSuccess = writable(false);
+  const isError = writable(false);
+  const error = writable<Error | undefined>(undefined);
+
+  data.subscribe({
+    complete: () => {
+      isLoading.set(false);
+      isSuccess.set(true);
+    },
+    error: (e) => {
+      isError.set(true);
+      error.set(e);
+    }
+  });
+
+  return {
+    data,
+    isLoading,
+    isSuccess,
+    isError,
+    error,
+  };
 }
 
 export function useLatestEvent(
@@ -48,7 +81,7 @@ export function useLatestEvent(
   req?: RxReqBase | undefined,
   preOperator?: OperatorFunction<EventPacket, EventPacket> | undefined,
   postOperator?: OperatorFunction<EventPacket, EventPacket> | undefined,
-): Observable<EventPacket> {
+): ReqResult<EventPacket> {
   const operator = composeOperators(preOperator, latest(), postOperator);
 
   return useEvents(client, filters, req, undefined, operator);
@@ -58,7 +91,7 @@ export function useMetadata(
   client: RxNostr,
   pubkey: string,
   req?: RxReqBase | undefined
-): Observable<EventPacket> {
+): ReqResult<EventPacket> {
   // TODO: Add npub support
   const filters = [{ authors: [pubkey] }]
   const preOperator = filter((packet: EventPacket) => packet.event.pubkey === pubkey); // For reusing req
