@@ -8,7 +8,7 @@
   ],
   "main": "./dist/index.umd.cjs",
   "module": "./dist/index.js",
-  "types": "./types/src/main.d.ts",
+  "types": "./types/src/index.d.ts",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build"
