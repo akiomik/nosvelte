@@ -1,5 +1,5 @@
 import type { Observable } from 'rxjs';
-import { createRxOneshotReq, Nostr } from 'rx-nostr';
+import { createRxOneshotReq, Nostr, verify, latest } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
 type RxReqBase = RxReq & RxReqController;
@@ -21,4 +21,15 @@ export function useEvents(
   }
 
   return client.use(_req);
+}
+
+export function useLatestEvent(
+  client: RxNostr,
+  filters: Nostr.Filter[],
+  req: RxReqBase | undefined
+): Observable<EventPacket> {
+  return useEvents(client, filters, req).pipe(
+    verify(),
+    latest()
+  );
 }
