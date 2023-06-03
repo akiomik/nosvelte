@@ -33,3 +33,14 @@ export function useLatestEvent(
     latest()
   );
 }
+
+export function useMetadata(
+  client: RxNostr,
+  pubkey: string,
+  req: RxReqBase | undefined
+): Observable<EventPacket> {
+  // TODO: Add npub support
+  // TODO: Add pubkey filter for reusing req
+  const filters = [{ authors: [pubkey] }]
+  return useLatestEvent(client, filters, req);
+}
