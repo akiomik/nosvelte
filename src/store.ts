@@ -2,7 +2,7 @@ import type { Observable } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
-type RxReqBase = RxReq & RxReqController;
+export type RxReqBase = RxReq & RxReqController;
 
 // TODO: Add cache support
 // TODO: Add operators support
