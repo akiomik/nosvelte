@@ -27,7 +27,7 @@
     "svelte": "^3.54.0"
   },
   "dependencies": {
-    "rx-nostr": "^0.8.1"
+    "rx-nostr": "^0.8.2"
   },
   "devDependencies": {
     "@sveltejs/adapter-auto": "^2.0.0",
