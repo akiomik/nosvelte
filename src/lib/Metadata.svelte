@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { EventPacket } from 'rx-nostr';
+  import type { Nostr } from 'rx-nostr';
   import { app, useMetadata, type RxReqBase } from './store';
 
   export let pubkey: string;
@@ -7,9 +7,10 @@
 
   const { data, isLoading, isSuccess, error } = useMetadata($app.client, pubkey, req);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface $$Slots {
-    default: { data: EventPacket; loading: boolean; success: boolean };
-    loading: {};
+    default: { metadata: Nostr.Event; loading: boolean; success: boolean };
+    loading: Record<never, never>;
     error: { error: Error };
   }
 </script>
@@ -19,5 +20,5 @@
 {:else if $error}
   <slot name="error" error={$error} />
 {:else}
-  <slot data={$data} loading={$isLoading} success={$isSuccess} />
+  <slot metadata={$data.event} loading={$isLoading} success={$isSuccess} />
 {/if}
