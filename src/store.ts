@@ -73,7 +73,7 @@ export function useMetadata(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
   // TODO: Add npub support
-  const filters = [{ authors: [pubkey] }];
+  const filters = [{ kinds: [Nostr.Kind.Metadata], authors: [pubkey] }];
   const operator = pipe(
     filterKind(Nostr.Kind.Metadata),
     filterPubkey(pubkey),
