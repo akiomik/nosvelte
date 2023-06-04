@@ -5,9 +5,9 @@
   let relays: string[] = ['wss://relay.damus.io'];
   let newRelay = '';
 
-  const unique = (xs) => [...new Set(xs)];
+  const unique = <A>(xs: A[]) => [...new Set(xs)];
 
-  const removeRelay = (relay) => {
+  const removeRelay = (relay: string) => {
     relays = relays.filter((r) => r !== relay);
   };
 
