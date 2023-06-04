@@ -87,6 +87,7 @@ export function useLatestEvent(
   return useEvents(client, filters, req, undefined, operator);
 }
 
+// TODO: Don't use useLatestEvent for reusing req
 export function useMetadata(
   client: RxNostr,
   pubkey: string,
