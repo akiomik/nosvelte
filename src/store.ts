@@ -1,8 +1,10 @@
 import { writable, type Readable } from 'svelte/store';
-import { pipe, filter } from 'rxjs';
+import { pipe } from 'rxjs';
 import type { Observable, OperatorFunction } from 'rxjs';
-import { createRxOneshotReq, Nostr, verify, latest } from 'rx-nostr';
+import { createRxOneshotReq, Nostr, verify, latest, filterKind } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
+
+import { filterPubkey } from './operator';
 
 export type RxReqBase = RxReq & RxReqController;
 
@@ -14,30 +16,13 @@ export interface ReqResult<A> {
   error: Readable<Error | undefined>,
 }
 
-function composeOperators<A>(
-  preOperator: OperatorFunction<A, A> | undefined,
-  operator: OperatorFunction<A, A>,
-  postOperator: OperatorFunction<A, A> | undefined
-): OperatorFunction<A, A> {
-  if (preOperator && postOperator) {
-    return pipe(preOperator, operator, postOperator);
-  } else if (preOperator) {
-    return pipe(preOperator, operator);
-  } else if (postOperator) {
-    return pipe(operator, postOperator);
-  } else {
-    return operator;
-  }
-}
-
 // TODO: Add cache support
 // TODO: Add timeout support
 export function useEvents(
   client: RxNostr,
   filters: Nostr.Filter[],
+  opeartor: OperatorFunction<EventPacket, EventPacket>,
   req?: RxReqBase | undefined,
-  preOperator?: OperatorFunction<EventPacket, EventPacket> | undefined,
-  postOperator?: OperatorFunction<EventPacket, EventPacket> | undefined
 ): ReqResult<EventPacket> {
   let _req: RxReq;
   if (req) {
@@ -47,9 +32,7 @@ export function useEvents(
     _req = createRxOneshotReq({ filters });
   }
 
-  const opeartor = composeOperators(preOperator, verify(), postOperator);
   const data = client.use(_req).pipe(opeartor);
-
   const isLoading = writable(true);
   const isSuccess = writable(false);
   const isError = writable(false);
@@ -78,23 +61,24 @@ export function useEvents(
 export function useLatestEvent(
   client: RxNostr,
   filters: Nostr.Filter[],
-  req?: RxReqBase | undefined,
-  preOperator?: OperatorFunction<EventPacket, EventPacket> | undefined,
-  postOperator?: OperatorFunction<EventPacket, EventPacket> | undefined,
+  req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
-  const operator = composeOperators(preOperator, latest(), postOperator);
-
-  return useEvents(client, filters, req, undefined, operator);
+  const operator = pipe(verify(), latest());
+  return useEvents(client, filters, operator, req);
 }
 
-// TODO: Don't use useLatestEvent for reusing req
 export function useMetadata(
   client: RxNostr,
   pubkey: string,
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
   // TODO: Add npub support
-  const filters = [{ authors: [pubkey] }]
-  const preOperator = filter((packet: EventPacket) => packet.event.pubkey === pubkey); // For reusing req
-  return useLatestEvent(client, filters, req, preOperator);
+  const filters = [{ authors: [pubkey] }];
+  const operator = pipe(
+    filterKind(Nostr.Kind.Metadata),
+    filterPubkey(pubkey),
+    verify(),
+    latest(),
+  );
+  return useEvents(client, filters, operator, req);
 }
