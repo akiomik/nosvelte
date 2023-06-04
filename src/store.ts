@@ -4,7 +4,16 @@ import type { Observable, OperatorFunction } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
-import { filterId, filterTextList, filterPubkey, filterMetadataList, filterNaddr, latestEachPubkey, scanArray } from './operator';
+import {
+  filterId,
+  filterTextList,
+  filterPubkey,
+  filterMetadataList,
+  filterNaddr,
+  latestEachPubkey,
+  latestEachNaddr,
+  scanArray
+} from './operator';
 
 export type RxReqBase = RxReq & RxReqController;
 export enum SortOrder {
@@ -164,6 +173,23 @@ export function useArticle(
     filterNaddr(Nostr.Kind.Article, pubkey, identifier),
     verify(),
     latest(),
+  );
+  return useEvents(client, filters, operator, req);
+}
+
+export function useUserArticleList(
+  client: RxNostr,
+  pubkey: string,
+  limit: number,
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket[]> {
+  const filters = [{ kinds: [Nostr.Kind.Article], authors: [pubkey], limit }];
+  const operator = pipe(
+    filterKind(Nostr.Kind.Article),
+    filterPubkey(pubkey),
+    verify(),
+    latestEachNaddr(),
+    scanArray(),
   );
   return useEvents(client, filters, operator, req);
 }

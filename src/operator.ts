@@ -26,6 +26,10 @@ export function latestEachPubkey(): OperatorFunction<EventPacket, EventPacket> {
   return latestEach(({ event }) => event.pubkey);
 }
 
+export function latestEachNaddr(): OperatorFunction<EventPacket, EventPacket> {
+  return latestEach(({ event }) => `${event.kind}:${event.pubkey}:${event.tags[0][1]}`);
+}
+
 export function scanArray<A>(): OperatorFunction<A, A[]> {
   return scan((acc: A[], a: A) => [...acc, a], []);
 }
