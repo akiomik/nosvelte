@@ -4,7 +4,7 @@ import type { Observable, OperatorFunction } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
-import { filterId, filterPubkey, filterMetadataList, filterNaddr, latestEachPubkey, scanArray } from './operator';
+import { filterId, filterTextList, filterPubkey, filterMetadataList, filterNaddr, latestEachPubkey, scanArray } from './operator';
 
 export type RxReqBase = RxReq & RxReqController;
 export enum SortOrder {
@@ -115,6 +115,22 @@ export function useText(
     filterId(id),
     uniq(),
     verify(),
+  );
+  return useEvents(client, filters, operator, req);
+}
+
+export function useTextList(
+  client: RxNostr,
+  ids: string[],
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket[]> {
+  // TODO: Add note1 support
+  const filters = [{ kinds: [Nostr.Kind.Text], ids }];
+  const operator = pipe(
+    filterTextList(ids),
+    uniq(),
+    verify(),
+    scanArray(),
   );
   return useEvents(client, filters, operator, req);
 }

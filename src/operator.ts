@@ -6,6 +6,10 @@ export function filterId(id: string): OperatorFunction<EventPacket, EventPacket>
   return filter((packet) => packet.event.id === id)
 }
 
+export function filterTextList(ids: string[]): OperatorFunction<EventPacket, EventPacket> {
+  return filter(({ event }) => event.kind === Nostr.Kind.Text && ids.includes(event.id));
+}
+
 export function filterPubkey(pubkey: string): OperatorFunction<EventPacket, EventPacket> {
   return filter((packet) => packet.event.pubkey === pubkey)
 }
