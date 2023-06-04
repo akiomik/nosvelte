@@ -1,11 +1,6 @@
-import { defineConfig } from 'vite'
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
 
 export default defineConfig({
-  build: {
-    lib: {
-      entry: './src/index.ts',
-      name: 'svelte-nostr',
-      formats: ["es", "cjs", "umd"],
-    }
-  }
-})
+  plugins: [sveltekit()]
+});
