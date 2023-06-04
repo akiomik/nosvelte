@@ -1,12 +1,16 @@
 import { writable, type Readable } from 'svelte/store';
 import { pipe } from 'rxjs';
 import type { Observable, OperatorFunction } from 'rxjs';
-import { createRxOneshotReq, Nostr, verify, latest, filterKind } from 'rx-nostr';
+import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
 import { filterPubkey } from './operator';
 
 export type RxReqBase = RxReq & RxReqController;
+export enum SortOrder {
+  Asc = 'Asc',
+  Desc = 'Desc',
+};
 
 export interface ReqResult<A> {
   data: Observable<A>,
@@ -79,6 +83,21 @@ export function useMetadata(
     filterPubkey(pubkey),
     verify(),
     latest(),
+  );
+  return useEvents(client, filters, operator, req);
+}
+
+export function useText(
+  client: RxNostr,
+  id: string,
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket> {
+  // TODO: Add note1 support
+  const filters = [{ kinds: [Nostr.Kind.Text], ids: [id] }];
+  const operator = pipe(
+    filterKind(Nostr.Kind.Text),
+    uniq(),
+    verify(),
   );
   return useEvents(client, filters, operator, req);
 }
