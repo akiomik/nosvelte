@@ -1,10 +1,19 @@
 <script lang="ts">
-  import { createRxNostr, type Relay } from 'rx-nostr';
+  import { onMount, onDestroy } from 'svelte';
+  import { createRxNostr, type Relay, type RxNostr } from 'rx-nostr';
   import { app } from './store';
 
   export let relays: (string | Relay)[];
 
-  const client = createRxNostr();
+  let client: RxNostr;
+
+  onMount(() => {
+    client = createRxNostr();
+  });
+
+  onDestroy(() => {
+    client.dispose();
+  });
 
   // TODO: Manage connections
   $: {
