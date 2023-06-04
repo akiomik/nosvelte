@@ -2,7 +2,7 @@
   import { createRxNostr, type Relay } from 'rx-nostr';
   import { app } from './store';
 
-  export let relays: Relay[];
+  export let relays: (string | Relay)[];
 
   const client = createRxNostr()
 
