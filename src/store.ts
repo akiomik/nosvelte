@@ -4,7 +4,7 @@ import type { Observable, OperatorFunction } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
-import { filterId, filterPubkey, filterNaddr } from './operator';
+import { filterId, filterPubkey, filterMetadataList, filterNaddr, latestEachPubkey, scanArray } from './operator';
 
 export type RxReqBase = RxReq & RxReqController;
 export enum SortOrder {
@@ -22,12 +22,12 @@ export interface ReqResult<A> {
 
 // TODO: Add cache support
 // TODO: Add timeout support
-export function useEvents(
+export function useEvents<A>(
   client: RxNostr,
   filters: Nostr.Filter[],
-  opeartor: OperatorFunction<EventPacket, EventPacket>,
+  opeartor: OperatorFunction<EventPacket, A>,
   req?: RxReqBase | undefined,
-): ReqResult<EventPacket> {
+): ReqResult<A> {
   let _req: RxReq;
   if (req) {
     req.emit(filters);
@@ -83,6 +83,22 @@ export function useMetadata(
     filterPubkey(pubkey),
     verify(),
     latest(),
+  );
+  return useEvents(client, filters, operator, req);
+}
+
+export function useMetadataList(
+  client: RxNostr,
+  pubkeys: string[],
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket[]> {
+  // TODO: Add npub support
+  const filters = [{ kinds: [Nostr.Kind.Metadata], authors: pubkeys, limit: pubkeys.length }];
+  const operator = pipe(
+    filterMetadataList(pubkeys),
+    verify(),
+    latestEachPubkey(),
+    scanArray(),
   );
   return useEvents(client, filters, operator, req);
 }
