@@ -5,7 +5,11 @@
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
 
-  const { data, isLoading, isSuccess, error } = useMetadata($app.client, pubkey, req);
+  $: result = useMetadata($app.client, pubkey, req);
+  $: data = result.data;
+  $: isLoading = result.isLoading;
+  $: error = result.error;
+  $: isSuccess = result.isSuccess;
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface $$Slots {
