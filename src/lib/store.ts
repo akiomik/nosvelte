@@ -13,7 +13,7 @@ import {
   latestEachPubkey,
   latestEachNaddr,
   scanArray
-} from './operator';
+} from './operator.js';
 
 export type RxReqBase = RxReq & RxReqController;
 export enum SortOrder {

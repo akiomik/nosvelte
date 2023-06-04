@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { createRxNostr, type Relay, type RxNostr } from 'rx-nostr';
-  import { app } from './store';
+  import { app } from './store.js';
 
   export let relays: (string | Relay)[];
 
