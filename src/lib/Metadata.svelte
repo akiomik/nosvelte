@@ -15,10 +15,10 @@
   }
 </script>
 
-{#if $isLoading && !$data}
+{#if $isLoading && $data === undefined}
   <slot name="loading" />
 {:else if $error}
   <slot name="error" error={$error} />
 {:else}
-  <slot metadata={$data.event} loading={$isLoading} success={$isSuccess} />
+  <slot metadata={$data?.event} loading={$isLoading} success={$isSuccess} />
 {/if}
