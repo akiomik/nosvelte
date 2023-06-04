@@ -1,15 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { createRxNostr, type Relay, type RxNostr } from 'rx-nostr';
   import { app } from './store';
 
   export let relays: (string | Relay)[];
 
-  let client: RxNostr;
-
-  onMount(() => {
-    client = createRxNostr();
-  });
+  let client: RxNostr = createRxNostr();
 
   onDestroy(() => {
     client.dispose();
