@@ -77,7 +77,7 @@ export function useMetadata(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
   // TODO: Add npub support
-  const filters = [{ kinds: [Nostr.Kind.Metadata], authors: [pubkey] }];
+  const filters = [{ kinds: [Nostr.Kind.Metadata], authors: [pubkey], limit: 1 }];
   const operator = pipe(
     filterKind(Nostr.Kind.Metadata),
     filterPubkey(pubkey),
@@ -93,7 +93,7 @@ export function useText(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
   // TODO: Add note1 support
-  const filters = [{ kinds: [Nostr.Kind.Text], ids: [id] }];
+  const filters = [{ kinds: [Nostr.Kind.Text], ids: [id], limit: 1 }];
   const operator = pipe(
     filterKind(Nostr.Kind.Text),
     uniq(),
