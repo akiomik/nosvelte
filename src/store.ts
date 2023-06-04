@@ -135,6 +135,24 @@ export function useTextList(
   return useEvents(client, filters, operator, req);
 }
 
+export function useUserTextList(
+  client: RxNostr,
+  pubkey: string,
+  limit: number,
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket[]> {
+  // TODO: Add note1 support
+  const filters = [{ kinds: [Nostr.Kind.Text], authors: [pubkey], limit }];
+  const operator = pipe(
+    filterKind(Nostr.Kind.Text),
+    filterPubkey(pubkey),
+    uniq(),
+    verify(),
+    scanArray(),
+  );
+  return useEvents(client, filters, operator, req);
+}
+
 export function useArticle(
   client: RxNostr,
   pubkey: string,
