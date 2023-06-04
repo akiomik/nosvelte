@@ -5,12 +5,12 @@
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
 
-  const { data, isLoading, isSuccess, error } = useMetadata($app.client, pubkey, req)
+  const { data, isLoading, isSuccess, error } = useMetadata($app.client, pubkey, req);
 
   interface $$Slots {
-    default: { data: EventPacket, loading: boolean, success: boolean },
-    loading: {},
-    error: { error: Error },
+    default: { data: EventPacket; loading: boolean; success: boolean };
+    loading: {};
+    error: { error: Error };
   }
 </script>
 

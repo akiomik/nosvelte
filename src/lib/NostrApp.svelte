@@ -4,7 +4,7 @@
 
   export let relays: (string | Relay)[];
 
-  const client = createRxNostr()
+  const client = createRxNostr();
 
   // TODO: Manage connections
   $: {

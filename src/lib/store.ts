@@ -18,15 +18,15 @@ import {
 export type RxReqBase = RxReq & RxReqController;
 export enum SortOrder {
   Asc = 'Asc',
-  Desc = 'Desc',
-};
+  Desc = 'Desc'
+}
 
 export interface ReqResult<A> {
-  data: Observable<A>,
-  isLoading: Readable<boolean>,
-  isSuccess: Readable<boolean>,
-  isError: Readable<boolean>,
-  error: Readable<Error | undefined>,
+  data: Observable<A>;
+  isLoading: Readable<boolean>;
+  isSuccess: Readable<boolean>;
+  isError: Readable<boolean>;
+  error: Readable<Error | undefined>;
 }
 
 export const app = writable<{ client: RxNostr }>();
@@ -37,7 +37,7 @@ export function useEvents<A>(
   client: RxNostr,
   filters: Nostr.Filter[],
   opeartor: OperatorFunction<EventPacket, A>,
-  req?: RxReqBase | undefined,
+  req?: RxReqBase | undefined
 ): ReqResult<A> {
   let _req: RxReq;
   if (req) {
@@ -69,7 +69,7 @@ export function useEvents<A>(
     isLoading,
     isSuccess,
     isError,
-    error,
+    error
   };
 }
 
@@ -89,12 +89,7 @@ export function useMetadata(
 ): ReqResult<EventPacket> {
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: [pubkey], limit: 1 }];
-  const operator = pipe(
-    filterKind(Nostr.Kind.Metadata),
-    filterPubkey(pubkey),
-    verify(),
-    latest(),
-  );
+  const operator = pipe(filterKind(Nostr.Kind.Metadata), filterPubkey(pubkey), verify(), latest());
   return useEvents(client, filters, operator, req);
 }
 
@@ -105,12 +100,7 @@ export function useMetadataList(
 ): ReqResult<EventPacket[]> {
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: pubkeys, limit: pubkeys.length }];
-  const operator = pipe(
-    filterMetadataList(pubkeys),
-    verify(),
-    latestEachPubkey(),
-    scanArray(),
-  );
+  const operator = pipe(filterMetadataList(pubkeys), verify(), latestEachPubkey(), scanArray());
   return useEvents(client, filters, operator, req);
 }
 
@@ -121,12 +111,7 @@ export function useText(
 ): ReqResult<EventPacket> {
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids: [id], limit: 1 }];
-  const operator = pipe(
-    filterKind(Nostr.Kind.Text),
-    filterId(id),
-    uniq(),
-    verify(),
-  );
+  const operator = pipe(filterKind(Nostr.Kind.Text), filterId(id), uniq(), verify());
   return useEvents(client, filters, operator, req);
 }
 
@@ -137,12 +122,7 @@ export function useTextList(
 ): ReqResult<EventPacket[]> {
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids }];
-  const operator = pipe(
-    filterTextList(ids),
-    uniq(),
-    verify(),
-    scanArray(),
-  );
+  const operator = pipe(filterTextList(ids), uniq(), verify(), scanArray());
   return useEvents(client, filters, operator, req);
 }
 
@@ -159,7 +139,7 @@ export function useUserTextList(
     filterPubkey(pubkey),
     uniq(),
     verify(),
-    scanArray(),
+    scanArray()
   );
   return useEvents(client, filters, operator, req);
 }
@@ -170,12 +150,10 @@ export function useArticle(
   identifier: string,
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
-  const filters = [{ kinds: [Nostr.Kind.Article], authors: [pubkey], '#d': [identifier], limit: 1 }];
-  const operator = pipe(
-    filterNaddr(Nostr.Kind.Article, pubkey, identifier),
-    verify(),
-    latest(),
-  );
+  const filters = [
+    { kinds: [Nostr.Kind.Article], authors: [pubkey], '#d': [identifier], limit: 1 }
+  ];
+  const operator = pipe(filterNaddr(Nostr.Kind.Article, pubkey, identifier), verify(), latest());
   return useEvents(client, filters, operator, req);
 }
 
@@ -191,7 +169,7 @@ export function useUserArticleList(
     filterPubkey(pubkey),
     verify(),
     latestEachNaddr(),
-    scanArray(),
+    scanArray()
   );
   return useEvents(client, filters, operator, req);
 }
