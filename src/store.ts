@@ -4,7 +4,7 @@ import type { Observable, OperatorFunction } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
 import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
 
-import { filterPubkey } from './operator';
+import { filterId, filterPubkey } from './operator';
 
 export type RxReqBase = RxReq & RxReqController;
 export enum SortOrder {
@@ -96,6 +96,7 @@ export function useText(
   const filters = [{ kinds: [Nostr.Kind.Text], ids: [id], limit: 1 }];
   const operator = pipe(
     filterKind(Nostr.Kind.Text),
+    filterId(id),
     uniq(),
     verify(),
   );
