@@ -29,6 +29,8 @@ export interface ReqResult<A> {
   error: Readable<Error | undefined>,
 }
 
+export const app = writable<{ client: RxNostr }>();
+
 // TODO: Add cache support
 // TODO: Add timeout support
 export function useEvents<A>(
