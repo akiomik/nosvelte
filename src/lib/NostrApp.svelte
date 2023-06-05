@@ -1,3 +1,8 @@
+<!--
+@license Apache-2.0
+@copyright 2023 Akiomi Kamakura
+-->
+
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { createRxNostr, type Relay, type RxNostr, type ConnectionStatePacket } from 'rx-nostr';

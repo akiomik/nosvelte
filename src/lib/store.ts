@@ -1,3 +1,8 @@
+/**
+ * @license Apache-2.0
+ * @copyright 2023 Akiomi Kamakura
+ */
+
 import { writable, readable, type Readable } from 'svelte/store';
 import { pipe, startWith, EMPTY, from } from 'rxjs';
 import type { Observable, OperatorFunction } from 'rxjs';

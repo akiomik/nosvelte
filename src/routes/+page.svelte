@@ -1,3 +1,8 @@
+<!--
+@license Apache-2.0
+@copyright 2023 Akiomi Kamakura
+-->
+
 <script lang="ts">
   import NostrApp from '$lib/NostrApp.svelte';
   import Metadata from '$lib/Metadata.svelte';

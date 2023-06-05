@@ -1,3 +1,8 @@
+<!--
+@license Apache-2.0
+@copyright 2023 Akiomi Kamakura
+-->
+
 <script lang="ts">
   import type { Nostr } from 'rx-nostr';
   import { app, useMetadata, type RxReqBase } from './store.js';

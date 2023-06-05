@@ -1,3 +1,8 @@
+/**
+ * @license Apache-2.0
+ * @copyright 2023 Akiomi Kamakura
+ */
+
 import { filter, scan, map, pipe, type OperatorFunction } from 'rxjs';
 import { Nostr, latestEach } from 'rx-nostr';
 import type { EventPacket } from 'rx-nostr';
