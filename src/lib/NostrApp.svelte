@@ -1,9 +1,9 @@
-<!--
-@license Apache-2.0
-@copyright 2023 Akiomi Kamakura
--->
-
 <script lang="ts">
+  /**
+   * @license Apache-2.0
+   * @copyright 2023 Akiomi Kamakura
+   */
+
   import type { ConnectionStatePacket, Relay, RxNostr } from 'rx-nostr';
   import { createRxNostr } from 'rx-nostr';
   import { onDestroy } from 'svelte';

@@ -1,9 +1,9 @@
-<!--
-@license Apache-2.0
-@copyright 2023 Akiomi Kamakura
--->
-
 <script lang="ts">
+  /**
+   * @license Apache-2.0
+   * @copyright 2023 Akiomi Kamakura
+   */
+
   import type { Nostr } from 'rx-nostr';
 
   import type { RxReqBase } from './store.js';

@@ -1,9 +1,9 @@
-<!--
-@license Apache-2.0
-@copyright 2023 Akiomi Kamakura
--->
-
 <script lang="ts">
+  /**
+   * @license Apache-2.0
+   * @copyright 2023 Akiomi Kamakura
+   */
+
   import Metadata from '$lib/Metadata.svelte';
   import NostrApp from '$lib/NostrApp.svelte';
 
