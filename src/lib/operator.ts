@@ -1,4 +1,4 @@
-import { filter, scan, type OperatorFunction } from 'rxjs';
+import { filter, scan, map, pipe, type OperatorFunction } from 'rxjs';
 import { Nostr, latestEach } from 'rx-nostr';
 import type { EventPacket } from 'rx-nostr';
 
@@ -40,4 +40,30 @@ export function latestEachNaddr(): OperatorFunction<EventPacket, EventPacket> {
 
 export function scanArray<A>(): OperatorFunction<A, A[]> {
   return scan((acc: A[], a: A) => [...acc, a], []);
+}
+
+export function collectGroupBy<A, K>(f: (a: A) => K): OperatorFunction<A, Map<K, A[]>> {
+  return pipe(
+    scanArray(),
+    map((xs) => {
+      const dict = new Map<K, A[]>();
+      xs.forEach((x) => {
+        const key = f(x);
+        const value = dict.get(key);
+        if (value) {
+          dict.set(key, [...value, x]);
+        } else {
+          dict.set(key, [x]);
+        }
+      });
+      return dict;
+    })
+  );
+}
+
+export function scanLatestEach<A, K>(f: (a: A) => K): OperatorFunction<A, A[]> {
+  return pipe(
+    collectGroupBy(f),
+    map((dict) => Array.from(dict.entries()).map(([, value]) => value.slice(-1)[0]))
+  );
 }

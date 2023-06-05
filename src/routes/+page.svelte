@@ -2,7 +2,7 @@
   import NostrApp from '$lib/NostrApp.svelte';
   import Metadata from '$lib/Metadata.svelte';
 
-  let relays: string[] = ['wss://relay.damus.io'];
+  let relays: string[] = ['wss://relay.damus.io', 'wss://relay.snort.social'];
   let newRelay = '';
   let pubkey = '4d39c23b3b03bf99494df5f3a149c7908ae1bc7416807fdd6b34a31886eaae25';
 
@@ -22,15 +22,17 @@
 
 <h1>Nostr profile viwer</h1>
 
-<NostrApp {relays}>
+<NostrApp {relays} let:connections>
   <section>
     <h2>Relays</h2>
 
     <ul>
-      {#each relays as relay}
+      {#each connections as connection (connection.from)}
         <li>
-          {relay}
-          <button on:click={() => removeRelay(relay)}>Remove</button>
+          {connection.from}
+          /
+          {connection.state}
+          <button on:click={() => removeRelay(connection.from)}>Remove</button>
         </li>
       {/each}
     </ul>
@@ -69,7 +71,11 @@
           <p>{error}</p>
         </div>
 
-        <p>{JSON.parse(metadata.content).name}</p>
+        {#if metadata}
+          <p>{JSON.parse(metadata.content).name}</p>
+        {:else}
+          <p>Not found</p>
+        {/if}
       </Metadata>
     {/if}
   </section>

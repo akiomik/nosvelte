@@ -1,8 +1,16 @@
-import { writable, type Readable } from 'svelte/store';
-import { pipe } from 'rxjs';
+import { writable, readable, type Readable } from 'svelte/store';
+import { pipe, startWith, EMPTY } from 'rxjs';
 import type { Observable, OperatorFunction } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
-import type { RxNostr, RxReq, RxReqController, EventPacket } from 'rx-nostr';
+import type {
+  RxNostr,
+  RxReq,
+  RxReqController,
+  EventPacket,
+  ConnectionState,
+  ConnectionStatePacket,
+  Relay
+} from 'rx-nostr';
 
 import {
   filterId,
@@ -12,7 +20,8 @@ import {
   filterNaddr,
   latestEachPubkey,
   latestEachNaddr,
-  scanArray
+  scanArray,
+  scanLatestEach
 } from './operator.js';
 
 export type RxReqBase = RxReq & RxReqController;
@@ -29,7 +38,38 @@ export interface ReqResult<A> {
   error: Readable<Error | undefined>;
 }
 
+export const emptyResult = {
+  data: EMPTY,
+  isLoading: readable(false),
+  isSuccess: readable(true),
+  isError: readable(false),
+  error: readable(undefined)
+};
+
 export const app = writable<{ client: RxNostr }>();
+
+export function useConnections(
+  client: RxNostr,
+  relays: (string | Relay)[]
+): Observable<ConnectionStatePacket[]> {
+  const init = relays.map((relay) => {
+    const from = typeof relay === 'string' ? relay : relay.url;
+
+    let state: ConnectionState;
+    try {
+      state = client.getRelayState(from);
+    } catch {
+      state = 'not-started';
+    }
+
+    return { from, state };
+  });
+
+  return client.createConnectionStateObservable().pipe(
+    startWith(...init),
+    scanLatestEach(({ from }) => from)
+  );
+}
 
 // TODO: Add cache support
 // TODO: Add timeout support
