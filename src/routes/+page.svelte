@@ -4,8 +4,8 @@
 -->
 
 <script lang="ts">
-  import NostrApp from '$lib/NostrApp.svelte';
   import Metadata from '$lib/Metadata.svelte';
+  import NostrApp from '$lib/NostrApp.svelte';
 
   let relays: string[] = ['wss://relay.damus.io', 'wss://relay.snort.social'];
   let newRelay = '';

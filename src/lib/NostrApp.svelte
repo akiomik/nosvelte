@@ -4,8 +4,10 @@
 -->
 
 <script lang="ts">
+  import type { ConnectionStatePacket, Relay, RxNostr } from 'rx-nostr';
+  import { createRxNostr } from 'rx-nostr';
   import { onDestroy } from 'svelte';
-  import { createRxNostr, type Relay, type RxNostr, type ConnectionStatePacket } from 'rx-nostr';
+
   import { app, useConnections } from './store.js';
 
   export let relays: (string | Relay)[] = [];

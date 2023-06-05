@@ -3,28 +3,29 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import { writable, readable, type Readable } from 'svelte/store';
-import { pipe, startWith, EMPTY, from } from 'rxjs';
-import type { Observable, OperatorFunction } from 'rxjs';
-import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
 import type {
-  RxNostr,
-  RxReq,
-  RxReqController,
-  EventPacket,
   ConnectionState,
   ConnectionStatePacket,
-  Relay
+  EventPacket,
+  Relay,
+  RxNostr,
+  RxReq,
+  RxReqController
 } from 'rx-nostr';
+import { createRxOneshotReq, filterKind, latest, Nostr, uniq, verify } from 'rx-nostr';
+import type { Observable, OperatorFunction } from 'rxjs';
+import { from, pipe, startWith } from 'rxjs';
+import type { Readable } from 'svelte/store';
+import { readable, writable } from 'svelte/store';
 
 import {
   filterId,
-  filterTextList,
-  filterPubkey,
   filterMetadataList,
   filterNaddr,
-  latestEachPubkey,
+  filterPubkey,
+  filterTextList,
   latestEachNaddr,
+  latestEachPubkey,
   scanArray,
   scanLatestEach
 } from './operator.js';
@@ -42,14 +43,6 @@ export interface ReqResult<A> {
   isError: Readable<boolean>;
   error: Readable<Error | undefined>;
 }
-
-export const emptyResult = {
-  data: EMPTY,
-  isLoading: readable(false),
-  isSuccess: readable(true),
-  isError: readable(false),
-  error: readable(undefined)
-};
 
 export const app = writable<{ client: RxNostr }>();
 

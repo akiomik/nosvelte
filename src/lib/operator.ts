@@ -3,9 +3,10 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import { filter, scan, map, pipe, type OperatorFunction } from 'rxjs';
-import { Nostr, latestEach } from 'rx-nostr';
 import type { EventPacket } from 'rx-nostr';
+import { latestEach, Nostr } from 'rx-nostr';
+import type { OperatorFunction } from 'rxjs';
+import { filter, map, pipe, scan } from 'rxjs';
 
 export function filterId(id: string): OperatorFunction<EventPacket, EventPacket> {
   return filter((packet) => packet.event.id === id);

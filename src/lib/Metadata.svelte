@@ -5,7 +5,9 @@
 
 <script lang="ts">
   import type { Nostr } from 'rx-nostr';
-  import { app, useMetadata, type RxReqBase } from './store.js';
+
+  import type { RxReqBase } from './store.js';
+  import { app, useMetadata } from './store.js';
 
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
