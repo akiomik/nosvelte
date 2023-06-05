@@ -31,7 +31,7 @@ export enum SortOrder {
 }
 
 export interface ReqResult<A> {
-  data: Observable<A>;
+  data: Readable<A>;
   isLoading: Readable<boolean>;
   isSuccess: Readable<boolean>;
   isError: Readable<boolean>;
@@ -47,6 +47,13 @@ export const emptyResult = {
 };
 
 export const app = writable<{ client: RxNostr }>();
+
+export function fromObservable<A>(obs: Observable<A>): Readable<A> {
+  return readable<A>(undefined, (set) => {
+    const sub = obs.subscribe(set);
+    return () => sub.unsubscribe();
+  });
+}
 
 export function useConnections(
   client: RxNostr,
@@ -83,6 +90,16 @@ export function useEvents<A>(
   opeartor: OperatorFunction<EventPacket, A>,
   req?: RxReqBase | undefined
 ): ReqResult<A> {
+  if (client.getRelays().length === 0) {
+    return {
+      data: readable<A>(undefined),
+      isLoading: readable(false),
+      isError: readable(false),
+      isSuccess: readable(true),
+      error: readable()
+    };
+  }
+
   let _req: RxReq;
   if (req) {
     req.emit(filters);
@@ -109,7 +126,7 @@ export function useEvents<A>(
   });
 
   return {
-    data,
+    data: fromObservable(data),
     isLoading,
     isSuccess,
     isError,

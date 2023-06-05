@@ -1,18 +1,16 @@
 <script lang="ts">
   import type { Nostr } from 'rx-nostr';
-  import { app, useMetadata, emptyResult, type RxReqBase } from './store.js';
-  import { readable } from 'svelte/store';
+  import { app, useMetadata, type RxReqBase } from './store.js';
 
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
 
-  // TODO: Improve empty relay handling
-  $: available = $app.client && $app.client.getRelays().length > 0;
-  $: result = available ? useMetadata($app.client, pubkey, req) : emptyResult;
-  $: data = available ? result.data : readable();
-  $: isLoading = available ? result.isLoading : readable(false);
-  $: error = available ? result.error : readable();
-  $: isSuccess = available ? result.isSuccess : readable(true);
+  // TODO: Check if $app.client is defined
+  $: result = useMetadata($app.client, pubkey, req);
+  $: data = result.data;
+  $: isLoading = result.isLoading;
+  $: error = result.error;
+  $: isSuccess = result.isSuccess;
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface $$Slots {
