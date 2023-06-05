@@ -1,5 +1,5 @@
 import { writable, readable, type Readable } from 'svelte/store';
-import { pipe, startWith, EMPTY } from 'rxjs';
+import { pipe, startWith, EMPTY, from } from 'rxjs';
 import type { Observable, OperatorFunction } from 'rxjs';
 import { createRxOneshotReq, Nostr, verify, latest, uniq, filterKind } from 'rx-nostr';
 import type {
@@ -52,6 +52,10 @@ export function useConnections(
   client: RxNostr,
   relays: (string | Relay)[]
 ): Observable<ConnectionStatePacket[]> {
+  if (relays.length === 0) {
+    return from([[]]);
+  }
+
   const init = relays.map((relay) => {
     const from = typeof relay === 'string' ? relay : relay.url;
 

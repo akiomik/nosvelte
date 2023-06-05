@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { readable } from 'svelte/store';
   import { createRxNostr, type Relay, type RxNostr, type ConnectionStatePacket } from 'rx-nostr';
   import { app, useConnections } from './store.js';
 
@@ -8,8 +7,7 @@
 
   let client: RxNostr = createRxNostr();
 
-  // TODO: Add empty relays support to useConnections
-  $: connections = relays.length > 0 ? useConnections(client, relays) : readable([]);
+  $: connections = useConnections(client, relays);
 
   $: {
     client.setRelays(relays);
