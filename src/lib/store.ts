@@ -86,11 +86,12 @@ export function useEvents<A>(
   client: RxNostr,
   filters: Nostr.Filter[],
   opeartor: OperatorFunction<EventPacket, A>,
-  req?: RxReqBase | undefined
+  req?: RxReqBase | undefined,
+  initData?: A | undefined
 ): ReqResult<A> {
   if (client.getRelays().length === 0) {
     return {
-      data: readable<A>(undefined),
+      data: readable<A>(initData),
       isLoading: readable(false),
       isError: readable(false),
       isSuccess: readable(true),
@@ -160,7 +161,7 @@ export function useMetadataList(
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: pubkeys, limit: pubkeys.length }];
   const operator = pipe(filterMetadataList(pubkeys), verify(), latestEachPubkey(), scanArray());
-  return useEvents(client, filters, operator, req);
+  return useEvents(client, filters, operator, req, []);
 }
 
 export function useText(
@@ -182,7 +183,7 @@ export function useTextList(
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids }];
   const operator = pipe(filterTextList(ids), uniq(), verify(), scanArray());
-  return useEvents(client, filters, operator, req);
+  return useEvents(client, filters, operator, req, []);
 }
 
 export function useUserTextList(
@@ -200,7 +201,7 @@ export function useUserTextList(
     verify(),
     scanArray()
   );
-  return useEvents(client, filters, operator, req);
+  return useEvents(client, filters, operator, req, []);
 }
 
 export function useArticle(
@@ -230,5 +231,5 @@ export function useUserArticleList(
     latestEachNaddr(),
     scanArray()
   );
-  return useEvents(client, filters, operator, req);
+  return useEvents(client, filters, operator, req, []);
 }
