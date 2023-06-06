@@ -82,7 +82,7 @@ export function useConnections(
 
 // TODO: Add cache support
 // TODO: Add timeout support
-export function useEvents<A>(
+export function useReq<A>(
   client: RxNostr,
   filters: Nostr.Filter[],
   opeartor: OperatorFunction<EventPacket, A>,
@@ -139,7 +139,7 @@ export function useLatestEvent(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
   const operator = pipe(verify(), latest());
-  return useEvents(client, filters, operator, req);
+  return useReq(client, filters, operator, req);
 }
 
 export function useMetadata(
@@ -150,7 +150,7 @@ export function useMetadata(
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: [pubkey], limit: 1 }];
   const operator = pipe(filterKind(Nostr.Kind.Metadata), filterPubkey(pubkey), verify(), latest());
-  return useEvents(client, filters, operator, req);
+  return useReq(client, filters, operator, req);
 }
 
 export function useMetadataList(
@@ -161,7 +161,7 @@ export function useMetadataList(
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: pubkeys, limit: pubkeys.length }];
   const operator = pipe(filterMetadataList(pubkeys), verify(), latestEachPubkey(), scanArray());
-  return useEvents(client, filters, operator, req, []);
+  return useReq(client, filters, operator, req, []);
 }
 
 export function useText(
@@ -172,7 +172,7 @@ export function useText(
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids: [id], limit: 1 }];
   const operator = pipe(filterKind(Nostr.Kind.Text), filterId(id), uniq(), verify());
-  return useEvents(client, filters, operator, req);
+  return useReq(client, filters, operator, req);
 }
 
 export function useTextList(
@@ -183,7 +183,7 @@ export function useTextList(
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids }];
   const operator = pipe(filterTextList(ids), uniq(), verify(), scanArray());
-  return useEvents(client, filters, operator, req, []);
+  return useReq(client, filters, operator, req, []);
 }
 
 export function useUserTextList(
@@ -201,7 +201,7 @@ export function useUserTextList(
     verify(),
     scanArray()
   );
-  return useEvents(client, filters, operator, req, []);
+  return useReq(client, filters, operator, req, []);
 }
 
 export function useArticle(
@@ -214,7 +214,7 @@ export function useArticle(
     { kinds: [Nostr.Kind.Article], authors: [pubkey], '#d': [identifier], limit: 1 }
   ];
   const operator = pipe(filterNaddr(Nostr.Kind.Article, pubkey, identifier), verify(), latest());
-  return useEvents(client, filters, operator, req);
+  return useReq(client, filters, operator, req);
 }
 
 export function useUserArticleList(
@@ -231,5 +231,5 @@ export function useUserArticleList(
     latestEachNaddr(),
     scanArray()
   );
-  return useEvents(client, filters, operator, req, []);
+  return useReq(client, filters, operator, req, []);
 }
