@@ -204,6 +204,23 @@ export function useUserTextList(
   return useReq(client, filters, operator, req, []);
 }
 
+export function useUserReactionList(
+  client: RxNostr,
+  pubkey: string,
+  limit: number,
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket[]> {
+  const filters = [{ kinds: [Nostr.Kind.Reaction], authors: [pubkey], limit }];
+  const operator = pipe(
+    filterKind(Nostr.Kind.Reaction),
+    filterPubkey(pubkey),
+    verify(),
+    latestEachNaddr(),
+    scanArray()
+  );
+  return useReq(client, filters, operator, req, []);
+}
+
 export function useArticle(
   client: RxNostr,
   pubkey: string,
