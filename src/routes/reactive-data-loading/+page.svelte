@@ -26,7 +26,7 @@
 </script>
 
 <NostrApp {relays} let:connections>
-  <h1>dynamic-data-loading</h1>
+  <h1>reactive-data-loading</h1>
 
   <section>
     <h2>Relays</h2>
