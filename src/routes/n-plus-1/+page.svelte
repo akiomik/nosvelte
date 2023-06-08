@@ -4,6 +4,8 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
+  import type { Nostr } from 'rx-nostr';
+
   import NostrApp from '$lib/NostrApp.svelte';
   import Text from '$lib/Text.svelte';
   import UserReactionList from '$lib/UserReactionList.svelte';
@@ -12,7 +14,7 @@
   const pubkey = '4d39c23b3b03bf99494df5f3a149c7908ae1bc7416807fdd6b34a31886eaae25';
   const limit = 10;
 
-  const targetEventIdOf = (reaction) => {
+  const targetEventIdOf = (reaction: Nostr.Event) => {
     // Extract the last 'e' tag in .tags (NIP-25)
     return reaction.tags.filter(([tag]) => tag === 'e').slice(-1)[0][1];
   };
