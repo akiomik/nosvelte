@@ -133,6 +133,15 @@ export function useReq<A>(
   };
 }
 
+export function useUniqueEventList(
+  client: RxNostr,
+  filters: Nostr.Filter[],
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket[]> {
+  const operator = pipe(uniq(), verify(), scanArray());
+  return useReq(client, filters, operator, req);
+}
+
 export function useLatestEvent(
   client: RxNostr,
   filters: Nostr.Filter[],
