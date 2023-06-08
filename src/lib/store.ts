@@ -173,6 +173,17 @@ export function useMetadataList(
   return useReq(client, filters, operator, req, []);
 }
 
+export function useContacts(
+  client: RxNostr,
+  pubkey: string,
+  req?: RxReqBase | undefined
+): ReqResult<EventPacket> {
+  // TODO: Add npub support
+  const filters = [{ kinds: [Nostr.Kind.Contacts], authors: [pubkey], limit: 1 }];
+  const operator = pipe(filterKind(Nostr.Kind.Contacts), filterPubkey(pubkey), verify(), latest());
+  return useReq(client, filters, operator, req);
+}
+
 export function useText(
   client: RxNostr,
   id: string,
