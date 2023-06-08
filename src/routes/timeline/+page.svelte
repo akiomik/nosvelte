@@ -69,9 +69,9 @@
 
       <div style="display: flex; flex-direction: column; gap: 1em;">
         {#each sorted(events) as event (event.id)}
-          <section style="border: 1px black solid; padding: 1em;">
-            <!-- TODO: Re-use request to avoid rate limitting -->
-            <Metadata pubkey={event.pubkey} let:metadata>
+          <!-- TODO: Re-use request to avoid rate limitting -->
+          <Metadata pubkey={event.pubkey} let:metadata>
+            <section style="border: 1px black solid; padding: 1em;">
               {#if event.kind === Nostr.Kind.Text}
                 <p>
                   {JSON.parse(metadata.content).name ?? 'nostrich'}
@@ -121,8 +121,8 @@
                   </Metadata>
                 </Text>
               {/if}
-            </Metadata>
-          </section>
+            </section>
+          </Metadata>
         {/each}
       </div>
     </UniqueEventList>
