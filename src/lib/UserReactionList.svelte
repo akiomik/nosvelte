@@ -25,11 +25,14 @@
     default: { reactions: Nostr.Event[]; loading: boolean; success: boolean };
     loading: Record<never, never>;
     error: { error: Error };
+    nodata: Record<never, never>;
   }
 </script>
 
 {#if $isLoading && $data === undefined}
   <slot name="loading" />
+{:else if $isSuccess && $data.length === 0}
+  <slot name="nodata" />
 {:else if $error}
   <slot name="error" error={$error} />
 {:else}

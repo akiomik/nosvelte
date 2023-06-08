@@ -24,11 +24,14 @@
     default: { text: Nostr.Event; loading: boolean; success: boolean };
     loading: Record<never, never>;
     error: { error: Error };
+    nodata: Record<never, never>;
   }
 </script>
 
 {#if $isLoading && $data === undefined}
   <slot name="loading" />
+{:else if $isSuccess && $data === undefined}
+  <slot name="nodata" />
 {:else if $error}
   <slot name="error" error={$error} />
 {:else}

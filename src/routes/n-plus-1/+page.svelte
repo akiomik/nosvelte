@@ -49,13 +49,16 @@
             <p>{error}</p>
           </div>
 
+          <div slot="nodata">
+            <p>
+              {reaction.content}
+              Not found
+            </p>
+          </div>
+
           <p>
             {reaction.content}
-            {#if text}
-              {text.content}
-            {:else}
-              Not found
-            {/if}
+            {text.content}
           </p>
         </Text>
       {/each}

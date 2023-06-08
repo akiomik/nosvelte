@@ -28,11 +28,11 @@
         <p>{error}</p>
       </div>
 
-      {#if metadata}
-        <p>{JSON.parse(metadata.content).name ?? 'nostrich'}</p>
-      {:else}
+      <div slot="nodata">
         <p>Not found</p>
-      {/if}
+      </div>
+
+      <p>{JSON.parse(metadata.content).name ?? 'nostrich'}</p>
     </Metadata>
   </section>
 </NostrApp>

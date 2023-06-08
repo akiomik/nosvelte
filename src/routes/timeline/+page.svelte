@@ -44,87 +44,87 @@
   <h1>timeline</h1>
 
   <Contacts {pubkey} let:contacts>
-    {#if contacts}
-      <UniqueEventList
-        filters={[
-          {
-            authors: pubkeysIn(contacts),
-            kinds: [Nostr.Kind.Text, Nostr.Kind.Repost, Nostr.Kind.Reaction],
-            limit: 10
-          }
-        ]}
-        {req}
-        let:events
-      >
-        <div slot="loading">
-          <p>Loading...</p>
-        </div>
+    <div slot="nodata">
+      <p>Contacts not found</p>
+    </div>
 
-        <div slot="error" let:error>
-          <p>{error}</p>
-        </div>
+    <UniqueEventList
+      filters={[
+        {
+          authors: pubkeysIn(contacts),
+          kinds: [Nostr.Kind.Text, Nostr.Kind.Repost, Nostr.Kind.Reaction],
+          limit: 10
+        }
+      ]}
+      {req}
+      let:events
+    >
+      <div slot="loading">
+        <p>Loading...</p>
+      </div>
 
-        <div style="display: flex; flex-direction: column; gap: 1em;">
-          {#each sorted(events) as event (event.id)}
-            <section style="border: 1px black solid; padding: 1em;">
-              <!-- TODO: Re-use request to avoid rate limitting -->
-              <Metadata pubkey={event.pubkey} let:metadata>
-                {#if metadata}
-                  {#if event.kind === Nostr.Kind.Text}
+      <div slot="error" let:error>
+        <p>{error}</p>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 1em;">
+        {#each sorted(events) as event (event.id)}
+          <section style="border: 1px black solid; padding: 1em;">
+            <!-- TODO: Re-use request to avoid rate limitting -->
+            <Metadata pubkey={event.pubkey} let:metadata>
+              {#if event.kind === Nostr.Kind.Text}
+                <p>
+                  {JSON.parse(metadata.content).name ?? 'nostrich'}
+                  :
+                  {event.content}
+                </p>
+              {:else if event.kind === Nostr.Kind.Repost}
+                <p>reposted by {JSON.parse(metadata.content).name ?? 'nostrich'}</p>
+                <Text id={targetEventIdOf(event)} let:text>
+                  <div slot="nodata">
+                    <p>Failed to get note ({targetEventIdOf(event)})</p>
+                  </div>
+
+                  <Metadata pubkey={text.pubkey} let:metadata={repostedMetadata}>
+                    <div slot="nodata">
+                      <p>Failed to get profile (text.pubkey)</p>
+                    </div>
+
                     <p>
-                      {JSON.parse(metadata.content).name ?? 'nostrich'}
+                      {JSON.parse(repostedMetadata.content).name ?? 'nostrich'}
                       :
-                      {event.content}
+                      {text.content}
                     </p>
-                  {:else if event.kind === Nostr.Kind.Repost}
-                    <p>reposted by {JSON.parse(metadata.content).name ?? 'nostrich'}</p>
-                    <Text id={targetEventIdOf(event)} let:text>
-                      {#if text}
-                        <Metadata pubkey={text.pubkey} let:metadata={repostedMetadata}>
-                          {#if repostedMetadata}
-                            <p>
-                              {JSON.parse(repostedMetadata.content).name ?? 'nostrich'}
-                              :
-                              {text.content}
-                            </p>
-                          {:else}
-                            <p>Failed to get profile (text.pubkey)</p>
-                          {/if}
-                        </Metadata>
-                      {:else}
-                        <p>Failed to get note ({targetEventIdOf(event)})</p>
-                      {/if}
-                    </Text>
-                  {:else if event.kind === Nostr.Kind.Reaction}
+                  </Metadata>
+                </Text>
+              {:else if event.kind === Nostr.Kind.Reaction}
+                <p>
+                  {event.content === '+' ? '👍' : event.content}
+                  by
+                  {JSON.parse(metadata.content).name ?? 'nostrich'}
+                </p>
+                <Text id={targetEventIdOf(event)} let:text>
+                  <div slot="nodata">
+                    <p>Failed to get note ({targetEventIdOf(event)})</p>
+                  </div>
+
+                  <Metadata pubkey={text.pubkey} let:metadata={reactedMetadata}>
+                    <div slot="nodata">
+                      <p>Failed to get profile (text.pubkey)</p>
+                    </div>
+
                     <p>
-                      {event.content === '+' ? '👍' : event.content} by {JSON.parse(
-                        metadata.content
-                      ).name ?? 'nostrich'}
+                      {JSON.parse(reactedMetadata.content).name ?? 'nostrich'}
+                      :
+                      {text.content}
                     </p>
-                    <Text id={targetEventIdOf(event)} let:text>
-                      {#if text}
-                        <Metadata pubkey={text.pubkey} let:metadata={reactedMetadata}>
-                          {#if reactedMetadata}
-                            <p>
-                              {JSON.parse(reactedMetadata.content).name ?? 'nostrich'}
-                              :
-                              {text.content}
-                            </p>
-                          {:else}
-                            <p>Failed to get profile (text.pubkey)</p>
-                          {/if}
-                        </Metadata>
-                      {:else}
-                        <p>Failed to get note ({targetEventIdOf(event)})</p>
-                      {/if}
-                    </Text>
-                  {/if}
-                {/if}
-              </Metadata>
-            </section>
-          {/each}
-        </div>
-      </UniqueEventList>
-    {/if}
+                  </Metadata>
+                </Text>
+              {/if}
+            </Metadata>
+          </section>
+        {/each}
+      </div>
+    </UniqueEventList>
   </Contacts>
 </NostrApp>
