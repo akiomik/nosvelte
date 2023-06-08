@@ -18,8 +18,12 @@
   };
 </script>
 
+<svelte:head>
+  <title>n-plus-1 (TBU) | svelte-nostr</title>
+</svelte:head>
+
 <NostrApp {relays}>
-  <h1>n-plus-1</h1>
+  <h1>n-plus-1 (TBU)</h1>
 
   <section>
     <UserReactionList {pubkey} {limit} let:reactions>
@@ -43,20 +47,16 @@
             <p>{error}</p>
           </div>
 
-          <dl>
-            <dt>{reaction.content} ({reaction.id})</dt>
-            <dd>
-              {#if text}
-                {text.content}
-              {:else}
-                Not found
-              {/if}
-            </dd>
-          </dl>
+          <p>
+            {reaction.content}
+            {#if text}
+              {text.content}
+            {:else}
+              Not found
+            {/if}
+          </p>
         </Text>
       {/each}
     </UserReactionList>
   </section>
 </NostrApp>
-
-<a href="/">Back to top</a>

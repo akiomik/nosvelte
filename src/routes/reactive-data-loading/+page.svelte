@@ -25,6 +25,10 @@
   };
 </script>
 
+<svelte:head>
+  <title>reactive-data-loading | svelte-nostr</title>
+</svelte:head>
+
 <NostrApp {relays} let:connections>
   <h1>reactive-data-loading</h1>
 
@@ -42,7 +46,7 @@
       {/each}
     </ul>
 
-    <form on:submit={addRelay}>
+    <form on:submit={addRelay} style="display: flex;">
       <input
         type="text"
         bind:value={newRelay}
@@ -60,10 +64,10 @@
     <input
       type="text"
       bind:value={pubkey}
-      placeholder="pubkey"
+      placeholder="pubkey (hex)"
       pattern="[a-z0-9]{64}"
       required
-      size="64"
+      size="60"
     />
 
     {#if pubkey}
@@ -77,7 +81,7 @@
         </div>
 
         {#if metadata}
-          <p>{JSON.parse(metadata.content).name}</p>
+          <p>{JSON.parse(metadata.content).name ?? 'nostrich'}</p>
         {:else}
           <p>Not found</p>
         {/if}
@@ -85,5 +89,3 @@
     {/if}
   </section>
 </NostrApp>
-
-<a href="/">Back to top</a>
