@@ -6,8 +6,8 @@
 
   import type { Nostr } from 'rx-nostr';
 
-  import type { RxReqBase } from './store.js';
-  import { app, useUniqueEventList } from './store.js';
+  import type { RxReqBase } from './stores/index.js';
+  import { app, useUniqueEventList } from './stores/index.js';
 
   export let filters: Nostr.Filter[];
   export let req: RxReqBase | undefined = undefined;

@@ -8,7 +8,7 @@
   import { createRxNostr } from 'rx-nostr';
   import { onDestroy } from 'svelte';
 
-  import { app, useConnections } from './store.js';
+  import { app, useConnections } from './stores/index.js';
 
   export let relays: (string | Relay)[] = [];
 

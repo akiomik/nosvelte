@@ -6,8 +6,8 @@
 
   import type { Nostr } from 'rx-nostr';
 
-  import type { RxReqBase } from './store.js';
-  import { app, useText } from './store.js';
+  import type { RxReqBase } from './stores/index.js';
+  import { app, useText } from './stores/index.js';
 
   export let id: string;
   export let req: RxReqBase | undefined = undefined;

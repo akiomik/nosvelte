@@ -6,8 +6,8 @@
 
   import type { Nostr } from 'rx-nostr';
 
-  import type { RxReqBase } from './store.js';
-  import { app, useMetadata } from './store.js';
+  import type { RxReqBase } from './stores/index.js';
+  import { app, useMetadata } from './stores/index.js';
 
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
