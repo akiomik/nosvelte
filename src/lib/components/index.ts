@@ -3,6 +3,7 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
+export { default as Article } from './Article.svelte';
 export { default as Contacts } from './Contacts.svelte';
 export { default as Metadata } from './Metadata.svelte';
 export { default as NostrApp } from './NostrApp.svelte';
