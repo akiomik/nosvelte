@@ -6,10 +6,10 @@
 
   import { createRxForwardReq, Nostr } from 'rx-nostr';
 
-  import Metadata from '$lib/Metadata.svelte';
-  import NostrApp from '$lib/NostrApp.svelte';
-  import Text from '$lib/Text.svelte';
-  import UniqueEventList from '$lib/UniqueEventList.svelte';
+  import Metadata from '$lib/components/Metadata.svelte';
+  import NostrApp from '$lib/components/NostrApp.svelte';
+  import Text from '$lib/components/Text.svelte';
+  import UniqueEventList from '$lib/components/UniqueEventList.svelte';
 
   const relays = [
     'wss://nostr.wine',

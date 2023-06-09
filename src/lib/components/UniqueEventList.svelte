@@ -6,14 +6,14 @@
 
   import type { Nostr } from 'rx-nostr';
 
-  import type { RxReqBase } from './stores/index.js';
-  import { app, useText } from './stores/index.js';
+  import type { RxReqBase } from '$lib/stores/index.js';
+  import { app, useUniqueEventList } from '$lib/stores/index.js';
 
-  export let id: string;
+  export let filters: Nostr.Filter[];
   export let req: RxReqBase | undefined = undefined;
 
   // TODO: Check if $app.client is defined
-  $: result = useText($app.client, id, req);
+  $: result = useUniqueEventList($app.client, filters, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;
@@ -21,7 +21,7 @@
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface $$Slots {
-    default: { text: Nostr.Event; loading: boolean; success: boolean };
+    default: { events: Nostr.Event[]; loading: boolean; success: boolean };
     loading: Record<never, never>;
     error: { error: Error };
     nodata: Record<never, never>;
@@ -30,10 +30,10 @@
 
 {#if $isLoading && $data === undefined}
   <slot name="loading" />
-{:else if $isSuccess && $data === undefined}
+{:else if $isSuccess && $data.length === 0}
   <slot name="nodata" />
 {:else if $error}
   <slot name="error" error={$error} />
 {:else}
-  <slot text={$data?.event} loading={$isLoading} success={$isSuccess} />
+  <slot events={$data?.map(({ event }) => event)} loading={$isLoading} success={$isSuccess} />
 {/if}

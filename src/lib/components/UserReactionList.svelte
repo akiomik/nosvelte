@@ -6,14 +6,15 @@
 
   import type { Nostr } from 'rx-nostr';
 
-  import type { RxReqBase } from './stores/index.js';
-  import { app, useMetadata } from './stores/index.js';
+  import type { RxReqBase } from '$lib/stores/index.js';
+  import { app, useUserReactionList } from '$lib/stores/index.js';
 
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
+  export let limit = 100;
 
   // TODO: Check if $app.client is defined
-  $: result = useMetadata($app.client, pubkey, req);
+  $: result = useUserReactionList($app.client, pubkey, limit, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;
@@ -21,7 +22,7 @@
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface $$Slots {
-    default: { metadata: Nostr.Event; loading: boolean; success: boolean };
+    default: { reactions: Nostr.Event[]; loading: boolean; success: boolean };
     loading: Record<never, never>;
     error: { error: Error };
     nodata: Record<never, never>;
@@ -30,10 +31,10 @@
 
 {#if $isLoading && $data === undefined}
   <slot name="loading" />
-{:else if $isSuccess && $data === undefined}
+{:else if $isSuccess && $data.length === 0}
   <slot name="nodata" />
 {:else if $error}
   <slot name="error" error={$error} />
 {:else}
-  <slot metadata={$data?.event} loading={$isLoading} success={$isSuccess} />
+  <slot reactions={$data?.map(({ event }) => event)} loading={$isLoading} success={$isSuccess} />
 {/if}

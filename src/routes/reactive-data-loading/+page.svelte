@@ -4,8 +4,8 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
-  import Metadata from '$lib/Metadata.svelte';
-  import NostrApp from '$lib/NostrApp.svelte';
+  import Metadata from '$lib/components/Metadata.svelte';
+  import NostrApp from '$lib/components/NostrApp.svelte';
 
   let relays: string[] = ['wss://relay.damus.io', 'wss://relay.snort.social'];
   let newRelay = '';
