@@ -36,11 +36,11 @@
 </script>
 
 <svelte:head>
-  <title>rain | svelte-nostr</title>
+  <title>reaction-list | svelte-nostr</title>
 </svelte:head>
 
 <NostrApp {relays}>
-  <h1>rain</h1>
+  <h1>reaction-list</h1>
 
   <UniqueEventList {filters} {req} let:events={reactions}>
     <div slot="loading">
