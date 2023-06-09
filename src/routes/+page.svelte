@@ -10,5 +10,6 @@
     <li><a href="/reactive-data-loading">reactive-data-loading</a></li>
     <li><a href="/n-plus-1">n-plus-1 (TBU)</a></li>
     <li><a href="/timeline">timeline</a></li>
+    <li><a href="/rain">rain</a></li>
   </ul>
 </nav>
