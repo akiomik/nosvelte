@@ -12,7 +12,7 @@ import type { ReqResult, RxReqBase } from './types.js';
 import { useReq } from './useReq.js';
 
 export function useArticle(
-  client: RxNostr,
+  rxNostr: RxNostr,
   pubkey: string,
   identifier: string,
   req?: RxReqBase | undefined
@@ -21,5 +21,5 @@ export function useArticle(
     { kinds: [Nostr.Kind.Article], authors: [pubkey], '#d': [identifier], limit: 1 }
   ];
   const operator = pipe(filterNaddr(Nostr.Kind.Article, pubkey, identifier), verify(), latest());
-  return useReq({ client, filters, operator, req });
+  return useReq({ rxNostr, filters, operator, req });
 }

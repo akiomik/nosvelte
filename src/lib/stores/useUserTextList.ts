@@ -12,7 +12,7 @@ import type { ReqResult, RxReqBase } from './types.js';
 import { useReq } from './useReq.js';
 
 export function useUserTextList(
-  client: RxNostr,
+  rxNostr: RxNostr,
   pubkey: string,
   limit: number,
   req?: RxReqBase | undefined
@@ -26,5 +26,5 @@ export function useUserTextList(
     verify(),
     scanArray()
   );
-  return useReq({ client, filters, operator, req, initData: [] });
+  return useReq({ rxNostr, filters, operator, req, initData: [] });
 }

@@ -11,10 +11,10 @@ import type { ReqResult, RxReqBase } from './types.js';
 import { useReq } from './useReq.js';
 
 export function useLatestEvent(
-  client: RxNostr,
+  rxNostr: RxNostr,
   filters: Nostr.Filter[],
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
   const operator = pipe(verify(), latest());
-  return useReq({ client, filters, operator, req });
+  return useReq({ rxNostr, filters, operator, req });
 }

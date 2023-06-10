@@ -23,7 +23,7 @@ export interface UseConnectionsOpts {
 }
 
 export interface UseReqOpts<A> {
-  client: RxNostr;
+  rxNostr: RxNostr;
   filters: Nostr.Filter[];
   operator: OperatorFunction<EventPacket, A>;
   req?: RxReqBase;

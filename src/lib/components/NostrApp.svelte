@@ -4,7 +4,7 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
-  import type { ConnectionStatePacket, Relay, RxNostr } from 'rx-nostr';
+  import type { ConnectionStatePacket, Relay } from 'rx-nostr';
   import { createRxNostr } from 'rx-nostr';
   import { onDestroy } from 'svelte';
 
@@ -12,13 +12,13 @@
 
   export let relays: (string | Relay)[] = [];
 
-  let client: RxNostr = createRxNostr();
+  const rxNostr = createRxNostr();
 
   $: connections = useConnections({ rxNostr, relays });
 
   $: {
     rxNostr.setRelays(relays);
-    app.set({ rxNostr });
+    app.set({ client: rxNostr });
   }
 
   onDestroy(() => {

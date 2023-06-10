@@ -13,13 +13,13 @@ import type { ReqResult, UseReqOpts } from './types.js';
 // TODO: Add cache support
 // TODO: Add timeout support
 export function useReq<A>({
-  client,
+  rxNostr,
   filters,
   operator,
   req,
   initData
 }: UseReqOpts<A>): ReqResult<A> {
-  if (client.getRelays().length === 0) {
+  if (rxNostr.getRelays().length === 0) {
     return {
       data: readable<A>(initData),
       isLoading: readable(false),
@@ -37,7 +37,7 @@ export function useReq<A>({
     _req = createRxOneshotReq({ filters });
   }
 
-  const data = client.use(_req).pipe(operator);
+  const data = rxNostr.use(_req).pipe(operator);
   const isLoading = writable(true);
   const isSuccess = writable(false);
   const isError = writable(false);

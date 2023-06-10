@@ -12,10 +12,10 @@ import type { ReqResult, RxReqBase } from './types.js';
 import { useReq } from './useReq.js';
 
 export function useUniqueEventList(
-  client: RxNostr,
+  rxNostr: RxNostr,
   filters: Nostr.Filter[],
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   const operator = pipe(uniq(), verify(), scanArray());
-  return useReq({ client, filters, operator, req });
+  return useReq({ rxNostr, filters, operator, req });
 }

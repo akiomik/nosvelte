@@ -12,12 +12,12 @@ import type { ReqResult, RxReqBase } from './types.js';
 import { useReq } from './useReq.js';
 
 export function useTextList(
-  client: RxNostr,
+  rxNostr: RxNostr,
   ids: string[],
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids }];
   const operator = pipe(filterTextList(ids), uniq(), verify(), scanArray());
-  return useReq({ client, filters, operator, req, initData: [] });
+  return useReq({ rxNostr, filters, operator, req, initData: [] });
 }

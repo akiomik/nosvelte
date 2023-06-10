@@ -11,12 +11,12 @@ import type { ReqResult, RxReqBase } from './types.js';
 import { useReq } from './useReq.js';
 
 export function useMetadataList(
-  client: RxNostr,
+  rxNostr: RxNostr,
   pubkeys: string[],
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: pubkeys, limit: pubkeys.length }];
   const operator = pipe(filterMetadataList(pubkeys), verify(), latestEachPubkey(), scanArray());
-  return useReq({ client, filters, operator, req, initData: [] });
+  return useReq({ rxNostr, filters, operator, req, initData: [] });
 }
