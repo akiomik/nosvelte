@@ -18,5 +18,5 @@ export function useMetadataList(
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: pubkeys, limit: pubkeys.length }];
   const operator = pipe(filterMetadataList(pubkeys), verify(), latestEachPubkey(), scanArray());
-  return useReq(client, filters, operator, req, []);
+  return useReq({ client, filters, operator, req, initData: [] });
 }

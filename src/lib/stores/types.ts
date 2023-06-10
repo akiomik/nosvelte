@@ -3,7 +3,8 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import type { RxReq, RxReqController } from 'rx-nostr';
+import type { EventPacket, Nostr, RxNostr, RxReq, RxReqController } from 'rx-nostr';
+import type { OperatorFunction } from 'rxjs';
 import type { Readable } from 'svelte/store';
 
 export type RxReqBase = RxReq & RxReqController;
@@ -14,4 +15,12 @@ export interface ReqResult<A> {
   isSuccess: Readable<boolean>;
   isError: Readable<boolean>;
   error: Readable<Error | undefined>;
+}
+
+export interface UseReqOpts<A> {
+  client: RxNostr;
+  filters: Nostr.Filter[];
+  operator: OperatorFunction<EventPacket, A>;
+  req?: RxReqBase;
+  initData?: A;
 }

@@ -19,5 +19,5 @@ export function useMetadata(
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Metadata], authors: [pubkey], limit: 1 }];
   const operator = pipe(filterKind(Nostr.Kind.Metadata), filterPubkey(pubkey), verify(), latest());
-  return useReq(client, filters, operator, req);
+  return useReq({ client, filters, operator, req });
 }

@@ -19,5 +19,5 @@ export function useText(
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids: [id], limit: 1 }];
   const operator = pipe(filterKind(Nostr.Kind.Text), filterId(id), uniq(), verify());
-  return useReq(client, filters, operator, req);
+  return useReq({ client, filters, operator, req });
 }

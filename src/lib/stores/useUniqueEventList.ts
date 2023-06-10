@@ -17,5 +17,5 @@ export function useUniqueEventList(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   const operator = pipe(uniq(), verify(), scanArray());
-  return useReq(client, filters, operator, req);
+  return useReq({ client, filters, operator, req });
 }

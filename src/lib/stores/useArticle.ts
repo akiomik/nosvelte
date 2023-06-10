@@ -21,5 +21,5 @@ export function useArticle(
     { kinds: [Nostr.Kind.Article], authors: [pubkey], '#d': [identifier], limit: 1 }
   ];
   const operator = pipe(filterNaddr(Nostr.Kind.Article, pubkey, identifier), verify(), latest());
-  return useReq(client, filters, operator, req);
+  return useReq({ client, filters, operator, req });
 }

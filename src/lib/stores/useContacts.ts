@@ -19,5 +19,5 @@ export function useContacts(
   // TODO: Add npub support
   const filters = [{ kinds: [Nostr.Kind.Contacts], authors: [pubkey], limit: 1 }];
   const operator = pipe(filterKind(Nostr.Kind.Contacts), filterPubkey(pubkey), verify(), latest());
-  return useReq(client, filters, operator, req);
+  return useReq({ client, filters, operator, req });
 }

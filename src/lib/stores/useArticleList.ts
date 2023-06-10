@@ -25,5 +25,5 @@ export function useUserArticleList(
     latestEachNaddr(),
     scanArray()
   );
-  return useReq(client, filters, operator, req, []);
+  return useReq({ client, filters, operator, req, initData: [] });
 }
