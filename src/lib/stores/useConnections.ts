@@ -3,16 +3,17 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import type { ConnectionState, ConnectionStatePacket, Relay, RxNostr } from 'rx-nostr';
+import type { ConnectionState, ConnectionStatePacket } from 'rx-nostr';
 import type { Observable } from 'rxjs';
 import { from, startWith } from 'rxjs';
 
 import { scanLatestEach } from './operators.js';
+import type { UseConnectionsOpts } from './types.js';
 
-export function useConnections(
-  client: RxNostr,
-  relays: (string | Relay)[]
-): Observable<ConnectionStatePacket[]> {
+export function useConnections({
+  client,
+  relays
+}: UseConnectionsOpts): Observable<ConnectionStatePacket[]> {
   if (relays.length === 0) {
     return from([[]]);
   }

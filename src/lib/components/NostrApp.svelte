@@ -14,7 +14,7 @@
 
   let client: RxNostr = createRxNostr();
 
-  $: connections = useConnections(client, relays);
+  $: connections = useConnections({ client, relays });
 
   $: {
     client.setRelays(relays);

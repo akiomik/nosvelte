@@ -3,7 +3,7 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import type { EventPacket, Nostr, RxNostr, RxReq, RxReqController } from 'rx-nostr';
+import type { EventPacket, Nostr, Relay, RxNostr, RxReq, RxReqController } from 'rx-nostr';
 import type { OperatorFunction } from 'rxjs';
 import type { Readable } from 'svelte/store';
 
@@ -15,6 +15,11 @@ export interface ReqResult<A> {
   isSuccess: Readable<boolean>;
   isError: Readable<boolean>;
   error: Readable<Error | undefined>;
+}
+
+export interface UseConnectionsOpts {
+  client: RxNostr;
+  relays: (string | Relay)[];
 }
 
 export interface UseReqOpts<A> {
