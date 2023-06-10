@@ -18,7 +18,7 @@ export interface ReqResult<A> {
 }
 
 export interface UseConnectionsOpts {
-  client: RxNostr;
+  rxNostr: RxNostr;
   relays: (string | Relay)[];
 }
 

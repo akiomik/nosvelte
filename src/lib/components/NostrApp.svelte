@@ -14,15 +14,15 @@
 
   let client: RxNostr = createRxNostr();
 
-  $: connections = useConnections({ client, relays });
+  $: connections = useConnections({ rxNostr, relays });
 
   $: {
-    client.setRelays(relays);
-    app.set({ client });
+    rxNostr.setRelays(relays);
+    app.set({ rxNostr });
   }
 
   onDestroy(() => {
-    client.dispose();
+    rxNostr.dispose();
   });
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

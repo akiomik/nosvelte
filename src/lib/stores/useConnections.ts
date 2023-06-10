@@ -11,7 +11,7 @@ import { scanLatestEach } from './operators.js';
 import type { UseConnectionsOpts } from './types.js';
 
 export function useConnections({
-  client,
+  rxNostr,
   relays
 }: UseConnectionsOpts): Observable<ConnectionStatePacket[]> {
   if (relays.length === 0) {
@@ -20,12 +20,12 @@ export function useConnections({
 
   const init = relays.map((relay) => {
     const from = typeof relay === 'string' ? relay : relay.url;
-    const state = client.hasRelay(from) ? client.getRelayState(from) : 'not-started';
+    const state = rxNostr.hasRelay(from) ? rxNostr.getRelayState(from) : 'not-started';
 
     return { from, state };
   });
 
-  return client.createConnectionStateObservable().pipe(
+  return rxNostr.createConnectionStateObservable().pipe(
     startWith(...init),
     scanLatestEach(({ from }) => from)
   );
