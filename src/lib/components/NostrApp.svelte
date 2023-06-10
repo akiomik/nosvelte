@@ -18,7 +18,7 @@
 
   $: {
     rxNostr.setRelays(relays);
-    app.set({ client: rxNostr });
+    app.set({ rxNostr });
   }
 
   onDestroy(() => {

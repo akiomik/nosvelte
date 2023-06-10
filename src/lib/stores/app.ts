@@ -6,4 +6,4 @@
 import type { RxNostr } from 'rx-nostr';
 import { writable } from 'svelte/store';
 
-export const app = writable<{ client: RxNostr }>();
+export const app = writable<{ rxNostr: RxNostr }>();

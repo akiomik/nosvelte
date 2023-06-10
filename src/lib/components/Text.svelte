@@ -12,8 +12,8 @@
   export let id: string;
   export let req: RxReqBase | undefined = undefined;
 
-  // TODO: Check if $app.client is defined
-  $: result = useText($app.client, id, req);
+  // TODO: Check if $app.rxNostr is defined
+  $: result = useText($app.rxNostr, id, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;

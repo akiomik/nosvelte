@@ -13,8 +13,8 @@
   export let req: RxReqBase | undefined = undefined;
   export let limit = 100;
 
-  // TODO: Check if $app.client is defined
-  $: result = useUserReactionList($app.client, pubkey, limit, req);
+  // TODO: Check if $app.rxNostr is defined
+  $: result = useUserReactionList($app.rxNostr, pubkey, limit, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;

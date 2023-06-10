@@ -13,8 +13,8 @@
   export let identifier: string;
   export let req: RxReqBase | undefined = undefined;
 
-  // TODO: Check if $app.client is defined
-  $: result = useArticle($app.client, pubkey, identifier, req);
+  // TODO: Check if $app.rxNostr is defined
+  $: result = useArticle($app.rxNostr, pubkey, identifier, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;

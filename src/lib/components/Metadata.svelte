@@ -12,8 +12,8 @@
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
 
-  // TODO: Check if $app.client is defined
-  $: result = useMetadata($app.client, pubkey, req);
+  // TODO: Check if $app.rxNostr is defined
+  $: result = useMetadata($app.rxNostr, pubkey, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;

@@ -12,8 +12,8 @@
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
 
-  // TODO: Check if $app.client is defined
-  $: result = useContacts($app.client, pubkey, req);
+  // TODO: Check if $app.rxNostr is defined
+  $: result = useContacts($app.rxNostr, pubkey, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;

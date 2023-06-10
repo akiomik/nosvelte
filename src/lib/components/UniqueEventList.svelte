@@ -12,8 +12,8 @@
   export let filters: Nostr.Filter[];
   export let req: RxReqBase | undefined = undefined;
 
-  // TODO: Check if $app.client is defined
-  $: result = useUniqueEventList($app.client, filters, req);
+  // TODO: Check if $app.rxNostr is defined
+  $: result = useUniqueEventList($app.rxNostr, filters, req);
   $: data = result.data;
   $: isLoading = result.isLoading;
   $: error = result.error;
