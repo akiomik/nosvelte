@@ -43,12 +43,13 @@
 <NostrApp {relays}>
   <h1>timeline</h1>
 
-  <Contacts {pubkey} let:contacts>
+  <Contacts queryKey={['timeline', 'contacts', pubkey]} {pubkey} let:contacts>
     <div slot="nodata">
       <p>Contacts not found</p>
     </div>
 
     <UniqueEventList
+      queryKey={['timeline', 'feed', pubkey]}
       filters={[
         {
           authors: pubkeysIn(contacts),
@@ -70,7 +71,11 @@
       <div style="display: flex; flex-direction: column; gap: 1em;">
         {#each sorted(events) as event (event.id)}
           <!-- TODO: Re-use request to avoid rate limitting -->
-          <Metadata pubkey={event.pubkey} let:metadata>
+          <Metadata
+            queryKey={['timeline', 'metadata', event.pubkey]}
+            pubkey={event.pubkey}
+            let:metadata
+          >
             <section style="border: 1px black solid; padding: 1em;">
               {#if event.kind === Nostr.Kind.Text}
                 <p>
@@ -80,12 +85,20 @@
                 </p>
               {:else if event.kind === Nostr.Kind.Repost}
                 <p>reposted by {JSON.parse(metadata.content).name ?? 'nostrich'}</p>
-                <Text id={targetEventIdOf(event)} let:text>
+                <Text
+                  queryKey={['timeline', targetEventIdOf(event)]}
+                  id={targetEventIdOf(event)}
+                  let:text
+                >
                   <div slot="nodata">
                     <p>Failed to get note ({targetEventIdOf(event)})</p>
                   </div>
 
-                  <Metadata pubkey={text.pubkey} let:metadata={repostedMetadata}>
+                  <Metadata
+                    queryKey={['timeline', 'metadata', text.pubkey]}
+                    pubkey={text.pubkey}
+                    let:metadata={repostedMetadata}
+                  >
                     <div slot="nodata">
                       <p>Failed to get profile (text.pubkey)</p>
                     </div>
@@ -103,12 +116,20 @@
                   by
                   {JSON.parse(metadata.content).name ?? 'nostrich'}
                 </p>
-                <Text id={targetEventIdOf(event)} let:text>
+                <Text
+                  queryKey={['timeline', targetEventIdOf(event)]}
+                  id={targetEventIdOf(event)}
+                  let:text
+                >
                   <div slot="nodata">
                     <p>Failed to get note ({targetEventIdOf(event)})</p>
                   </div>
 
-                  <Metadata pubkey={text.pubkey} let:metadata={reactedMetadata}>
+                  <Metadata
+                    queryKey={['timeline', 'metadata', text.pubkey]}
+                    pubkey={text.pubkey}
+                    let:metadata={reactedMetadata}
+                  >
                     <div slot="nodata">
                       <p>Failed to get profile (text.pubkey)</p>
                     </div>

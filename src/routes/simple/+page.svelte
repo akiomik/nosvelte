@@ -19,7 +19,7 @@
   <h1>simple</h1>
 
   <section>
-    <Metadata {pubkey} let:metadata>
+    <Metadata queryKey={['simple', 'metadata', pubkey]} {pubkey} let:metadata>
       <div slot="loading">
         <p>Loading...</p>
       </div>

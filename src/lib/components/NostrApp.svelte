@@ -4,17 +4,30 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
+  import type { QueryClientConfig } from '@tanstack/svelte-query';
+  import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
   import type { ConnectionStatePacket, Relay } from 'rx-nostr';
   import { createRxNostr } from 'rx-nostr';
   import { onDestroy } from 'svelte';
 
   import { app, useConnections } from '$lib/stores/index.js';
 
+  export let queryClientConfig: QueryClientConfig = {};
   export let relays: (string | Relay)[] = [];
 
   const rxNostr = createRxNostr();
+  const defaultQueryClientConfig = {
+    defaultOptions: {
+      queries: {
+        staleTime: 1000 * 30,
+        refetchInterval: Infinity
+      }
+    }
+  };
 
   $: connections = useConnections({ rxNostr, relays });
+  $: mergedQueryClientConfig = { ...defaultQueryClientConfig, ...queryClientConfig };
+  $: queryClient = new QueryClient(mergedQueryClientConfig);
 
   $: {
     rxNostr.setRelays(relays);
@@ -31,4 +44,6 @@
   }
 </script>
 
-<slot connections={$connections} />
+<QueryClientProvider client={queryClient}>
+  <slot connections={$connections} />
+</QueryClientProvider>
