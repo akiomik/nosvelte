@@ -8,7 +8,7 @@ import { createRxOneshotReq } from 'rx-nostr';
 import { readable, writable } from 'svelte/store';
 
 import { fromObservable } from './helpers.js';
-import type { ReqResult, UseReqOpts } from './types.js';
+import type { ReqResult, ReqStatus, UseReqOpts } from './types.js';
 
 // TODO: Add cache support
 // TODO: Add timeout support
@@ -22,9 +22,7 @@ export function useReq<A>({
   if (rxNostr.getRelays().length === 0) {
     return {
       data: readable<A>(initData),
-      isLoading: readable(false),
-      isError: readable(false),
-      isSuccess: readable(true),
+      status: readable('success'),
       error: readable()
     };
   }
@@ -38,27 +36,20 @@ export function useReq<A>({
   }
 
   const data = rxNostr.use(_req).pipe(operator);
-  const isLoading = writable(true);
-  const isSuccess = writable(false);
-  const isError = writable(false);
+  const status = writable<ReqStatus>('loading');
   const error = writable<Error | undefined>(undefined);
 
   data.subscribe({
-    complete: () => {
-      isLoading.set(false);
-      isSuccess.set(true);
-    },
+    complete: () => status.set('success'),
     error: (e) => {
-      isError.set(true);
+      status.set('error');
       error.set(e);
     }
   });
 
   return {
     data: fromObservable(data),
-    isLoading,
-    isSuccess,
-    isError,
+    status,
     error
   };
 }

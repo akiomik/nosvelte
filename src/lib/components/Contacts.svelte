@@ -6,7 +6,7 @@
 
   import type { Nostr } from 'rx-nostr';
 
-  import type { RxReqBase } from '$lib/stores/index.js';
+  import type { ReqStatus, RxReqBase } from '$lib/stores/index.js';
   import { app, useContacts } from '$lib/stores/index.js';
 
   export let pubkey: string;
@@ -15,25 +15,24 @@
   // TODO: Check if $app.rxNostr is defined
   $: result = useContacts($app.rxNostr, pubkey, req);
   $: data = result.data;
-  $: isLoading = result.isLoading;
+  $: status = result.status;
   $: error = result.error;
-  $: isSuccess = result.isSuccess;
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface $$Slots {
-    default: { contacts: Nostr.Event; loading: boolean; success: boolean };
+    default: { contacts: Nostr.Event; status: ReqStatus };
     loading: Record<never, never>;
     error: { error: Error };
     nodata: Record<never, never>;
   }
 </script>
 
-{#if $isLoading && $data === undefined}
-  <slot name="loading" />
-{:else if $isSuccess && $data === undefined}
-  <slot name="nodata" />
-{:else if $error}
+{#if $error}
   <slot name="error" error={$error} />
+{:else if $data}
+  <slot contacts={$data?.event} status={$status} />
+{:else if $status === 'loading'}
+  <slot name="loading" />
 {:else}
-  <slot contacts={$data?.event} loading={$isLoading} success={$isSuccess} />
+  <slot name="nodata" />
 {/if}

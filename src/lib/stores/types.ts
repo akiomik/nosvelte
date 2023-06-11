@@ -9,11 +9,11 @@ import type { Readable } from 'svelte/store';
 
 export type RxReqBase = RxReq & RxReqController;
 
+export type ReqStatus = 'loading' | 'success' | 'error';
+
 export interface ReqResult<A> {
   data: Readable<A>;
-  isLoading: Readable<boolean>;
-  isSuccess: Readable<boolean>;
-  isError: Readable<boolean>;
+  status: Readable<ReqStatus>;
   error: Readable<Error | undefined>;
 }
 

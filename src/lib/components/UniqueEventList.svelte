@@ -6,7 +6,7 @@
 
   import type { Nostr } from 'rx-nostr';
 
-  import type { RxReqBase } from '$lib/stores/index.js';
+  import type { ReqStatus, RxReqBase } from '$lib/stores/index.js';
   import { app, useUniqueEventList } from '$lib/stores/index.js';
 
   export let filters: Nostr.Filter[];
@@ -15,25 +15,24 @@
   // TODO: Check if $app.rxNostr is defined
   $: result = useUniqueEventList($app.rxNostr, filters, req);
   $: data = result.data;
-  $: isLoading = result.isLoading;
+  $: status = result.status;
   $: error = result.error;
-  $: isSuccess = result.isSuccess;
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface $$Slots {
-    default: { events: Nostr.Event[]; loading: boolean; success: boolean };
+    default: { events: Nostr.Event[]; status: ReqStatus };
     loading: Record<never, never>;
     error: { error: Error };
     nodata: Record<never, never>;
   }
 </script>
 
-{#if $isLoading && $data === undefined}
-  <slot name="loading" />
-{:else if $isSuccess && $data.length === 0}
-  <slot name="nodata" />
-{:else if $error}
+{#if $error}
   <slot name="error" error={$error} />
+{:else if $data?.length > 0}
+  <slot events={$data?.map(({ event }) => event)} status={$status} />
+{:else if $status === 'loading'}
+  <slot name="loading" />
 {:else}
-  <slot events={$data?.map(({ event }) => event)} loading={$isLoading} success={$isSuccess} />
+  <slot name="nodata" />
 {/if}
