@@ -4,16 +4,19 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
+  import type { QueryKey } from '@tanstack/svelte-query';
+  import { useQueryClient } from '@tanstack/svelte-query';
   import type { Nostr } from 'rx-nostr';
 
   import type { ReqStatus, RxReqBase } from '$lib/stores/index.js';
   import { app, useUniqueEventList } from '$lib/stores/index.js';
 
+  export let queryKey: QueryKey;
   export let filters: Nostr.Filter[];
   export let req: RxReqBase | undefined = undefined;
 
   // TODO: Check if $app.rxNostr is defined
-  $: result = useUniqueEventList($app.rxNostr, filters, req);
+  $: result = useUniqueEventList($app.rxNostr, useQueryClient(), queryKey, filters, req);
   $: data = result.data;
   $: status = result.status;
   $: error = result.error;

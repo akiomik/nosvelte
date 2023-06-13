@@ -28,7 +28,12 @@
   <h1>n-plus-1 (TBU)</h1>
 
   <section>
-    <UserReactionList {pubkey} {limit} let:reactions>
+    <UserReactionList
+      queryKey={['n-plus-1', 'user-reaction-list', pubkey]}
+      {pubkey}
+      {limit}
+      let:reactions
+    >
       <div slot="loading">
         <p>Loading...</p>
       </div>
@@ -39,10 +44,13 @@
 
       {#each reactions as reaction (reaction.id)}
         <!-- TODO: Re-use req to avoid N+1 problem -->
-        <Text id={targetEventIdOf(reaction)} let:text>
+        <Text
+          id={targetEventIdOf(reaction)}
+          queryKey={['n-plus-1', targetEventIdOf(reaction)]}
+          let:text
+        >
           <div slot="loading">
             <p>Loading {reaction.id} ...</p>
-            <p />
           </div>
 
           <div slot="error" let:error>

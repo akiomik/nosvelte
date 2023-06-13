@@ -71,7 +71,7 @@
     />
 
     {#if pubkey}
-      <Metadata {pubkey} let:metadata>
+      <Metadata queryKey={['reactive-data-loading', 'metadata', pubkey]} {pubkey} let:metadata>
         <div slot="loading">
           <p>Loading...</p>
         </div>

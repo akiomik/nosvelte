@@ -16,9 +16,10 @@
     'wss://relay-jp.nostr.wirednet.jp',
     'wss://nostr-relay.nokotaro.com'
   ];
+  const pubkey = 'c81c7999f7276387317878e59d7c321093a433977ee6811ca76dc3a9738e1869';
   const filters = [
     {
-      authors: ['c81c7999f7276387317878e59d7c321093a433977ee6811ca76dc3a9738e1869'],
+      authors: [pubkey],
       kinds: [Nostr.Kind.Reaction],
       limit: 100
     }
@@ -42,7 +43,12 @@
 <NostrApp {relays}>
   <h1>reaction-list</h1>
 
-  <UniqueEventList {filters} {req} let:events={reactions}>
+  <UniqueEventList
+    queryKey={['reaction-list', 'unique-reaction-list', pubkey]}
+    {filters}
+    {req}
+    let:events={reactions}
+  >
     <div slot="loading">
       <p>Loading...</p>
     </div>
@@ -53,7 +59,11 @@
 
     <div style="display: flex; flex-direction: column; gap: 1em;">
       {#each sorted(reactions) as reaction (reaction.id)}
-        <Metadata pubkey={reaction.pubkey} let:metadata>
+        <Metadata
+          queryKey={['reaction-list', 'metadata', reaction.pubkey]}
+          pubkey={reaction.pubkey}
+          let:metadata
+        >
           <section style="border: 1px black solid; padding: 1em;">
             <p>
               {reaction.content === '+' ? '👍' : reaction.content}
@@ -61,12 +71,20 @@
               {JSON.parse(metadata.content).name ?? 'nostrich'}
             </p>
 
-            <Text id={targetEventIdOf(reaction)} let:text>
+            <Text
+              queryKey={['reaction-list', targetEventIdOf(reaction)]}
+              id={targetEventIdOf(reaction)}
+              let:text
+            >
               <div slot="nodata">
                 <p>Failed to get note ({targetEventIdOf(reaction)})</p>
               </div>
 
-              <Metadata pubkey={text.pubkey} let:metadata={reactedMetadata}>
+              <Metadata
+                queryKey={['reaction-list', 'metadata', text.pubkey]}
+                pubkey={text.pubkey}
+                let:metadata={reactedMetadata}
+              >
                 <div slot="nodata">
                   <p>Failed to get profile (text.pubkey)</p>
                 </div>

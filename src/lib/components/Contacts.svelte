@@ -4,16 +4,19 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
+  import type { QueryKey } from '@tanstack/svelte-query';
+  import { useQueryClient } from '@tanstack/svelte-query';
   import type { Nostr } from 'rx-nostr';
 
   import type { ReqStatus, RxReqBase } from '$lib/stores/index.js';
   import { app, useContacts } from '$lib/stores/index.js';
 
+  export let queryKey: QueryKey;
   export let pubkey: string;
   export let req: RxReqBase | undefined = undefined;
 
   // TODO: Check if $app.rxNostr is defined
-  $: result = useContacts($app.rxNostr, pubkey, req);
+  $: result = useContacts($app.rxNostr, useQueryClient(), queryKey, pubkey, req);
   $: data = result.data;
   $: status = result.status;
   $: error = result.error;
