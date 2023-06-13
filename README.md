@@ -4,7 +4,7 @@
 [![Node.js CI](https://github.com/akiomik/nosvelte/actions/workflows/node-ci.yml/badge.svg)](https://github.com/akiomik/nosvelte/actions/workflows/node-ci.yml)
 
 An experimental Svelte library for building [Nostr](https://nostr.com) apps easily.
-Highly inspired by sveltefire.
+Highly inspired by [sveltefire](https://github.com/codediodeio/sveltefire).
 
 ```svelte
 <script lang="ts">
