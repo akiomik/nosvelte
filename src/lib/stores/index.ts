@@ -11,6 +11,7 @@ export * from './useArticleList.js';
 export * from './useConnections.js';
 export * from './useContacts.js';
 export * from './useEvent.js';
+export * from './useEventList.js';
 export * from './useLatestEvent.js';
 export * from './useMetadata.js';
 export * from './useMetadataList.js';
