@@ -1,6 +1,6 @@
 {
   "name": "nosvelte",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "author": "Akiomi Kamakura <akiomik@gmail.com>",
   "license": "Apache-2.0",
   "scripts": {
