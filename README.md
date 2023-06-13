@@ -1,5 +1,8 @@
 # nosvelte
 
+[![npm version](https://badge.fury.io/js/nosvelte.svg)](https://badge.fury.io/js/nosvelte)
+[![Node.js CI](https://github.com/akiomik/nosvelte/actions/workflows/node-ci.yml/badge.svg)](https://github.com/akiomik/nosvelte/actions/workflows/node-ci.yml)
+
 An experimental Svelte library for building [Nostr](https://nostr.com) apps easily.
 Highly inspired by sveltefire.
 
