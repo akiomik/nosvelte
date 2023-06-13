@@ -40,4 +40,4 @@ Highly inspired by sveltefire.
 
 ## Exapmles
 
-You can see some example codes in (src/routes)[https://github.com/akiomik/svelte-nostr/tree/main/src/routes].
+You can see some example codes in [src/routes](https://github.com/akiomik/svelte-nostr/tree/main/src/routes).
