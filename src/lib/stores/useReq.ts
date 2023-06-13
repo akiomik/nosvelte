@@ -6,7 +6,7 @@
 import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 import type { RxReq } from 'rx-nostr';
 import { createRxOneshotReq } from 'rx-nostr';
-import { readable, writable } from 'svelte/store';
+import { derived, readable, writable } from 'svelte/store';
 
 import type { ReqResult, ReqStatus, UseReqOpts } from './types.js';
 
@@ -32,52 +32,63 @@ export function useReq<A>({
     };
   }
 
-  const data = writable<A>(initData);
+  let _req: RxReq;
+  if (req) {
+    req.emit(filters);
+    _req = req;
+  } else {
+    _req = createRxOneshotReq({ filters });
+  }
+
   const status = writable<ReqStatus>('loading');
   const error = writable<Error | undefined>(undefined);
 
+  const obs = rxNostr.use(_req).pipe(operator);
   const query = createQuery(queryKey, () => {
-    let _req: RxReq;
-    if (req) {
-      req.emit(filters);
-      _req = req;
-    } else {
-      _req = createRxOneshotReq({ filters });
-    }
-
-    const obs = rxNostr.use(_req).pipe(operator);
-    let resolved = false;
-
     return new Promise((resolve, reject) => {
+      let fullfilled = false;
+
       obs.subscribe({
         next: (v) => {
-          if (resolved) {
+          if (fullfilled) {
             queryClient.setQueryData(queryKey, v);
           } else {
             resolve(v);
-            resolved = true;
+            fullfilled = true;
           }
         },
         complete: () => status.set('success'),
-        error: (e) => reject(e)
+        error: (e) => {
+          console.error(e);
+          status.set('error');
+          error.set(e);
+
+          if (!fullfilled) {
+            reject(e);
+            fullfilled = true;
+          }
+        }
       });
     });
   });
 
-  // TODO: Unsubscribe
-  // TODO: Use CreateQueryResult type
-  query.subscribe((q: { isError: boolean; error: Error | undefined; data: A }) => {
-    if (q.isError) {
-      status.set('error');
-      error.set(q.error);
-    } else {
-      data.set(q.data);
-    }
-  });
-
   return {
-    data,
-    status,
-    error
+    data: derived(query, ($query) => $query.data, initData),
+    status: derived([query, status], ([$query, $status]) => {
+      if ($query.isSuccess) {
+        return 'success';
+      } else if ($query.isError) {
+        return 'error';
+      } else {
+        return $status;
+      }
+    }),
+    error: derived([query, error], ([$query, $error]) => {
+      if ($query.isError) {
+        return $query.error;
+      } else {
+        return $error;
+      }
+    })
   };
 }
