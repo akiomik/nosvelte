@@ -4,11 +4,10 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
-  import type { Nostr } from 'rx-nostr';
-
   import NostrApp from '$lib/components/NostrApp.svelte';
   import Text from '$lib/components/Text.svelte';
   import UserReactionList from '$lib/components/UserReactionList.svelte';
+  import type { Nostr } from '$lib/index.js';
 
   const relays: string[] = ['wss://relay.damus.io', 'wss://relay-jp.nostr.wirednet.jp'];
   const pubkey = '4d39c23b3b03bf99494df5f3a149c7908ae1bc7416807fdd6b34a31886eaae25';

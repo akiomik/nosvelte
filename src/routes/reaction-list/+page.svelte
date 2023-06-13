@@ -4,12 +4,13 @@
    * @copyright 2023 Akiomi Kamakura
    */
 
-  import { createRxForwardReq, Nostr } from 'rx-nostr';
+  import { createRxForwardReq } from 'rx-nostr';
 
   import Metadata from '$lib/components/Metadata.svelte';
   import NostrApp from '$lib/components/NostrApp.svelte';
   import Text from '$lib/components/Text.svelte';
   import UniqueEventList from '$lib/components/UniqueEventList.svelte';
+  import { Nostr } from '$lib/index.js';
 
   const relays = [
     'wss://nostr.wine',
