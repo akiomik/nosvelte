@@ -77,8 +77,16 @@
               id={targetEventIdOf(reaction)}
               let:text
             >
-              <div slot="nodata">
+              <div slot="loading">
+                <p>Loading note... ({targetEventIdOf(reaction)})</p>
+              </div>
+
+              <div slot="error">
                 <p>Failed to get note ({targetEventIdOf(reaction)})</p>
+              </div>
+
+              <div slot="nodata">
+                <p>Note not found ({targetEventIdOf(reaction)})</p>
               </div>
 
               <Metadata
@@ -86,8 +94,16 @@
                 pubkey={text.pubkey}
                 let:metadata={reactedMetadata}
               >
+                <div slot="loading">
+                  <p>Loading profile... ({text.pubkey})</p>
+                </div>
+
+                <div slot="error">
+                  <p>Failed to get profile ({text.pubkey})</p>
+                </div>
+
                 <div slot="nodata">
-                  <p>Failed to get profile (text.pubkey)</p>
+                  <p>Profile not found ({text.pubkey})</p>
                 </div>
 
                 <p>
