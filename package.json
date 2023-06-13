@@ -1,5 +1,5 @@
 {
-  "name": "svelte-nostr",
+  "name": "nosvelte",
   "version": "0.0.0",
   "author": "Akiomi Kamakura <akiomik@gmail.com>",
   "license": "Apache-2.0",
@@ -57,6 +57,6 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/akiomik/svelte-nostr.git"
+    "url": "https://github.com/akiomik/nosvelte.git"
   }
 }

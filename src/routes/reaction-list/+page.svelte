@@ -37,7 +37,7 @@
 </script>
 
 <svelte:head>
-  <title>reaction-list | svelte-nostr</title>
+  <title>reaction-list | nosvelte</title>
 </svelte:head>
 
 <NostrApp {relays}>

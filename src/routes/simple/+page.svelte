@@ -12,7 +12,7 @@
 </script>
 
 <svelte:head>
-  <title>simple | svelte-nostr</title>
+  <title>simple | nosvelte</title>
 </svelte:head>
 
 <NostrApp {relays}>

@@ -6,10 +6,10 @@
 </script>
 
 <svelte:head>
-  <title>svelte-nostr examples</title>
+  <title>nosvelte examples</title>
 </svelte:head>
 
-<h1>svelte-nostr examples</h1>
+<h1>nosvelte examples</h1>
 
 <nav>
   <ul>

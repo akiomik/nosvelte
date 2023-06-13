@@ -37,7 +37,7 @@
 </script>
 
 <svelte:head>
-  <title>timeline | svelte-nostr</title>
+  <title>timeline | nosvelte</title>
 </svelte:head>
 
 <NostrApp {relays}>

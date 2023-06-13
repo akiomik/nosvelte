@@ -21,7 +21,7 @@
 </script>
 
 <svelte:head>
-  <title>n-plus-1 (TBU) | svelte-nostr</title>
+  <title>n-plus-1 (TBU) | nosvelte</title>
 </svelte:head>
 
 <NostrApp {relays}>

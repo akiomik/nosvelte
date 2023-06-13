@@ -26,7 +26,7 @@
 </script>
 
 <svelte:head>
-  <title>reactive-data-loading | svelte-nostr</title>
+  <title>reactive-data-loading | nosvelte</title>
 </svelte:head>
 
 <NostrApp {relays} let:connections>
