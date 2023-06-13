@@ -15,6 +15,7 @@ export * from './useLatestEvent.js';
 export * from './useMetadata.js';
 export * from './useMetadataList.js';
 export * from './useMute.js';
+export * from './usePin.js';
 export * from './useReplaceableEvent.js';
 export * from './useReq.js';
 export * from './useText.js';
