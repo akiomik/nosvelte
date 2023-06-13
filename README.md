@@ -5,10 +5,9 @@ Highly inspired by sveltefire.
 
 ```svelte
 <script lang="ts">
-  import Metadata from '$lib/components/Metadata.svelte';
-  import NostrApp from '$lib/components/NostrApp.svelte';
+  import { Metadata, NostrApp } from 'svelte-nostr';
 
-  const relays: string[] = ['wss://relay.damus.io', 'wss://relay.snort.social'];
+  const relays = ['wss://relay.damus.io', 'wss://relay.snort.social'];
   const pubkey = '4d39c23b3b03bf99494df5f3a149c7908ae1bc7416807fdd6b34a31886eaae25';
 </script>
 
