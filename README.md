@@ -30,6 +30,12 @@ Highly inspired by sveltefire.
 - Svelte stores and components to use Nostr events
 - Caching requests
 
+## Installation
+
+```
+npm install nosvelte
+```
+
 ## Exapmles
 
 You can see some example codes in [src/routes](https://github.com/akiomik/nosvelte/tree/main/src/routes).
