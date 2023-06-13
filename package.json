@@ -1,7 +1,7 @@
 {
   "name": "nosvelte",
-  "version": "0.1.1",
-  "author": "Akiomi Kamakura <akiomik@gmail.com>",
+  "version": "0.1.2",
+  "UseReqOptsauthor": "Akiomi Kamakura <akiomik@gmail.com>",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite dev",
