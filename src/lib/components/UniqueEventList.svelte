@@ -5,7 +5,6 @@
    */
 
   import type { QueryKey } from '@tanstack/svelte-query';
-  import { useQueryClient } from '@tanstack/svelte-query';
   import type { Nostr } from 'rx-nostr';
 
   import type { ReqStatus, RxReqBase } from '$lib/stores/index.js';
@@ -16,7 +15,7 @@
   export let req: RxReqBase | undefined = undefined;
 
   // TODO: Check if $app.rxNostr is defined
-  $: result = useUniqueEventList($app.rxNostr, useQueryClient(), queryKey, filters, req);
+  $: result = useUniqueEventList($app.rxNostr, queryKey, filters, req);
   $: data = result.data;
   $: status = result.status;
   $: error = result.error;

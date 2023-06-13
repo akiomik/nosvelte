@@ -5,7 +5,6 @@
    */
 
   import type { QueryKey } from '@tanstack/svelte-query';
-  import { useQueryClient } from '@tanstack/svelte-query';
   import type { Nostr } from 'rx-nostr';
 
   import type { ReqStatus, RxReqBase } from '$lib/stores/index.js';
@@ -17,7 +16,7 @@
   export let req: RxReqBase | undefined = undefined;
 
   // TODO: Check if $app.rxNostr is defined
-  $: result = useArticle($app.rxNostr, useQueryClient(), queryKey, pubkey, identifier, req);
+  $: result = useArticle($app.rxNostr, queryKey, pubkey, identifier, req);
   $: data = result.data;
   $: status = result.status;
   $: error = result.error;

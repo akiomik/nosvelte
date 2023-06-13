@@ -3,7 +3,7 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import type { QueryClient, QueryKey } from '@tanstack/svelte-query';
+import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
 import { Nostr, uniq, verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
@@ -14,7 +14,6 @@ import { useReq } from './useReq.js';
 
 export function useTextList(
   rxNostr: RxNostr,
-  queryClient: QueryClient,
   queryKey: QueryKey,
   ids: string[],
   req?: RxReqBase | undefined
@@ -22,5 +21,5 @@ export function useTextList(
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids }];
   const operator = pipe(filterTextList(ids), uniq(), verify(), scanArray());
-  return useReq({ rxNostr, queryClient, queryKey, filters, operator, req, initData: [] });
+  return useReq({ rxNostr, queryKey, filters, operator, req, initData: [] });
 }

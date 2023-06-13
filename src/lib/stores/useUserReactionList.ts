@@ -3,7 +3,7 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import type { QueryClient, QueryKey } from '@tanstack/svelte-query';
+import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
 import { filterKind, Nostr, verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
@@ -14,7 +14,6 @@ import { useReq } from './useReq.js';
 
 export function useUserReactionList(
   rxNostr: RxNostr,
-  queryClient: QueryClient,
   queryKey: QueryKey,
   pubkey: string,
   limit: number,
@@ -28,5 +27,5 @@ export function useUserReactionList(
     latestEachNaddr(),
     scanArray()
   );
-  return useReq({ rxNostr, queryClient, queryKey, filters, operator, req, initData: [] });
+  return useReq({ rxNostr, queryKey, filters, operator, req, initData: [] });
 }

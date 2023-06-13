@@ -3,7 +3,7 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import type { QueryClient, QueryKey } from '@tanstack/svelte-query';
+import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
 import { latest, Nostr, verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
@@ -14,7 +14,6 @@ import { useReq } from './useReq.js';
 
 export function useArticle(
   rxNostr: RxNostr,
-  queryClient: QueryClient,
   queryKey: QueryKey,
   pubkey: string,
   identifier: string,
@@ -24,5 +23,5 @@ export function useArticle(
     { kinds: [Nostr.Kind.Article], authors: [pubkey], '#d': [identifier], limit: 1 }
   ];
   const operator = pipe(filterNaddr(Nostr.Kind.Article, pubkey, identifier), verify(), latest());
-  return useReq({ rxNostr, queryClient, queryKey, filters, operator, req });
+  return useReq({ rxNostr, queryKey, filters, operator, req });
 }

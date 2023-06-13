@@ -3,7 +3,7 @@
  * @copyright 2023 Akiomi Kamakura
  */
 
-import type { QueryClient, QueryKey } from '@tanstack/svelte-query';
+import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
 import { filterKind, Nostr, uniq, verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
@@ -14,7 +14,6 @@ import { useReq } from './useReq.js';
 
 export function useText(
   rxNostr: RxNostr,
-  queryClient: QueryClient,
   queryKey: QueryKey,
   id: string,
   req?: RxReqBase | undefined
@@ -22,5 +21,5 @@ export function useText(
   // TODO: Add note1 support
   const filters = [{ kinds: [Nostr.Kind.Text], ids: [id], limit: 1 }];
   const operator = pipe(filterKind(Nostr.Kind.Text), filterId(id), uniq(), verify());
-  return useReq({ rxNostr, queryClient, queryKey, filters, operator, req });
+  return useReq({ rxNostr, queryKey, filters, operator, req });
 }
