@@ -5,6 +5,8 @@
 
 export { default as Article } from './Article.svelte';
 export { default as Contacts } from './Contacts.svelte';
+export { default as Event } from './Event.svelte';
+export { default as EventList } from './EventList.svelte';
 export { default as Metadata } from './Metadata.svelte';
 export { default as Mute } from './Mute.svelte';
 export { default as NostrApp } from './NostrApp.svelte';
