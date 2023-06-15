@@ -1,7 +1,8 @@
 {
   "name": "nosvelte",
   "version": "0.1.2",
-  "UseReqOptsauthor": "Akiomi Kamakura <akiomik@gmail.com>",
+  "author": "Akiomi Kamakura <akiomik@gmail.com>",
+  "description": "An experimental Svelte library for building Nostr apps easily",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite dev",
@@ -62,5 +63,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/akiomik/nosvelte.git"
-  }
+  },
+  "bugs": "https://github.com/akiomik/nosvelte/issues",
+  "keywords": [
+    "svelte",
+    "nostr"
+  ]
 }
