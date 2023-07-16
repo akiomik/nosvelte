@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@tanstack/svelte-query": "^4.29.11",
-    "rx-nostr": "^0.8.3"
+    "rx-nostr": "^1.5.0"
   },
   "devDependencies": {
     "@sveltejs/adapter-auto": "^2.0.0",
