@@ -5,7 +5,7 @@
 
 import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
-import { Nostr, verify } from 'rx-nostr';
+import { verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
 import { filterMetadataList, latestEachPubkey, scanArray } from './operators.js';
@@ -19,7 +19,7 @@ export function useMetadataList(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   // TODO: Add npub support
-  const filters = [{ kinds: [Nostr.Kind.Metadata], authors: pubkeys, limit: pubkeys.length }];
+  const filters = [{ kinds: [0], authors: pubkeys, limit: pubkeys.length }];
   const operator = pipe(filterMetadataList(pubkeys), verify(), latestEachPubkey(), scanArray());
   return useReq({ rxNostr, queryKey, filters, operator, req, initData: [] });
 }

@@ -10,7 +10,7 @@
   import NostrApp from '$lib/components/NostrApp.svelte';
   import Text from '$lib/components/Text.svelte';
   import UniqueEventList from '$lib/components/UniqueEventList.svelte';
-  import { Nostr } from '$lib/index.js';
+  import type { Nostr } from '$lib/index.js';
 
   const relays = [
     'wss://nostr.wine',
@@ -21,7 +21,7 @@
   const filters = [
     {
       authors: [pubkey],
-      kinds: [Nostr.Kind.Reaction],
+      kinds: [7],
       limit: 100
     }
   ];

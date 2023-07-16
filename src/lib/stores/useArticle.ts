@@ -5,7 +5,7 @@
 
 import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
-import { latest, Nostr, verify } from 'rx-nostr';
+import { latest, verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
 import { filterNaddr } from './operators.js';
@@ -19,9 +19,7 @@ export function useArticle(
   identifier: string,
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket> {
-  const filters = [
-    { kinds: [Nostr.Kind.Article], authors: [pubkey], '#d': [identifier], limit: 1 }
-  ];
-  const operator = pipe(filterNaddr(Nostr.Kind.Article, pubkey, identifier), verify(), latest());
+  const filters = [{ kinds: [30023], authors: [pubkey], '#d': [identifier], limit: 1 }];
+  const operator = pipe(filterNaddr(30023, pubkey, identifier), verify(), latest());
   return useReq({ rxNostr, queryKey, filters, operator, req });
 }

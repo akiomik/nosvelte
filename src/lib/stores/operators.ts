@@ -4,7 +4,7 @@
  */
 
 import type { EventPacket } from 'rx-nostr';
-import { latestEach, Nostr } from 'rx-nostr';
+import { latestEach } from 'rx-nostr';
 import type { OperatorFunction } from 'rxjs';
 import { filter, map, pipe, scan } from 'rxjs';
 
@@ -13,7 +13,7 @@ export function filterId(id: string): OperatorFunction<EventPacket, EventPacket>
 }
 
 export function filterTextList(ids: string[]): OperatorFunction<EventPacket, EventPacket> {
-  return filter(({ event }) => event.kind === Nostr.Kind.Text && ids.includes(event.id));
+  return filter(({ event }) => event.kind === 1 && ids.includes(event.id));
 }
 
 export function filterPubkey(pubkey: string): OperatorFunction<EventPacket, EventPacket> {
@@ -21,13 +21,11 @@ export function filterPubkey(pubkey: string): OperatorFunction<EventPacket, Even
 }
 
 export function filterMetadataList(pubkeys: string[]): OperatorFunction<EventPacket, EventPacket> {
-  return filter(
-    ({ event }) => event.kind === Nostr.Kind.Metadata && pubkeys.includes(event.pubkey)
-  );
+  return filter(({ event }) => event.kind === 0 && pubkeys.includes(event.pubkey));
 }
 
 export function filterNaddr(
-  kind: Nostr.Kind,
+  kind: number,
   pubkey: string,
   identifier: string
 ): OperatorFunction<EventPacket, EventPacket> {

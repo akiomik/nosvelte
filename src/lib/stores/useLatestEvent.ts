@@ -4,8 +4,9 @@
  */
 
 import type { QueryKey } from '@tanstack/svelte-query';
+import type Nostr from 'nostr-typedef';
 import type { EventPacket, RxNostr } from 'rx-nostr';
-import { latest, Nostr, verify } from 'rx-nostr';
+import { latest, verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
 import type { ReqResult, RxReqBase } from './types.js';

@@ -4,7 +4,8 @@
  */
 
 import type { QueryKey } from '@tanstack/svelte-query';
-import type { EventPacket, Nostr, Relay, RxNostr, RxReq, RxReqController } from 'rx-nostr';
+import type Nostr from 'nostr-typedef';
+import type { EventPacket, RelayConfig, RxNostr, RxReq, RxReqController } from 'rx-nostr';
 import type { OperatorFunction } from 'rxjs';
 import type { Readable } from 'svelte/store';
 
@@ -15,12 +16,12 @@ export type ReqStatus = 'loading' | 'success' | 'error';
 export interface ReqResult<A> {
   data: Readable<A>;
   status: Readable<ReqStatus>;
-  error: Readable<Error | undefined>;
+  error: Readable<Error>;
 }
 
 export interface UseConnectionsOpts {
   rxNostr: RxNostr;
-  relays: (string | Relay)[];
+  relays: (string | RelayConfig)[];
 }
 
 export interface UseReqOpts<A> {

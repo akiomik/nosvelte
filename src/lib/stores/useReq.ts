@@ -41,7 +41,7 @@ export function useReq<A>({
   }
 
   const status = writable<ReqStatus>('loading');
-  const error = writable<Error | undefined>(undefined);
+  const error = writable<Error>();
 
   const obs = rxNostr.use(_req).pipe(operator);
   const query = createQuery(queryKey, () => {
