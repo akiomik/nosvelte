@@ -5,7 +5,7 @@
    */
 
   import type { QueryKey } from '@tanstack/svelte-query';
-  import type { Nostr } from 'rx-nostr';
+  import type Nostr from 'nostr-typedef';
 
   import type { ReqStatus, RxReqBase } from '$lib/stores/index.js';
   import { app, useEvent } from '$lib/stores/index.js';

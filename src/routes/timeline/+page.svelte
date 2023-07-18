@@ -11,7 +11,7 @@
   import NostrApp from '$lib/components/NostrApp.svelte';
   import Text from '$lib/components/Text.svelte';
   import UniqueEventList from '$lib/components/UniqueEventList.svelte';
-  import { Nostr } from '$lib/index.js';
+  import type { Nostr } from '$lib/index.js';
 
   const relays = ['wss://relay.damus.io', 'wss://relay-jp.nostr.wirednet.jp'];
   const pubkey = '4d39c23b3b03bf99494df5f3a149c7908ae1bc7416807fdd6b34a31886eaae25';
@@ -54,7 +54,7 @@
       filters={[
         {
           authors: pubkeysIn(contacts),
-          kinds: [Nostr.Kind.Text, Nostr.Kind.Repost, Nostr.Kind.Reaction],
+          kinds: [1, 6, 7],
           limit: 10
         }
       ]}
@@ -78,13 +78,13 @@
             let:metadata
           >
             <section style="border: 1px black solid; padding: 1em;">
-              {#if event.kind === Nostr.Kind.Text}
+              {#if event.kind === 1}
                 <p>
                   {JSON.parse(metadata.content).name ?? 'nostrich'}
                   :
                   {event.content}
                 </p>
-              {:else if event.kind === Nostr.Kind.Repost}
+              {:else if event.kind === 6}
                 <p>reposted by {JSON.parse(metadata.content).name ?? 'nostrich'}</p>
                 <Text
                   queryKey={['timeline', targetEventIdOf(event)]}
@@ -111,7 +111,7 @@
                     </p>
                   </Metadata>
                 </Text>
-              {:else if event.kind === Nostr.Kind.Reaction}
+              {:else if event.kind === 7}
                 <p>
                   {event.content === '+' ? '👍' : event.content}
                   by

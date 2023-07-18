@@ -6,14 +6,14 @@
 
   import type { QueryClientConfig } from '@tanstack/svelte-query';
   import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
-  import type { ConnectionStatePacket, Relay } from 'rx-nostr';
+  import type { ConnectionStatePacket, RelayConfig } from 'rx-nostr';
   import { createRxNostr } from 'rx-nostr';
   import { onDestroy } from 'svelte';
 
   import { app, useConnections } from '$lib/stores/index.js';
 
   export let queryClientConfig: QueryClientConfig = {};
-  export let relays: (string | Relay)[] = [];
+  export let relays: (string | RelayConfig)[] = [];
 
   const rxNostr = createRxNostr();
   const defaultQueryClientConfig = {
@@ -30,7 +30,7 @@
   $: queryClient = new QueryClient(mergedQueryClientConfig);
 
   $: {
-    rxNostr.setRelays(relays);
+    rxNostr.switchRelays(relays);
     app.set({ rxNostr });
   }
 

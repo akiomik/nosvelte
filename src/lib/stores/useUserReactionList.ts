@@ -5,7 +5,7 @@
 
 import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
-import { filterKind, Nostr, verify } from 'rx-nostr';
+import { filterKind, verify } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
 import { filterPubkey, latestEachNaddr, scanArray } from './operators.js';
@@ -19,9 +19,9 @@ export function useUserReactionList(
   limit: number,
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
-  const filters = [{ kinds: [Nostr.Kind.Reaction], authors: [pubkey], limit }];
+  const filters = [{ kinds: [7], authors: [pubkey], limit }];
   const operator = pipe(
-    filterKind(Nostr.Kind.Reaction),
+    filterKind(7),
     filterPubkey(pubkey),
     verify(),
     latestEachNaddr(),
