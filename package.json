@@ -1,6 +1,6 @@
 {
   "name": "nosvelte",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "author": "Akiomi Kamakura <akiomik@gmail.com>",
   "description": "An experimental Svelte library for building Nostr apps easily",
   "license": "Apache-2.0",
