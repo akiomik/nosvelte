@@ -22,7 +22,7 @@ export function useReq<A>({
 }: UseReqOpts<A>): ReqResult<A> {
   const queryClient = useQueryClient();
 
-  if (rxNostr.getRelays().length === 0) {
+  if (Object.keys(rxNostr.getDefaultRelays()).length === 0) {
     queryClient.setQueryData(queryKey, initData);
 
     return {

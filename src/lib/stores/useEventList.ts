@@ -5,7 +5,7 @@
 
 import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
-import { uniq, verify } from 'rx-nostr';
+import { uniq } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
 import { filterTextList, scanArray } from './operators.js';
@@ -19,6 +19,6 @@ export function useEventList(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   const filters = [{ ids, limit: ids.length }];
-  const operator = pipe(filterTextList(ids), uniq(), verify(), scanArray());
+  const operator = pipe(filterTextList(ids), uniq(), scanArray());
   return useReq({ rxNostr, queryKey, filters, operator, req, initData: [] });
 }

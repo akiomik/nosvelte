@@ -5,11 +5,11 @@
 
 import type { QueryKey } from '@tanstack/svelte-query';
 import type Nostr from 'nostr-typedef';
-import type { EventPacket, RelayConfig, RxNostr, RxReq, RxReqController } from 'rx-nostr';
+import type { DefaultRelayConfig, EventPacket, RxNostr, RxReq, RxReqEmittable } from 'rx-nostr';
 import type { OperatorFunction } from 'rxjs';
 import type { Readable } from 'svelte/store';
 
-export type RxReqBase = RxReq & RxReqController;
+export type RxReqBase = RxReq & RxReqEmittable;
 
 export type ReqStatus = 'loading' | 'success' | 'error';
 
@@ -21,7 +21,7 @@ export interface ReqResult<A> {
 
 export interface UseConnectionsOpts {
   rxNostr: RxNostr;
-  relays: (string | RelayConfig)[];
+  relays: (string | DefaultRelayConfig)[];
 }
 
 export interface UseReqOpts<A> {
