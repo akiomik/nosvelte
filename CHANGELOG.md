@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A request whose filters match no event no longer hangs. Such a REQ reaches
+  EOSE without the operator chain ever emitting, which left the underlying query
+  pending forever: `status` reported `'success'` while `data` stayed `undefined`
+  indefinitely. The query now settles on completion, and `data` falls back to the
+  hook's initial value (`[]` for the list hooks, `undefined` for the single-event
+  ones) for the whole request rather than only before the first emission.
+
 ## [0.6.0] - 2026-07-31
 
 ### Added

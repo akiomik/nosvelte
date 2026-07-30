@@ -59,7 +59,22 @@ export function useReq<A>({
               fullfilled = true;
             }
           },
-          complete: () => status.set('success'),
+          complete: () => {
+            status.set('success');
+
+            // A REQ that matches nothing completes on EOSE without ever
+            // emitting: `latest()` scans without a seed and `scanArray()`'s
+            // seed only surfaces once the source emits. Resolving here keeps
+            // the query from staying pending forever, which would otherwise
+            // leave `.status` reporting 'success' while `.data` never
+            // settles. TanStack Query rejects `undefined` as query data, so
+            // `null` stands in for "completed with no events" and is mapped
+            // back to `initData` below.
+            if (!fullfilled) {
+              resolve((initData ?? null) as A);
+              fullfilled = true;
+            }
+          },
           error: (e) => {
             console.error(e);
             status.set('error');
@@ -76,7 +91,12 @@ export function useReq<A>({
   });
 
   return {
-    data: derived(query, ($query) => $query.data as A, initData),
+    // `createQuery()`'s store emits synchronously on subscribe, so `derived()`'s
+    // initial value is replaced by `$query.data` right away — including while
+    // the query is still pending, when that data is `undefined`. Falling back
+    // to `initData` makes it the value seen throughout a request, not just
+    // before the first emission, and maps the `null` resolved above back to it.
+    data: derived(query, ($query) => ($query.data ?? initData) as A, initData),
     status: derived([query, status], ([$query, $status]) => {
       if ($query.isSuccess) {
         return 'success';
