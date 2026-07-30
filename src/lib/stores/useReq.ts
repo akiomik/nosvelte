@@ -44,32 +44,35 @@ export function useReq<A>({
   const error = writable<Error>();
 
   const obs = rxNostr.use(_req).pipe(operator);
-  const query = createQuery<A, Error>(queryKey, () => {
-    return new Promise<A>((resolve, reject) => {
-      let fullfilled = false;
+  const query = createQuery<A, Error>({
+    queryKey,
+    queryFn: () => {
+      return new Promise<A>((resolve, reject) => {
+        let fullfilled = false;
 
-      obs.subscribe({
-        next: (v) => {
-          if (fullfilled) {
-            queryClient.setQueryData(queryKey, v);
-          } else {
-            resolve(v);
-            fullfilled = true;
-          }
-        },
-        complete: () => status.set('success'),
-        error: (e) => {
-          console.error(e);
-          status.set('error');
-          error.set(e);
+        obs.subscribe({
+          next: (v) => {
+            if (fullfilled) {
+              queryClient.setQueryData(queryKey, v);
+            } else {
+              resolve(v);
+              fullfilled = true;
+            }
+          },
+          complete: () => status.set('success'),
+          error: (e) => {
+            console.error(e);
+            status.set('error');
+            error.set(e);
 
-          if (!fullfilled) {
-            reject(e);
-            fullfilled = true;
+            if (!fullfilled) {
+              reject(e);
+              fullfilled = true;
+            }
           }
-        }
+        });
       });
-    });
+    }
   });
 
   return {

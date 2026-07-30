@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** upgraded `@tanstack/svelte-query` from `^4.29.11` to `^5.0.0`.
+  Consumers that use `@tanstack/svelte-query` directly (their own `QueryClient`
+  or query hooks) must upgrade to v5 as well, and the exported `QueryClientConfig`
+  and `QueryKey` types now come from v5. See the
+  [TanStack Query v5 migration guide](https://tanstack.com/query/v5/docs/framework/svelte/migration).
+
 ## [0.4.0] - 2026-07-31
 
 ### Changed
