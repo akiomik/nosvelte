@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-31
+
 ### Changed
 
 - **Breaking:** upgraded `rx-nostr` from `^1.5.0` to `^2.0.0` (and `nostr-typedef`
@@ -32,5 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Vitest 3, ESLint 10, Prettier 3) and moved CI to Node.js 26. This does not
   affect the published package.
 
-[Unreleased]: https://github.com/akiomik/nosvelte/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/akiomik/nosvelte/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/akiomik/nosvelte/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/akiomik/nosvelte/compare/v0.1.3...v0.2.0
