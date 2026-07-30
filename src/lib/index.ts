@@ -8,4 +8,4 @@ export * from './stores/index.js';
 export type { QueryClientConfig, QueryKey } from '@tanstack/svelte-query';
 export { QueryClient } from '@tanstack/svelte-query';
 export type * as Nostr from 'nostr-typedef';
-export type { ConnectionStatePacket, EventPacket, RelayConfig, RxNostr } from 'rx-nostr';
+export type { ConnectionStatePacket, DefaultRelayConfig, EventPacket, RxNostr } from 'rx-nostr';

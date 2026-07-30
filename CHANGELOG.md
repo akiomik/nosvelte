@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** upgraded `rx-nostr` from `^2.0.0` to `^3.0.0` (and `nostr-typedef`
+  to `^0.13.0`), and added a dependency on `rx-nostr-crypto`. rx-nostr v3 moved
+  cryptographic verification into `rx-nostr-crypto`, so `NostrApp` now creates its
+  `RxNostr` with a `verifier` and events are verified there rather than by a
+  per-request `verify()` operator. Hosts must upgrade to `rx-nostr@^3`; hosts that
+  build their own `RxNostr` should pass a `verifier`. See the
+  [rx-nostr v3 release notes](https://github.com/penpenpng/rx-nostr/releases/tag/v3.0.0).
+- **Breaking:** the exported `RelayConfig` type is renamed to `DefaultRelayConfig`,
+  following rx-nostr v3.
+
 ## [0.3.0] - 2026-07-31
 
 ### Changed

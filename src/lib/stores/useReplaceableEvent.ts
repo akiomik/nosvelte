@@ -5,7 +5,7 @@
 
 import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
-import { filterKind, latest, verify } from 'rx-nostr';
+import { filterByKind, latest } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
 import { filterPubkey } from './operators.js';
@@ -21,6 +21,6 @@ export function useReplaceableEvent(
 ): ReqResult<EventPacket> {
   // TODO: Add npub support
   const filters = [{ kinds: [kind], authors: [pubkey], limit: 1 }];
-  const operator = pipe(filterKind(kind), filterPubkey(pubkey), verify(), latest());
+  const operator = pipe(filterByKind(kind), filterPubkey(pubkey), latest());
   return useReq({ rxNostr, queryKey, filters, operator, req });
 }

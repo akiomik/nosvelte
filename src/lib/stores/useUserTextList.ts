@@ -5,7 +5,7 @@
 
 import type { QueryKey } from '@tanstack/svelte-query';
 import type { EventPacket, RxNostr } from 'rx-nostr';
-import { filterKind, uniq, verify } from 'rx-nostr';
+import { filterByKind, uniq } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
 import { filterPubkey, scanArray } from './operators.js';
@@ -21,6 +21,6 @@ export function useUserTextList(
 ): ReqResult<EventPacket[]> {
   // TODO: Add note1 support
   const filters = [{ kinds: [1], authors: [pubkey], limit }];
-  const operator = pipe(filterKind(1), filterPubkey(pubkey), uniq(), verify(), scanArray());
+  const operator = pipe(filterByKind(1), filterPubkey(pubkey), uniq(), scanArray());
   return useReq({ rxNostr, queryKey, filters, operator, req, initData: [] });
 }

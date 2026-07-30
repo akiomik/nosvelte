@@ -6,16 +6,17 @@
 
   import type { QueryClientConfig } from '@tanstack/svelte-query';
   import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
-  import type { ConnectionStatePacket, RelayConfig } from 'rx-nostr';
+  import type { ConnectionStatePacket, DefaultRelayConfig } from 'rx-nostr';
   import { createRxNostr } from 'rx-nostr';
+  import { verifier } from 'rx-nostr-crypto';
   import { onDestroy } from 'svelte';
 
   import { app, useConnections } from '$lib/stores/index.js';
 
   export let queryClientConfig: QueryClientConfig = {};
-  export let relays: (string | RelayConfig)[] = [];
+  export let relays: (string | DefaultRelayConfig)[] = [];
 
-  const rxNostr = createRxNostr();
+  const rxNostr = createRxNostr({ verifier });
   const defaultQueryClientConfig = {
     defaultOptions: {
       queries: {
