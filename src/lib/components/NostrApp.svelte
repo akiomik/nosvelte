@@ -30,7 +30,7 @@
   $: queryClient = new QueryClient(mergedQueryClientConfig);
 
   $: {
-    rxNostr.switchRelays(relays);
+    rxNostr.setDefaultRelays(relays);
     app.set({ rxNostr });
   }
 

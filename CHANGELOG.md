@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** upgraded `rx-nostr` from `^1.5.0` to `^2.0.0` (and `nostr-typedef`
+  to `^0.8.0`). A `NostrApp` is initialized with an `RxNostr` instance created by
+  the host application, so hosts must upgrade to `rx-nostr@^2` as well. See the
+  [rx-nostr v2 release notes](https://github.com/penpenpng/rx-nostr/releases/tag/v2.0.0)
+  for the connection-state renames and other breaking changes.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added
