@@ -48,15 +48,15 @@ export function useReq<A>({
     queryKey,
     queryFn: () => {
       return new Promise<A>((resolve, reject) => {
-        let fullfilled = false;
+        let fulfilled = false;
 
         obs.subscribe({
           next: (v) => {
-            if (fullfilled) {
+            if (fulfilled) {
               queryClient.setQueryData(queryKey, v);
             } else {
               resolve(v);
-              fullfilled = true;
+              fulfilled = true;
             }
           },
           complete: () => {
@@ -70,9 +70,9 @@ export function useReq<A>({
             // settles. TanStack Query rejects `undefined` as query data, so
             // `null` stands in for "completed with no events" and is mapped
             // back to `initData` below.
-            if (!fullfilled) {
+            if (!fulfilled) {
               resolve((initData ?? null) as A);
-              fullfilled = true;
+              fulfilled = true;
             }
           },
           error: (e) => {
@@ -80,9 +80,9 @@ export function useReq<A>({
             status.set('error');
             error.set(e);
 
-            if (!fullfilled) {
+            if (!fulfilled) {
               reject(e);
-              fullfilled = true;
+              fulfilled = true;
             }
           }
         });
