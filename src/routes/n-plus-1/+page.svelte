@@ -13,9 +13,9 @@
   const pubkey = '4d39c23b3b03bf99494df5f3a149c7908ae1bc7416807fdd6b34a31886eaae25';
   const limit = 10;
 
-  const targetEventIdOf = (reaction: Nostr.Event) => {
+  const targetEventIdOf = (reaction: Nostr.Event): string | undefined => {
     // Extract the last 'e' tag in .tags (NIP-25)
-    return reaction.tags.filter(([tag]) => tag === 'e').slice(-1)[0][1];
+    return reaction.tags.filter(([tag]) => tag === 'e').slice(-1)[0]?.[1];
   };
 </script>
 
@@ -42,32 +42,31 @@
       </div>
 
       {#each reactions as reaction (reaction.id)}
-        <!-- TODO: Re-use req to avoid N+1 problem -->
-        <Text
-          id={targetEventIdOf(reaction)}
-          queryKey={['n-plus-1', targetEventIdOf(reaction)]}
-          let:text
-        >
-          <div slot="loading">
-            <p>Loading {reaction.id} ...</p>
-          </div>
+        {@const targetEventId = targetEventIdOf(reaction)}
+        {#if targetEventId}
+          <!-- TODO: Re-use req to avoid N+1 problem -->
+          <Text id={targetEventId} queryKey={['n-plus-1', targetEventId]} let:text>
+            <div slot="loading">
+              <p>Loading {reaction.id} ...</p>
+            </div>
 
-          <div slot="error" let:error>
-            <p>{error}</p>
-          </div>
+            <div slot="error" let:error>
+              <p>{error}</p>
+            </div>
 
-          <div slot="nodata">
+            <div slot="nodata">
+              <p>
+                {reaction.content}
+                Not found
+              </p>
+            </div>
+
             <p>
               {reaction.content}
-              Not found
+              {text.content}
             </p>
-          </div>
-
-          <p>
-            {reaction.content}
-            {text.content}
-          </p>
-        </Text>
+          </Text>
+        {/if}
       {/each}
     </UserReactionList>
   </section>

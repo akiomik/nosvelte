@@ -29,6 +29,6 @@ export interface UseReqOpts<A> {
   queryKey: QueryKey;
   filters: Nostr.Filter[];
   operator: OperatorFunction<EventPacket, A>;
-  req?: RxReqBase;
+  req?: RxReqBase | undefined;
   initData?: A;
 }
