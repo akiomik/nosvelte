@@ -20,5 +20,5 @@ export function useUniqueEventList(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   const operator = pipe(uniq(), scanArray());
-  return useReq({ rxNostr, queryKey, filters, operator, req });
+  return useReq({ rxNostr, queryKey, filters, operator, req, initData: [] });
 }

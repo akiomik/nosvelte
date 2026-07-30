@@ -1,4 +1,5 @@
 import { QueryClient, setQueryClientContext } from '@tanstack/svelte-query';
+import { createRxNostr } from 'rx-nostr';
 import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WS from 'vitest-websocket-mock';
@@ -48,5 +49,33 @@ describe('useUniqueEventList', () => {
 
     expect(await waitFor(result.status, (s) => s === 'success')).toBe('success');
     expect(get(result.data).map((p) => p.event)).toEqual([first, second]);
+  });
+
+  it('emits an empty list when the REQ matches no events', async () => {
+    const { rxNostr, server } = createTestRelay('ws://localhost:9305');
+
+    const result = useUniqueEventList(rxNostr, ['useUniqueEventList', 'empty'], [{ kinds: [1] }]);
+    activate(result.status);
+    activate(result.data);
+
+    respondWithEose(server, await nextReqSubId(server));
+
+    expect(await waitFor(result.status, (s) => s === 'success')).toBe('success');
+    expect(get(result.data)).toEqual([]);
+  });
+
+  it('emits an empty list when no relays are configured', () => {
+    const rxNostr = createRxNostr();
+
+    const result = useUniqueEventList(
+      rxNostr,
+      ['useUniqueEventList', 'no-relays'],
+      [{ kinds: [1] }]
+    );
+
+    // The relay-less early return hands back `initData` verbatim, so omitting
+    // it would break the `EventPacket[]` contract with `undefined`.
+    expect(get(result.data)).toEqual([]);
+    expect(get(result.status)).toBe('success');
   });
 });
