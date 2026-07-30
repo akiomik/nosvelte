@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A request whose filters match no event no longer hangs. Such a REQ reaches
+  EOSE without the operator chain ever emitting, which left the underlying query
+  pending forever: `status` reported `'success'` while `data` stayed `undefined`
+  indefinitely. The query now settles on completion, and `data` falls back to the
+  hook's initial value (`[]` for the list hooks, `undefined` for the single-event
+  ones) for the whole request rather than only before the first emission.
+- `useUniqueEventList()` now yields `[]` instead of `undefined` when no relays are
+  configured, matching the other list hooks and its own `EventPacket[]` return type.
+  `UniqueEventList` was unaffected, but callers using the hook directly could hit a
+  `TypeError` on the `undefined` the type said could not occur.
+
 ## [0.6.0] - 2026-07-31
 
 ### Added

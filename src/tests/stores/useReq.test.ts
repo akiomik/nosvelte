@@ -1,9 +1,12 @@
 import { QueryClient, setQueryClientContext } from '@tanstack/svelte-query';
-import { createRxForwardReq, createRxNostr } from 'rx-nostr';
+import type { EventPacket } from 'rx-nostr';
+import { createRxForwardReq, createRxNostr, latest } from 'rx-nostr';
 import { map, pipe } from 'rxjs';
+import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
+import { scanArray } from '$lib/stores/operators.js';
 import { useReq } from '$lib/stores/useReq.js';
 
 import {
@@ -107,6 +110,68 @@ describe('useReq', () => {
 
       respondWithEose(server, subId);
       expect(await waitFor(result.status, (s) => s === 'success')).toBe('success');
+    });
+
+    it('settles the query when the REQ completes without emitting anything', async () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      setQueryClientContext(queryClient);
+
+      const { rxNostr, server } = createTestRelay('ws://localhost:9005');
+      const queryKey = ['useReq', 'empty'];
+      const result = useReq({
+        rxNostr,
+        queryKey,
+        filters: [{ kinds: [1] }],
+        // `latest()` scans without a seed, so a REQ that matches nothing
+        // reaches EOSE having emitted no value at all.
+        operator: pipe(latest()),
+        initData: undefined
+      });
+      activate(result.status);
+      activate(result.data);
+
+      const subId = await nextReqSubId(server);
+      respondWithEose(server, subId);
+
+      expect(await waitFor(result.status, (s) => s === 'success')).toBe('success');
+      // The local `status` store reaching 'success' isn't enough: the query
+      // behind it must settle too, or it stays pending (and fetching) forever
+      // while .status already claims success.
+      await vi.waitFor(() => {
+        expect(queryClient.getQueryState(queryKey)?.status).toBe('success');
+      });
+      expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe('idle');
+      expect(get(result.data)).toBeUndefined();
+    });
+
+    it('resolves with initData when the REQ completes without emitting anything', async () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      setQueryClientContext(queryClient);
+
+      const { rxNostr, server } = createTestRelay('ws://localhost:9006');
+      const queryKey = ['useReq', 'empty-list'];
+      const result = useReq<EventPacket[]>({
+        rxNostr,
+        queryKey,
+        filters: [{ kinds: [1] }],
+        // `scanArray()`'s `[]` seed is only surfaced once the source emits, so
+        // this operator is just as silent as `latest()` on an empty result.
+        operator: pipe(scanArray()),
+        initData: []
+      });
+      activate(result.status);
+      activate(result.data);
+
+      const subId = await nextReqSubId(server);
+      respondWithEose(server, subId);
+
+      expect(await waitFor(result.status, (s) => s === 'success')).toBe('success');
+      // Asserted against the cache rather than `.data`, which falls back to
+      // `initData` while pending and so can't tell resolution apart from it.
+      await vi.waitFor(() => {
+        expect(queryClient.getQueryData(queryKey)).toEqual([]);
+      });
+      expect(get(result.data)).toEqual([]);
     });
 
     it('sets .status to "error" and .error when the operator throws', async () => {
