@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured, matching the other list hooks and its own `EventPacket[]` return type.
   `UniqueEventList` was unaffected, but callers using the hook directly could hit a
   `TypeError` on the `undefined` the type said could not occur.
+- Cancelling a request now closes its REQ. A component unmounting before the relays
+  reach EOSE previously left the subscription — and the REQ on every relay in the
+  pool — open for the lifetime of the page.
 
 ## [0.6.0] - 2026-07-31
 

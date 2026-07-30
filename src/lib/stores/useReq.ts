@@ -46,11 +46,11 @@ export function useReq<A>({
   const obs = rxNostr.use(_req).pipe(operator);
   const query = createQuery<A, Error>({
     queryKey,
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       return new Promise<A>((resolve, reject) => {
         let fulfilled = false;
 
-        obs.subscribe({
+        const subscription = obs.subscribe({
           next: (v) => {
             if (fulfilled) {
               queryClient.setQueryData(queryKey, v);
@@ -86,6 +86,12 @@ export function useReq<A>({
             }
           }
         });
+
+        // Reading `signal` opts this query into cancellation: when its last
+        // observer goes away while the fetch is still in flight — a component
+        // unmounting before the relays reach EOSE, or an explicit
+        // `cancelQueries()` — the REQ is closed instead of being left open.
+        signal.addEventListener('abort', () => subscription.unsubscribe());
       });
     }
   });
