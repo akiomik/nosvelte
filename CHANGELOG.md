@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Svelte 5 support: the `svelte` peer range is now `^4.0.0 || ^5.0.0`. The
+  components are unchanged and run under Svelte 5 in legacy mode, so Svelte 4
+  consumers are unaffected.
+
+### Removed
+
+- **Breaking:** dropped Svelte 3 support; the `svelte` peer range no longer
+  includes `^3`.
+
+### Changed
+
+- Moved the build/test toolchain to the Svelte 5 line (svelte 5,
+  `@sveltejs/vite-plugin-svelte` 7, Vite 8, Vitest 4, prettier-plugin-svelte 4).
+  This is dev-only and does not change the published components; it also clears
+  the remaining build-chain advisories (npm audit 10 → 3).
+
 ## [0.5.0] - 2026-07-31
 
 ### Changed
