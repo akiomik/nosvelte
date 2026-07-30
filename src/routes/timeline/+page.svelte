@@ -17,14 +17,14 @@
   const pubkey = '4d39c23b3b03bf99494df5f3a149c7908ae1bc7416807fdd6b34a31886eaae25';
   const req = createRxForwardReq();
 
-  const targetEventIdOf = (reaction: Nostr.Event) => {
+  const targetEventIdOf = (reaction: Nostr.Event): string | undefined => {
     // Extract the last 'e' tag in .tags (NIP-25)
-    return reaction.tags.filter(([tag]) => tag === 'e').slice(-1)[0][1];
+    return reaction.tags.filter(([tag]) => tag === 'e').slice(-1)[0]?.[1];
   };
 
-  const pubkeysIn = (contacts: Nostr.Event) => {
-    return contacts.tags.reduce((acc, [tag, value]) => {
-      if (tag === 'p') {
+  const pubkeysIn = (contacts: Nostr.Event): string[] => {
+    return contacts.tags.reduce<string[]>((acc, [tag, value]) => {
+      if (tag === 'p' && value !== undefined) {
         return [...acc, value];
       } else {
         return acc;
@@ -71,6 +71,7 @@
 
       <div style="display: flex; flex-direction: column; gap: 1em;">
         {#each sorted(events) as event (event.id)}
+          {@const targetEventId = targetEventIdOf(event)}
           <!-- TODO: Re-use request to avoid rate limitting -->
           <Metadata
             queryKey={['timeline', 'metadata', event.pubkey]}
@@ -86,62 +87,58 @@
                 </p>
               {:else if event.kind === 6}
                 <p>reposted by {JSON.parse(metadata.content).name ?? 'nostrich'}</p>
-                <Text
-                  queryKey={['timeline', targetEventIdOf(event)]}
-                  id={targetEventIdOf(event)}
-                  let:text
-                >
-                  <div slot="nodata">
-                    <p>Failed to get note ({targetEventIdOf(event)})</p>
-                  </div>
-
-                  <Metadata
-                    queryKey={['timeline', 'metadata', text.pubkey]}
-                    pubkey={text.pubkey}
-                    let:metadata={repostedMetadata}
-                  >
+                {#if targetEventId}
+                  <Text queryKey={['timeline', targetEventId]} id={targetEventId} let:text>
                     <div slot="nodata">
-                      <p>Failed to get profile (text.pubkey)</p>
+                      <p>Failed to get note ({targetEventId})</p>
                     </div>
 
-                    <p>
-                      {JSON.parse(repostedMetadata.content).name ?? 'nostrich'}
-                      :
-                      {text.content}
-                    </p>
-                  </Metadata>
-                </Text>
+                    <Metadata
+                      queryKey={['timeline', 'metadata', text.pubkey]}
+                      pubkey={text.pubkey}
+                      let:metadata={repostedMetadata}
+                    >
+                      <div slot="nodata">
+                        <p>Failed to get profile (text.pubkey)</p>
+                      </div>
+
+                      <p>
+                        {JSON.parse(repostedMetadata.content).name ?? 'nostrich'}
+                        :
+                        {text.content}
+                      </p>
+                    </Metadata>
+                  </Text>
+                {/if}
               {:else if event.kind === 7}
                 <p>
                   {event.content === '+' ? '👍' : event.content}
                   by
                   {JSON.parse(metadata.content).name ?? 'nostrich'}
                 </p>
-                <Text
-                  queryKey={['timeline', targetEventIdOf(event)]}
-                  id={targetEventIdOf(event)}
-                  let:text
-                >
-                  <div slot="nodata">
-                    <p>Failed to get note ({targetEventIdOf(event)})</p>
-                  </div>
-
-                  <Metadata
-                    queryKey={['timeline', 'metadata', text.pubkey]}
-                    pubkey={text.pubkey}
-                    let:metadata={reactedMetadata}
-                  >
+                {#if targetEventId}
+                  <Text queryKey={['timeline', targetEventId]} id={targetEventId} let:text>
                     <div slot="nodata">
-                      <p>Failed to get profile (text.pubkey)</p>
+                      <p>Failed to get note ({targetEventId})</p>
                     </div>
 
-                    <p>
-                      {JSON.parse(reactedMetadata.content).name ?? 'nostrich'}
-                      :
-                      {text.content}
-                    </p>
-                  </Metadata>
-                </Text>
+                    <Metadata
+                      queryKey={['timeline', 'metadata', text.pubkey]}
+                      pubkey={text.pubkey}
+                      let:metadata={reactedMetadata}
+                    >
+                      <div slot="nodata">
+                        <p>Failed to get profile (text.pubkey)</p>
+                      </div>
+
+                      <p>
+                        {JSON.parse(reactedMetadata.content).name ?? 'nostrich'}
+                        :
+                        {text.content}
+                      </p>
+                    </Metadata>
+                  </Text>
+                {/if}
               {/if}
             </section>
           </Metadata>

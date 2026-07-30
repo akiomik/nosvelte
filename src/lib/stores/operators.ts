@@ -30,7 +30,8 @@ export function filterNaddr(
   identifier: string
 ): OperatorFunction<EventPacket, EventPacket> {
   return filter(
-    ({ event }) => event.kind === kind && event.pubkey === pubkey && event.tags[0][1] === identifier
+    ({ event }) =>
+      event.kind === kind && event.pubkey === pubkey && event.tags[0]?.[1] === identifier
   );
 }
 
@@ -39,7 +40,7 @@ export function latestEachPubkey(): OperatorFunction<EventPacket, EventPacket> {
 }
 
 export function latestEachNaddr(): OperatorFunction<EventPacket, EventPacket> {
-  return latestEach(({ event }) => `${event.kind}:${event.pubkey}:${event.tags[0][1]}`);
+  return latestEach(({ event }) => `${event.kind}:${event.pubkey}:${event.tags[0]?.[1]}`);
 }
 
 export function scanArray<A>(): OperatorFunction<A, A[]> {
@@ -68,6 +69,7 @@ export function collectGroupBy<A, K>(f: (a: A) => K): OperatorFunction<A, Map<K,
 export function scanLatestEach<A, K>(f: (a: A) => K): OperatorFunction<A, A[]> {
   return pipe(
     collectGroupBy(f),
-    map((dict) => Array.from(dict.entries()).map(([, value]) => value.slice(-1)[0]))
+    // dict values are never empty: collectGroupBy always seeds a group with its first element
+    map((dict) => Array.from(dict.entries()).map(([, value]) => value.slice(-1)[0] as A))
   );
 }

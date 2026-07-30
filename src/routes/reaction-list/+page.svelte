@@ -27,9 +27,9 @@
   ];
   const req = createRxForwardReq();
 
-  const targetEventIdOf = (reaction: Nostr.Event) => {
+  const targetEventIdOf = (reaction: Nostr.Event): string | undefined => {
     // Extract the last 'e' tag in .tags (NIP-25)
-    return reaction.tags.filter(([tag]) => tag === 'e').slice(-1)[0][1];
+    return reaction.tags.filter(([tag]) => tag === 'e').slice(-1)[0]?.[1];
   };
 
   const sorted = (events: Nostr.Event[]) => {
@@ -60,6 +60,7 @@
 
     <div style="display: flex; flex-direction: column; gap: 1em;">
       {#each sorted(reactions) as reaction (reaction.id)}
+        {@const targetEventId = targetEventIdOf(reaction)}
         <Metadata
           queryKey={['reaction-list', 'metadata', reaction.pubkey]}
           pubkey={reaction.pubkey}
@@ -72,53 +73,51 @@
               {JSON.parse(metadata.content).name ?? 'nostrich'}
             </p>
 
-            <Text
-              queryKey={['reaction-list', targetEventIdOf(reaction)]}
-              id={targetEventIdOf(reaction)}
-              let:text
-            >
-              <div slot="loading">
-                <p>Loading note... ({targetEventIdOf(reaction)})</p>
-              </div>
-
-              <div slot="error">
-                <p>Failed to get note ({targetEventIdOf(reaction)})</p>
-              </div>
-
-              <div slot="nodata">
-                <p>Note not found ({targetEventIdOf(reaction)})</p>
-              </div>
-
-              <Metadata
-                queryKey={['reaction-list', 'metadata', text.pubkey]}
-                pubkey={text.pubkey}
-                let:metadata={reactedMetadata}
-              >
+            {#if targetEventId}
+              <Text queryKey={['reaction-list', targetEventId]} id={targetEventId} let:text>
                 <div slot="loading">
-                  <p>Loading profile... ({text.pubkey})</p>
+                  <p>Loading note... ({targetEventId})</p>
                 </div>
 
                 <div slot="error">
-                  <p>Failed to get profile ({text.pubkey})</p>
+                  <p>Failed to get note ({targetEventId})</p>
                 </div>
 
                 <div slot="nodata">
-                  <p>Profile not found ({text.pubkey})</p>
+                  <p>Note not found ({targetEventId})</p>
                 </div>
 
-                <p>
-                  {JSON.parse(reactedMetadata.content).name ?? 'nostrich'}
-                  :
-                  {text.content}
-                </p>
+                <Metadata
+                  queryKey={['reaction-list', 'metadata', text.pubkey]}
+                  pubkey={text.pubkey}
+                  let:metadata={reactedMetadata}
+                >
+                  <div slot="loading">
+                    <p>Loading profile... ({text.pubkey})</p>
+                  </div>
 
-                <p>
-                  elapsed:
-                  {reaction.created_at - text.created_at}
-                  sec.
-                </p>
-              </Metadata>
-            </Text>
+                  <div slot="error">
+                    <p>Failed to get profile ({text.pubkey})</p>
+                  </div>
+
+                  <div slot="nodata">
+                    <p>Profile not found ({text.pubkey})</p>
+                  </div>
+
+                  <p>
+                    {JSON.parse(reactedMetadata.content).name ?? 'nostrich'}
+                    :
+                    {text.content}
+                  </p>
+
+                  <p>
+                    elapsed:
+                    {reaction.created_at - text.created_at}
+                    sec.
+                  </p>
+                </Metadata>
+              </Text>
+            {/if}
           </section>
         </Metadata>
       {/each}
