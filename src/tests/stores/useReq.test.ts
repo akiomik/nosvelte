@@ -174,6 +174,28 @@ describe('useReq', () => {
       expect(get(result.data)).toEqual([]);
     });
 
+    it('closes the REQ when the last subscriber leaves before the fetch settles', async () => {
+      const { rxNostr, server } = createTestRelay('ws://localhost:9007');
+      const result = useReq({
+        rxNostr,
+        queryKey: ['useReq', 'cancel'],
+        filters: [{ kinds: [1] }],
+        operator: pipe(),
+        initData: undefined
+      });
+      const unsubscribe = activate(result.status);
+
+      const subId = await nextReqSubId(server);
+
+      // Dropping the only subscriber while the query is still fetching stands
+      // in for a component unmounting before the relay reaches EOSE.
+      unsubscribe();
+
+      await vi.waitFor(() => {
+        expect(server.messages.at(-1)).toEqual(['CLOSE', subId]);
+      });
+    });
+
     it('sets .status to "error" and .error when the operator throws', async () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const { rxNostr, server } = createTestRelay('ws://localhost:9003');
