@@ -20,7 +20,7 @@ export function useConnections({
 
   const init = relays.map((relay) => {
     const from = typeof relay === 'string' ? relay : relay.url;
-    const state = rxNostr.hasRelay(from) ? rxNostr.getRelayState(from) : 'not-started';
+    const state = rxNostr.getRelayState(from) ?? 'initialized';
 
     return { from, state };
   });

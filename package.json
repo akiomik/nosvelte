@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@tanstack/svelte-query": "^4.29.11",
-    "rx-nostr": "^1.5.0"
+    "rx-nostr": "^2.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
@@ -49,7 +49,7 @@
     "eslint-plugin-simple-import-sort": "^14.0.0",
     "eslint-plugin-svelte": "^3.0.0",
     "globals": "^17.0.0",
-    "nostr-typedef": "^0.4.0",
+    "nostr-typedef": "^0.8.0",
     "prettier": "^3.0.0",
     "prettier-plugin-svelte": "^3.0.0",
     "publint": "^0.3.22",
