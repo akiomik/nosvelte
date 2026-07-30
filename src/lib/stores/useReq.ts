@@ -44,8 +44,8 @@ export function useReq<A>({
   const error = writable<Error>();
 
   const obs = rxNostr.use(_req).pipe(operator);
-  const query = createQuery(queryKey, () => {
-    return new Promise((resolve, reject) => {
+  const query = createQuery<A, Error>(queryKey, () => {
+    return new Promise<A>((resolve, reject) => {
       let fullfilled = false;
 
       obs.subscribe({
@@ -73,7 +73,7 @@ export function useReq<A>({
   });
 
   return {
-    data: derived(query, ($query) => $query.data, initData),
+    data: derived(query, ($query) => $query.data as A, initData),
     status: derived([query, status], ([$query, $status]) => {
       if ($query.isSuccess) {
         return 'success';

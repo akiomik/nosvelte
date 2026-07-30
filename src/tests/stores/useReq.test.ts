@@ -22,7 +22,7 @@ describe('useReq', () => {
   const initData = undefined;
 
   beforeEach(() => {
-    useQueryClient.mockImplementation(() => new QueryClient());
+    vi.mocked(useQueryClient).mockImplementation(() => new QueryClient());
   });
 
   afterEach(() => {
