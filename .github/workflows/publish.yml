@@ -1,0 +1,29 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # required for npm OIDC trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26.x'
+          registry-url: 'https://registry.npmjs.org'
+      # Trusted publishing (OIDC) requires npm >= 11.5.1
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run check
+      # No NODE_AUTH_TOKEN: authentication and provenance come from OIDC
+      - run: npm publish
