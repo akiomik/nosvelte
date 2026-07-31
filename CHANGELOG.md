@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `useConnections()` was the one with no bound — it lives for the whole page and
   takes a packet for every relay connection-state change — while
   `useMetadataList()` and `useUserArticleList()` paid it per request.
+- Passing a `req` to a hook or component now actually issues the request. The
+  filters were emitted before anything had subscribed, so they were dropped and no
+  REQ ever reached the relays — every hook given a `req` stayed `'loading'` forever.
+  They are emitted once the subscription exists instead.
 
 ## [0.6.1] - 2026-07-31
 

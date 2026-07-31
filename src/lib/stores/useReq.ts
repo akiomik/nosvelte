@@ -32,13 +32,9 @@ export function useReq<A>({
     };
   }
 
-  let _req: RxReq;
-  if (req) {
-    req.emit(filters);
-    _req = req;
-  } else {
-    _req = createRxOneshotReq({ filters });
-  }
+  // A caller-supplied req is emitted to further down, once something is
+  // listening. A oneshot req carries its filters from the start.
+  const _req: RxReq = req ?? createRxOneshotReq({ filters });
 
   const status = writable<ReqStatus>('loading');
   const error = writable<Error | undefined>();
@@ -106,6 +102,11 @@ export function useReq<A>({
         // unmounting before the relays reach EOSE, or an explicit
         // `cancelQueries()` — the REQ is closed instead of being left open.
         signal.addEventListener('abort', () => subscription.unsubscribe());
+
+        // Only now is there anything listening. Emitting when `useReq()` was
+        // called happened before this subscription existed, so a forward req
+        // dropped the filters on the floor and no REQ was ever sent.
+        req?.emit(filters);
       });
     }
   });
