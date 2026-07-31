@@ -196,6 +196,33 @@ describe('useReq', () => {
       });
     });
 
+    it('keeps events that arrive in the same batch as the first one', async () => {
+      const { rxNostr, server } = createTestRelay('ws://localhost:9010');
+      const result = useReq<EventPacket[]>({
+        rxNostr,
+        queryKey: ['useReq', 'batch'],
+        filters: [{ kinds: [1] }],
+        operator: pipe(scanArray()),
+        initData: []
+      });
+      activate(result.status);
+      activate(result.data);
+
+      // Delivered without yielding, the way a relay flushing a backlog can
+      // reach the client. The second and third would land in the cache before
+      // the query settled and be overwritten by the value it resolved with.
+      const subId = await nextReqSubId(server);
+      const events = [fakeEvent(), fakeEvent(), fakeEvent()];
+      for (const event of events) {
+        respondWithEvent(server, subId, event);
+      }
+      respondWithEose(server, subId);
+
+      const data = await waitFor(result.data, (v) => v.length === events.length);
+      expect(data.map((p) => p.event)).toEqual(events);
+      expect(await waitFor(result.status, (s) => s === 'success')).toBe('success');
+    });
+
     it('sets .status to "error" and .error when the operator throws', async () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const { rxNostr, server } = createTestRelay('ws://localhost:9003');

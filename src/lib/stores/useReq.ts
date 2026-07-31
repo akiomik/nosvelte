@@ -55,14 +55,22 @@ export function useReq<A>({
 
       return new Promise<A>((resolve, reject) => {
         let fulfilled = false;
+        let latest: A;
 
         const subscription = obs.subscribe({
           next: (v) => {
+            latest = v;
+
             if (fulfilled) {
               queryClient.setQueryData(queryKey, v);
             } else {
-              resolve(v);
               fulfilled = true;
+              // Resolving synchronously would pin the query to this first
+              // value: anything the relays deliver in the same task reaches
+              // `setQueryData()` before the resolution is processed, and is
+              // then overwritten by it. Deferring to a microtask lets the whole
+              // batch land first.
+              queueMicrotask(() => resolve(latest));
             }
           },
           complete: () => {
