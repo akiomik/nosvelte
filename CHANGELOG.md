@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `scanLatestEach()` no longer grows without bound. It kept every value it had
+  ever seen and rebuilt the whole grouping on each emission, so cost per value
+  rose with the length of the stream: 4 000 values took over five seconds to
+  produce a three-entry list. It now keeps only the newest value per key.
+  `useConnections()` was the one with no bound — it lives for the whole page and
+  takes a packet for every relay connection-state change — while
+  `useMetadataList()` and `useUserArticleList()` paid it per request.
+
 ## [0.6.1] - 2026-07-31
 
 ### Fixed
