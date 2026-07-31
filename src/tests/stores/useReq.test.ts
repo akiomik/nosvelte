@@ -323,19 +323,12 @@ describe('useReq', () => {
       expect(consoleError).toHaveBeenCalled();
     });
 
-    it('reuses a given req to emit filters instead of creating a new oneshot req', () => {
-      const { rxNostr } = createTestRelay('ws://localhost:9004');
-      const req = createRxForwardReq();
-      const emitSpy = vi.spyOn(req, 'emit');
+    it('sends a REQ through a given req instead of creating a new oneshot req', async () => {
+      const { rxNostr, server } = createTestRelay('ws://localhost:9004');
+      const req = createRxForwardReq('given');
       const filters = [{ kinds: [1] }];
 
-      // `req`'s own packet stream is the source of truth for what useReq()
-      // asked it to emit, independent of whether/when the internal query
-      // machinery subscribes to it.
-      const packets: unknown[] = [];
-      const subscription = req.getReqPacketObservable().subscribe((packet) => packets.push(packet));
-
-      useReq({
+      const result = useReq({
         rxNostr,
         queryKey: ['useReq', 'req-reuse'],
         filters,
@@ -343,11 +336,46 @@ describe('useReq', () => {
         req,
         initData: undefined
       });
+      activate(result.status);
+      activate(result.data);
 
-      expect(emitSpy).toHaveBeenCalledWith(filters);
-      expect(packets).toEqual([{ filters }]);
+      // Asserted against the relay rather than the req's own packet stream:
+      // `emit()` reaching the req says nothing about a REQ being sent, which is
+      // how this went unnoticed while no request was going out at all.
+      const subId = await nextReqSubId(server);
+      expect(subId).toBe('given:0');
+      expect(server.messages.at(-1)).toEqual(['REQ', subId, filters[0]]);
 
-      subscription.unsubscribe();
+      const event = fakeEvent();
+      respondWithEvent(server, subId, event);
+      expect((await waitFor(result.data, (v) => v !== undefined))?.event).toEqual(event);
+    });
+
+    it('keeps a given forward req open past EOSE', async () => {
+      const { rxNostr, server } = createTestRelay('ws://localhost:9011');
+      const result = useReq({
+        rxNostr,
+        queryKey: ['useReq', 'req-forward'],
+        filters: [{ kinds: [1] }],
+        operator: pipe(),
+        req: createRxForwardReq('live'),
+        initData: undefined
+      });
+      activate(result.status);
+      activate(result.data);
+
+      const subId = await nextReqSubId(server);
+      respondWithEvent(server, subId, fakeEvent());
+      await waitFor(result.data, (v) => v !== undefined);
+
+      // The point of passing a forward req: EOSE ends the stored-events phase
+      // but not the subscription.
+      respondWithEose(server, subId);
+      const live = fakeEvent();
+      respondWithEvent(server, subId, live);
+
+      const data = await waitFor(result.data, (v) => v?.event.id === live.id);
+      expect(data?.event).toEqual(live);
     });
   });
 });
