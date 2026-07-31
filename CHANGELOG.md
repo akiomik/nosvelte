@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events. Reactions are regular events, so keying them by an event coordinate
   collapsed unrelated ones together — three reactions could come back as one. They
   are now deduplicated by event id only.
+- Events delivered in the same batch as the first one are no longer dropped. They
+  reached the query cache before the request had settled and were then overwritten
+  by the value it settled with, so a relay flushing a backlog in one go could leave
+  a list holding only its first event.
 
 ## [0.6.0] - 2026-07-31
 
