@@ -222,6 +222,80 @@ describe('useReq', () => {
       expect(consoleError).toHaveBeenCalled();
     });
 
+    it('clears .error when a retried request succeeds', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      setQueryClientContext(
+        new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } })
+      );
+
+      const { rxNostr, server } = createTestRelay('ws://localhost:9008');
+      let attempt = 0;
+      const result = useReq<EventPacket>({
+        rxNostr,
+        queryKey: ['useReq', 'recovered'],
+        filters: [{ kinds: [1] }],
+        operator: map((packet: EventPacket) => {
+          if (attempt === 1) {
+            throw new Error('boom');
+          }
+          return packet;
+        })
+      });
+      activate(result.status);
+      activate(result.data);
+      activate(result.error);
+
+      attempt = 1;
+      respondWithEvent(server, await nextReqSubId(server), fakeEvent());
+      await waitFor(result.error, (e) => e !== undefined);
+
+      attempt = 2;
+      const retrySubId = await nextReqSubId(server);
+      const event = fakeEvent();
+      respondWithEvent(server, retrySubId, event);
+      respondWithEose(server, retrySubId);
+
+      expect((await waitFor(result.data, (v) => v !== undefined))?.event).toEqual(event);
+      expect(await waitFor(result.status, (s) => s === 'success')).toBe('success');
+      // The failed attempt's error must not outlive it.
+      expect(get(result.error)).toBeUndefined();
+      expect(consoleError).toHaveBeenCalled();
+    });
+
+    it('reports "error" as .status when the stream fails after the query resolved', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { rxNostr, server } = createTestRelay('ws://localhost:9009');
+      let poisoned = false;
+      const result = useReq<EventPacket>({
+        rxNostr,
+        queryKey: ['useReq', 'late-error'],
+        filters: [{ kinds: [1] }],
+        operator: map((packet: EventPacket) => {
+          if (poisoned) {
+            throw new Error('late boom');
+          }
+          return packet;
+        })
+      });
+      activate(result.status);
+      activate(result.data);
+      activate(result.error);
+
+      const subId = await nextReqSubId(server);
+      respondWithEvent(server, subId, fakeEvent());
+      await waitFor(result.data, (v) => v !== undefined);
+
+      // The query has already resolved, so this failure can never reach it.
+      // `.status` has to follow the local store or it would claim success
+      // while `.error` is set.
+      poisoned = true;
+      respondWithEvent(server, subId, fakeEvent());
+
+      expect(await waitFor(result.status, (s) => s === 'error')).toBe('error');
+      expect(get(result.error)?.message).toBe('late boom');
+      expect(consoleError).toHaveBeenCalled();
+    });
+
     it('reuses a given req to emit filters instead of creating a new oneshot req', () => {
       const { rxNostr } = createTestRelay('ws://localhost:9004');
       const req = createRxForwardReq();

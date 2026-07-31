@@ -41,12 +41,18 @@ export function useReq<A>({
   }
 
   const status = writable<ReqStatus>('loading');
-  const error = writable<Error>();
+  const error = writable<Error | undefined>();
 
   const obs = rxNostr.use(_req).pipe(operator);
   const query = createQuery<A, Error>({
     queryKey,
     queryFn: ({ signal }) => {
+      // Every attempt starts from a clean slate. These stores outlive a single
+      // fetch, so without this a retry or refetch that succeeds still reports
+      // the previous attempt's failure.
+      status.set('loading');
+      error.set(undefined);
+
       return new Promise<A>((resolve, reject) => {
         let fulfilled = false;
 
@@ -104,7 +110,13 @@ export function useReq<A>({
     // before the first emission, and maps the `null` resolved above back to it.
     data: derived(query, ($query) => ($query.data ?? initData) as A, initData),
     status: derived([query, status], ([$query, $status]) => {
-      if ($query.isSuccess) {
+      // The local store wins when it holds an error: a stream that fails after
+      // the query already resolved can't move `$query` off 'success', and
+      // reporting success next to a set `.error` is a state consumers can't
+      // make sense of.
+      if ($status === 'error') {
+        return 'error';
+      } else if ($query.isSuccess) {
         return 'success';
       } else if ($query.isError) {
         return 'error';
@@ -116,7 +128,7 @@ export function useReq<A>({
       if ($query.isError) {
         return $query.error;
       } else {
-        return $error;
+        return $error as Error;
       }
     })
   };
