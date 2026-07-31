@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `error` no longer survives the request that produced it. A retry or refetch that
+  succeeded still reported the previous attempt's failure, and because every
+  component checks its `error` slot first, a recovered request kept rendering the
+  error slot instead of its data. `status` now also reports `'error'` when the
+  stream fails after the query has already resolved, which previously left
+  `status: 'success'` sitting next to a set `error`.
+
+### Fixed
+
 - A request whose filters match no event no longer hangs. Such a REQ reaches
   EOSE without the operator chain ever emitting, which left the underlying query
   pending forever: `status` reported `'success'` while `data` stayed `undefined`
