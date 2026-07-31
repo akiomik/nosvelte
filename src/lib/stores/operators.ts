@@ -83,9 +83,16 @@ export function collectGroupBy<A, K>(f: (a: A) => K): OperatorFunction<A, Map<K,
 
 export function scanLatestEach<A, K>(f: (a: A) => K): OperatorFunction<A, A[]> {
   return pipe(
-    collectGroupBy(f),
-    // dict values are never empty: collectGroupBy always seeds a group with its first element
-    map((dict) => Array.from(dict.entries()).map(([, value]) => value.slice(-1)[0] as A))
+    // Only the newest value per key is ever read, so only that is kept. Built
+    // on `collectGroupBy()` this used to retain the whole history and rebuild
+    // every group on each emission, which grew without bound on a long-lived
+    // stream. The accumulator is copied rather than mutated because `scan()`
+    // shares one seed across subscriptions, and `useReq()` resubscribes on
+    // every refetch.
+    scan((acc: Map<K, A>, a: A) => new Map(acc).set(f(a), a), new Map<K, A>()),
+    // A Map keeps insertion order, and re-setting an existing key does not move
+    // it, so entries stay in first-seen order.
+    map((dict) => Array.from(dict.values()))
   );
 }
 

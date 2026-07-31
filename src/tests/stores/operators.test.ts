@@ -238,4 +238,47 @@ describe('scanLatestEach', () => {
 
     expect(actual.at(-1)).toEqual(['p1-b', 'p2-a']);
   });
+
+  it('emits the running list after every value', async () => {
+    const actual = await lastValueFrom(
+      from(['p1-a', 'p2-a', 'p1-b']).pipe(
+        scanLatestEach((s) => s.slice(0, 2)),
+        toArray()
+      )
+    );
+
+    expect(actual).toEqual([['p1-a'], ['p1-a', 'p2-a'], ['p1-b', 'p2-a']]);
+  });
+
+  it('starts from an empty list on every subscription', async () => {
+    const operator = scanLatestEach((s: string) => s.slice(0, 2));
+
+    const first = await lastValueFrom(from(['p1-a']).pipe(operator, toArray()));
+    const second = await lastValueFrom(from(['p2-a']).pipe(operator, toArray()));
+
+    // `scan()` shares its seed across subscriptions, so a mutated accumulator
+    // would leak the first subscription's values into the second — which is
+    // what `useReq()` does on every refetch.
+    expect(first).toEqual([['p1-a']]);
+    expect(second).toEqual([['p2-a']]);
+  });
+
+  it('inspects each value once, not once per value already seen', async () => {
+    let keyCalls = 0;
+    const values = Array.from({ length: 100 }, (_, i) => `k${i % 3}-${i}`);
+
+    await lastValueFrom(
+      from(values).pipe(
+        scanLatestEach((s: string) => {
+          keyCalls += 1;
+          return s.slice(0, 2);
+        }),
+        toArray()
+      )
+    );
+
+    // Rebuilding the grouping from a retained history on each emission costs
+    // 5050 calls for these 100 values, and grows quadratically from there.
+    expect(keyCalls).toBe(values.length);
+  });
 });
