@@ -8,7 +8,7 @@ import type { EventPacket, RxNostr } from 'rx-nostr';
 import { filterByKind } from 'rx-nostr';
 import { pipe } from 'rxjs';
 
-import { filterPubkey, latestEachNaddr, scanArray } from './operators.js';
+import { filterPubkey, scanLatestEachNaddr } from './operators.js';
 import type { ReqResult, RxReqBase } from './types.js';
 import { useReq } from './useReq.js';
 
@@ -20,6 +20,6 @@ export function useUserArticleList(
   req?: RxReqBase | undefined
 ): ReqResult<EventPacket[]> {
   const filters = [{ kinds: [30023], authors: [pubkey], limit }];
-  const operator = pipe(filterByKind(30023), filterPubkey(pubkey), latestEachNaddr(), scanArray());
+  const operator = pipe(filterByKind(30023), filterPubkey(pubkey), scanLatestEachNaddr());
   return useReq({ rxNostr, queryKey, filters, operator, req, initData: [] });
 }
