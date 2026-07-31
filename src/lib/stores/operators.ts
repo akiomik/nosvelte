@@ -50,8 +50,12 @@ export function latestEachPubkey(): OperatorFunction<EventPacket, EventPacket> {
   return latestEach(({ event }) => event.pubkey);
 }
 
+function naddrOf(event: Nostr.Event): string {
+  return `${event.kind}:${event.pubkey}:${identifierOf(event)}`;
+}
+
 export function latestEachNaddr(): OperatorFunction<EventPacket, EventPacket> {
-  return latestEach(({ event }) => `${event.kind}:${event.pubkey}:${identifierOf(event)}`);
+  return latestEach(({ event }) => naddrOf(event));
 }
 
 export function scanArray<A>(): OperatorFunction<A, A[]> {
@@ -82,5 +86,31 @@ export function scanLatestEach<A, K>(f: (a: A) => K): OperatorFunction<A, A[]> {
     collectGroupBy(f),
     // dict values are never empty: collectGroupBy always seeds a group with its first element
     map((dict) => Array.from(dict.entries()).map(([, value]) => value.slice(-1)[0] as A))
+  );
+}
+
+/**
+ * Accumulate packets into a list holding the newest event per pubkey.
+ *
+ * `latestEachPubkey()` re-emits whenever a newer event for a pubkey arrives, so
+ * accumulating it with `scanArray()` would append the update next to the event
+ * it supersedes instead of replacing it.
+ */
+export function scanLatestEachPubkey(): OperatorFunction<EventPacket, EventPacket[]> {
+  return pipe(
+    latestEachPubkey(),
+    scanLatestEach(({ event }) => event.pubkey)
+  );
+}
+
+/**
+ * Accumulate packets into a list holding the newest event per addressable
+ * event coordinate. See {@link scanLatestEachPubkey} for why plain
+ * accumulation is not enough.
+ */
+export function scanLatestEachNaddr(): OperatorFunction<EventPacket, EventPacket[]> {
+  return pipe(
+    latestEachNaddr(),
+    scanLatestEach(({ event }) => naddrOf(event))
   );
 }

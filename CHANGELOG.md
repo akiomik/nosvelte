@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing at all for an article that led with any other tag (`title`, say), and
   `useUserArticleList()`/`useUserReactionList()` silently dropped events that happened
   to share a leading tag value.
+- `useMetadataList()` and `useUserArticleList()` now replace an entry when a newer
+  version of the same event arrives, instead of appending it next to the version it
+  supersedes. Both could return several entries for one pubkey or one article.
+- `useUserReactionList()` no longer groups reactions as if they were addressable
+  events. Reactions are regular events, so keying them by an event coordinate
+  collapsed unrelated ones together — three reactions could come back as one. They
+  are now deduplicated by event id only.
 
 ## [0.6.0] - 2026-07-31
 
