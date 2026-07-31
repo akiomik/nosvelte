@@ -86,6 +86,35 @@ describe('filterNaddr', () => {
 
     expect(actual).toEqual([matching]);
   });
+
+  it('finds the "d" tag wherever it sits in the tag list', async () => {
+    // NIP-01 doesn't require `d` to come first, and long-form clients routinely
+    // put `title` ahead of it.
+    const matching = fakeEventPacket({
+      kind: 30023,
+      pubkey: 'p1',
+      tags: [
+        ['title', 'Hello'],
+        ['d', 'article-1']
+      ]
+    });
+
+    const actual = await lastValueFrom(
+      from([matching]).pipe(filterNaddr(30023, 'p1', 'article-1'), toArray())
+    );
+
+    expect(actual).toEqual([matching]);
+  });
+
+  it('treats an event without a "d" tag as having an empty identifier', async () => {
+    const noDTag = fakeEventPacket({ kind: 30023, pubkey: 'p1', tags: [['title', 'Hello']] });
+
+    const actual = await lastValueFrom(
+      from([noDTag]).pipe(filterNaddr(30023, 'p1', ''), toArray())
+    );
+
+    expect(actual).toEqual([noDTag]);
+  });
 });
 
 describe('latestEachPubkey', () => {
@@ -139,6 +168,36 @@ describe('latestEachNaddr', () => {
     );
 
     expect(actual).toEqual([first, newer, otherIdentifier]);
+  });
+
+  it('keys off the "d" tag wherever it sits, so distinct articles stay distinct', async () => {
+    // Both articles lead with the same hashtag; only the `d` tag tells them
+    // apart. Relays answer newest-first, so the older one arrives second and
+    // would be dropped as stale if they shared a key.
+    const newer = fakeEventPacket({
+      id: 'e1',
+      kind: 30023,
+      pubkey: 'p1',
+      created_at: 2,
+      tags: [
+        ['t', 'nostr'],
+        ['d', 'article-1']
+      ]
+    });
+    const older = fakeEventPacket({
+      id: 'e2',
+      kind: 30023,
+      pubkey: 'p1',
+      created_at: 1,
+      tags: [
+        ['t', 'nostr'],
+        ['d', 'article-2']
+      ]
+    });
+
+    const actual = await lastValueFrom(from([newer, older]).pipe(latestEachNaddr(), toArray()));
+
+    expect(actual).toEqual([newer, older]);
   });
 });
 

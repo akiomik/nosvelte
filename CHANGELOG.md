@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error slot instead of its data. `status` now also reports `'error'` when the
   stream fails after the query has already resolved, which previously left
   `status: 'success'` sitting next to a set `error`.
+- Addressable events are now identified by their `d` tag wherever it appears in the
+  tag list, instead of assuming it is the first tag. `useArticle()`/`Article` returned
+  nothing at all for an article that led with any other tag (`title`, say), and
+  `useUserArticleList()`/`useUserReactionList()` silently dropped events that happened
+  to share a leading tag value.
 
 ## [0.6.0] - 2026-07-31
 
