@@ -34,7 +34,7 @@
     "svelte": "^4.0.0 || ^5.0.0"
   },
   "dependencies": {
-    "@tanstack/svelte-query": "^5.0.0",
+    "@tanstack/svelte-query": "^6.1.38",
     "rx-nostr": "^3.0.0",
     "rx-nostr-crypto": "^3.1.3"
   },
