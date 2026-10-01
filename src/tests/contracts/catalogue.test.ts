@@ -585,7 +585,13 @@ describe('the production contract bridge', () => {
       `${'describe'}.each([])('x', () => { ${armStatement} });`,
       `${'describe'}.each([...rows])('x', () => { ${armStatement} });`,
       `let rows = [1]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
-      `${'describe'}.each${'`'}a${'`'}('x', () => { ${armStatement} });`
+      `${'describe'}.each${'`'}a${'`'}('x', () => { ${armStatement} });`,
+      `${'describe'}.each([,])('x', () => { ${armStatement} });`,
+      // Only a chain written directly: no alias, parenthesis or rename.
+      `const group = ${'describe'}; group('x', () => { ${armStatement} });`,
+      `const group = ${'describe'}.each([]); group('x', () => { ${armStatement} });`,
+      `(${'describe'}.each([1]))('x', () => { ${armStatement} });`,
+      `import { ${'describe'} as ${'it'} } from 'vitest'; ${armStatement}`
     ])
       expect(
         disabledIn(statement).some((why) =>
@@ -598,7 +604,6 @@ describe('the production contract bridge', () => {
       `${'describe'}('x', () => { ${armStatement} });`,
       `${'suite'}('x', function () { ${'describe'}.each([1])('y %s', () => { ${armStatement} }); });`,
       `${'describe'}('x', () => ${armStatement.replace(/;$/, '')});`,
-      `const group = ${'describe'}; group('x', () => { ${armStatement} });`,
       `import { ${'describe'}, ${'it'} } from 'vitest'; ${'describe'}.each([1])('x %s', () => { ${armStatement} });`,
       `const rows = [{ a: 1 }]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
       `${'describe'}.each${'`'}a\n${'$'}{1}${'`'}('x', () => { ${armStatement} });`

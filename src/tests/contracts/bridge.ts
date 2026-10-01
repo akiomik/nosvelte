@@ -309,14 +309,17 @@ const bindingOf = (checker: ts.TypeChecker, name: ts.Identifier): Binding => {
 };
 
 /**
- * Whether a name is the runner's own: imported from `vitest`, or bound to
- * nothing in the file (the runner's globals). A local binding that shadows
+ * Whether a name is the runner's own: imported from `vitest` under its own
+ * name, or bound to nothing in the file (the runner's globals). A local binding that shadows
  * `it` or `describe` — `const it = test.skip` — is not, whatever it holds.
  */
 const runnerName = (checker: ts.TypeChecker, name: ts.Identifier): boolean => {
   const declaration = checker.getSymbolAtLocation(name)?.declarations?.[0];
   if (declaration === undefined) return true;
   if (!ts.isImportSpecifier(declaration)) return false;
+  // Under its own name: `import { describe as it }` is a suite called `it`.
+  const imported = declaration.propertyName ?? declaration.name;
+  if (imported.text !== name.text) return false;
   const from = declaration.parent.parent.parent.moduleSpecifier;
 
   return ts.isStringLiteral(from) && from.text === 'vitest';
@@ -332,7 +335,9 @@ const tableHasRow = (suite: ts.CallExpression, checker: ts.TypeChecker): boolean
   const rows = (table: ts.Node | undefined, depth: number): boolean => {
     if (table === undefined || depth > 8) return false;
     if (ts.isArrayLiteralExpression(table))
-      return table.elements.some((element) => !ts.isSpreadElement(element));
+      return table.elements.some(
+        (element) => !ts.isSpreadElement(element) && !ts.isOmittedExpression(element)
+      );
     if (ts.isTemplateExpression(table)) return table.templateSpans.length > 0;
     if (ts.isIdentifier(table)) {
       const bound = bindingOf(checker, table);
@@ -364,6 +369,22 @@ const tableHasRow = (suite: ts.CallExpression, checker: ts.TypeChecker): boolean
     } else if (ts.isPropertyAccessExpression(at) || ts.isElementAccessExpression(at))
       at = at.expression;
     else return true;
+  }
+};
+
+/**
+ * The root of a chain written **directly**: members, calls and tagged
+ * templates only, down to a name. A chain reached through a `const` alias, a
+ * parenthesis or a computed member has no direct root, and is not credited —
+ * the allow-list is narrowed to the spelling it can read whole rather than
+ * widened to follow each indirection.
+ */
+const directRoot = (expression: ts.Expression): ts.Identifier | undefined => {
+  let at: ts.Expression = expression;
+  for (;;) {
+    if (ts.isPropertyAccessExpression(at) || ts.isCallExpression(at)) at = at.expression;
+    else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
+    else return ts.isIdentifier(at) ? at : undefined;
   }
 };
 
@@ -591,7 +612,8 @@ export const inspect = (
     return found;
   };
   const credited = (arm: ts.CallExpression): boolean => {
-    if (resolve(arm.expression).root !== 'it') return false;
+    const armRoot = directRoot(arm.expression);
+    if (armRoot?.text !== 'it' || !runnerName(checker, armRoot)) return false;
     let node: ts.Node = arm;
     for (;;) {
       const parent = node.parent;
@@ -608,8 +630,9 @@ export const inspect = (
       const suite = holder.parent;
       if (!ts.isCallExpression(suite) || !suite.arguments.some((argument) => argument === holder))
         return false;
-      const { root } = resolve(suite.expression);
-      if (root !== 'describe' && root !== 'suite') return false;
+      const root = directRoot(suite.expression);
+      if (root === undefined || (root.text !== 'describe' && root.text !== 'suite')) return false;
+      if (!runnerName(checker, root)) return false;
       if (!tableHasRow(suite, checker)) return false;
       node = suite;
     }
