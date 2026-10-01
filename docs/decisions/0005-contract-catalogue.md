@@ -1103,7 +1103,7 @@ the unit is split, and the conditions below are **phase one**:
    and each carries one of the terminal forms the evidence grammar below defines — a production
    test's id, an absence or a discharge naming its decision and what would reopen it, or a reason
    for owing no test at all. This clause used to say "a test, or a discharge", which is a binary
-   split the grammar does not have: six rows are terminal today by an **absence**, which is neither.
+   split the grammar does not have: seven rows are terminal today by an **absence**, which is neither.
    Not "N tests were written": a count is satisfied by writing the easy ones. A row's spike
    arrangement is not inherited either — what a port owes is in the Implementation column, and the
    arm that witnessed it here was written against a seam that will not exist.
