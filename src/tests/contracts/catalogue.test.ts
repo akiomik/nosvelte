@@ -513,7 +513,19 @@ describe('the production contract bridge', () => {
       `${'describe'}('x', { [key]: true }, () => {});`,
       `function make(options) { ${'describe'}('x', options, () => {}); }`,
       `let quiet = ${'describe'}.skip; quiet = ${'describe'}; quiet('x', () => { ${'it'}('CT1: y', () => {}); });`,
-      `forEachRelay(() => { ${'it'}('CT1: y', () => {}); });`
+      `forEachRelay(() => { ${'it'}('CT1: y', () => {}); });`,
+      // Refused rather than traced: an object or array behind a name can be
+      // changed after it was written, and a test context can be taken apart
+      // or handed on.
+      `const options = { skip: false }; options.skip = true; ${'describe'}('x', options, () => {});`,
+      `const options = { timeout: 5 }; ${'describe'}('x', options, () => {});`,
+      `${'it'}('CT: y', (ctx) => { const { skip: skipTest } = ctx; skipTest(); });`,
+      `${'it'}('CT: y', (ctx) => { helper(ctx); });`,
+      `${'it'}('CT: y', (ctx) => { const c = ctx; c.skip(); });`,
+      `${'it'}('CT: y', (ctx) => { ctx[member](); });`,
+      `${'it'}('CT: y', ({ skip: skipTest }) => { skip(); });`,
+      `${'it'}('CT: y', ({ task, ...rest }) => { rest.skip(); });`,
+      `${'it'}('CT: y', function () { arguments[0].skip(); });`
     ])
       expect(disabledIn(statement), `${statement} does not run`).not.toEqual([]);
     for (const statement of [
@@ -528,37 +540,24 @@ describe('the production contract bridge', () => {
       `${'it'}('CT: y', (ctx) => { expect(ctx.task).toBeDefined(); });`,
       `${'it'}('CT: y', (ctx) => { other.skip(); });`,
       `${'it'}('CT: y', ({ expect }) => { source.pipe(skip(1)); });`,
-      `${'it'}('CT: y', ({ skip: skipTest }) => { skip(); });`,
       `${'it'}('CT: y', () => { const skip = 1; });`,
       `${'it'}('CT: y', () => {}, 20_000);`,
-      `const options = { timeout: 5 }; ${'describe'}('x', options, () => {});`,
+      `const quiet = false; ${'describe'}('x', { skip: quiet }, () => {});`,
       `const plain = ${'describe'}; plain('x', () => {});`,
       `${'describe'}['each']([1])('x', () => {});`,
       `${'describe'}('x', { ...{ skip: true }, skip: false }, () => {});`,
-      [
-        'const options = { skip: false };',
-        `${'describe'}('x', options, () => {`,
-        '  const options = { skip: true };',
-        '});'
-      ].join(' '),
       `${'describe'}('x', { skip: 0, only: '' }, () => {});`,
       `${'describe'}('x', () => { beforeEach(() => {}); ${'it'}('CT1: y', () => {}); });`
     ])
       expect(disabledIn(statement), `${statement} runs`).toEqual([]);
     // Resolved rather than refused: a computed key that is a literal, a spread
-    // of an object and a `const` in the file are read, so each is reported as
-    // disabled by its options and not merely as options nobody could read.
+    // of an object written in place and a `const` bound to a primitive are
+    // read, so each is reported as disabled by its options and not merely as
+    // options nobody could read.
     for (const statement of [
       `${'describe'}('x', { ['skip']: true }, () => {});`,
       `${'describe'}('x', { ...{ only: true } }, () => {});`,
-      `const options = { skip: true }; ${'describe'}('x', options, () => {});`,
-      // The binding where the name is used, not the last one in the file.
-      [
-        'const options = { skip: true };',
-        `${'describe'}('x', options, () => {`,
-        '  const options = { skip: false };',
-        '});'
-      ].join(' '),
+      `const quiet = true; ${'describe'}('x', { skip: quiet }, () => {});`,
       // The final value of each key, after every spread.
       `${'describe'}('x', { skip: false, ...{ skip: true } }, () => {});`
     ])
@@ -590,6 +589,9 @@ describe('the production contract bridge', () => {
       // Only a chain written directly: no alias, parenthesis or rename.
       `const group = ${'describe'}; group('x', () => { ${armStatement} });`,
       `const group = ${'describe'}.each([]); group('x', () => { ${armStatement} });`,
+      // A table behind a name can be emptied after it was written.
+      `const rows = [1]; rows.length = 0; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
+      `const rows = [{ a: 1 }]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
       `(${'describe'}.each([1]))('x', () => { ${armStatement} });`,
       `import { ${'describe'} as ${'it'} } from 'vitest'; ${armStatement}`
     ])
@@ -605,7 +607,6 @@ describe('the production contract bridge', () => {
       `${'suite'}('x', function () { ${'describe'}.each([1])('y %s', () => { ${armStatement} }); });`,
       `${'describe'}('x', () => ${armStatement.replace(/;$/, '')});`,
       `import { ${'describe'}, ${'it'} } from 'vitest'; ${'describe'}.each([1])('x %s', () => { ${armStatement} });`,
-      `const rows = [{ a: 1 }]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
       `${'describe'}.each${'`'}a\n${'$'}{1}${'`'}('x', () => { ${armStatement} });`
     ])
       expect(disabledIn(statement), `${statement} is credited`).toEqual([]);

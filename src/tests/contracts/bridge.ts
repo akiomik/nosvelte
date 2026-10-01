@@ -328,10 +328,12 @@ const runnerName = (checker: ts.TypeChecker, name: ts.Identifier): boolean => {
 /**
  * Whether a table-driven suite has a row to run. `describe.each([])` declares
  * nothing, so the arms written inside it never run. A table counts only when
- * it can be seen to hold a row: an array literal with an element that is not
- * a spread, a `const` bound to one, or a tagged template with a value in it.
+ * it can be seen to hold a row where it is written: an array literal with an
+ * element that is neither a spread nor a hole, or a tagged template with a
+ * value in it. A name is not followed: `const` freezes the binding, not the
+ * array, so `rows.length = 0` empties what the initializer showed.
  */
-const tableHasRow = (suite: ts.CallExpression, checker: ts.TypeChecker): boolean => {
+const tableHasRow = (suite: ts.CallExpression): boolean => {
   const rows = (table: ts.Node | undefined, depth: number): boolean => {
     if (table === undefined || depth > 8) return false;
     if (ts.isArrayLiteralExpression(table))
@@ -339,11 +341,6 @@ const tableHasRow = (suite: ts.CallExpression, checker: ts.TypeChecker): boolean
         (element) => !ts.isSpreadElement(element) && !ts.isOmittedExpression(element)
       );
     if (ts.isTemplateExpression(table)) return table.templateSpans.length > 0;
-    if (ts.isIdentifier(table)) {
-      const bound = bindingOf(checker, table);
-
-      return bound !== undefined && bound !== 'unknown' && rows(bound, depth + 1);
-    }
 
     return false;
   };
@@ -438,9 +435,18 @@ const optionsOf = (
     if (ts.isStringLiteralLike(value)) return value.text === '' ? 'runs' : 'off';
     if (ts.isIdentifier(value)) {
       if (value.text === 'undefined') return 'runs';
+      // Only a `const` bound to a primitive, which nothing can change.
       const bound = bindingOf(checker, value);
+      const primitive =
+        bound !== undefined &&
+        bound !== 'unknown' &&
+        (bound.kind === ts.SyntaxKind.TrueKeyword ||
+          bound.kind === ts.SyntaxKind.FalseKeyword ||
+          bound.kind === ts.SyntaxKind.NullKeyword ||
+          ts.isNumericLiteral(bound) ||
+          ts.isStringLiteralLike(bound));
 
-      return bound === undefined || bound === 'unknown' ? 'unknown' : settingOf(bound, depth + 1);
+      return primitive ? settingOf(bound, depth + 1) : 'unknown';
     }
 
     return 'unknown';
@@ -452,9 +458,9 @@ const optionsOf = (
     if (ts.isNumericLiteral(value) || ts.isStringLiteralLike(value)) return;
     if (ts.isIdentifier(value)) {
       if (value.text === 'undefined') return;
-      const bound = bindingOf(checker, value);
-
-      return bound === undefined || bound === 'unknown' ? unknownAll() : fold(bound, depth + 1);
+      // An object behind a name can be changed after it was written, so only
+      // options written in place are read.
+      return unknownAll();
     }
     if (!ts.isObjectLiteralExpression(value)) return unknownAll();
     for (const property of value.properties) {
@@ -489,50 +495,49 @@ const optionsOf = (
 };
 
 /**
- * Whether an arm's callback skips the test through its context: a call to
- * `<param>.skip(…)`, or to whatever local name the parameter's `skip` was
- * destructured into — in an arrow function or a `function` alike.
+ * How an arm's callback uses its test context: `skips` when it calls `skip`
+ * through it, `escapes` when it uses the context any way this check does not
+ * follow, `undefined` when it only reads members other than `skip` — which is
+ * the only use credited. Taking `skip` out of the context, passing the context
+ * on, aliasing it, indexing it, a rest element in its destructuring, and
+ * `arguments` in a `function` are all refused rather than traced.
  */
-const skipsThroughContext = (call: ts.CallExpression): boolean => {
+const contextUse = (call: ts.CallExpression): 'skips' | 'escapes' | undefined => {
   const callback = [...call.arguments]
     .reverse()
     .find(
       (argument): argument is ts.ArrowFunction | ts.FunctionExpression =>
         ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)
     );
-  const parameter = callback?.parameters[0]?.name;
-  if (callback === undefined || parameter === undefined) return false;
-  const context = ts.isIdentifier(parameter) ? parameter.text : undefined;
-  const aliases = new Set<string>();
-  if (ts.isObjectBindingPattern(parameter))
-    for (const element of parameter.elements)
-      if (keyOf(element.propertyName ?? element.name) === 'skip' && ts.isIdentifier(element.name))
-        aliases.add(element.name.text);
-  let found = false;
+  if (callback === undefined) return undefined;
+  let verdict: 'skips' | 'escapes' | undefined;
+  const mark = (found: 'skips' | 'escapes'): void => {
+    if (verdict !== 'skips') verdict = found;
+  };
+  const parameter = callback.parameters[0]?.name;
+  if (parameter !== undefined && !ts.isIdentifier(parameter)) {
+    if (!ts.isObjectBindingPattern(parameter)) return 'escapes';
+    for (const element of parameter.elements) {
+      if (element.dotDotDotToken !== undefined) mark('escapes');
+      if (keyOf(element.propertyName ?? element.name) === 'skip') mark('skips');
+    }
+  }
+  const context =
+    parameter !== undefined && ts.isIdentifier(parameter) ? parameter.text : undefined;
   const visit = (node: ts.Node): void => {
-    if (found) return;
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      if (ts.isIdentifier(callee) && aliases.has(callee.text)) found = true;
-      const member = ts.isPropertyAccessExpression(callee)
-        ? callee.name.text
-        : ts.isElementAccessExpression(callee)
-          ? literalOf(callee.argumentExpression)
-          : undefined;
-      if (
-        context !== undefined &&
-        member === 'skip' &&
-        (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
-        ts.isIdentifier(callee.expression) &&
-        callee.expression.text === context
-      )
-        found = true;
+    if (ts.isIdentifier(node)) {
+      if (node.text === 'arguments' && ts.isFunctionExpression(callback)) mark('escapes');
+      if (context !== undefined && node.text === context && node !== parameter) {
+        const parent = node.parent;
+        if (!ts.isPropertyAccessExpression(parent) || parent.expression !== node) mark('escapes');
+        else if (parent.name.text === 'skip') mark('skips');
+      }
     }
     ts.forEachChild(node, visit);
   };
   visit(callback.body);
 
-  return found;
+  return verdict;
 };
 
 /**
@@ -633,7 +638,7 @@ export const inspect = (
       const root = directRoot(suite.expression);
       if (root === undefined || (root.text !== 'describe' && root.text !== 'suite')) return false;
       if (!runnerName(checker, root)) return false;
-      if (!tableHasRow(suite, checker)) return false;
+      if (!tableHasRow(suite)) return false;
       node = suite;
     }
   };
@@ -661,8 +666,10 @@ export const inspect = (
         if (options === 'unreadable') disabled.push(`${at} (options this bridge cannot read)`);
         if (ARMS.has(root) && names.some((name) => name === 'each' || name === 'for'))
           disabled.push(`${at} (a table-driven arm; this bridge records one id per arm)`);
-        if (ARMS.has(root) && skipsThroughContext(node))
-          disabled.push(`${at} (skipped from inside its body)`);
+        const context = ARMS.has(root) ? contextUse(node) : undefined;
+        if (context === 'skips') disabled.push(`${at} (skipped from inside its body)`);
+        if (context === 'escapes')
+          disabled.push(`${at} (its test context is used where this bridge cannot follow it)`);
         // Only a title that means to be an id — one with a digit in it — is
         // held to the id shape; `it('rejects: an empty filter', …)` is prose.
         const title = node.arguments[0];

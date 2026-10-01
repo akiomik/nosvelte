@@ -1200,16 +1200,19 @@ So a row carries two fields of its own, in the roster below, and neither is infe
   directly, with no alias, parenthesis or computed member, with no `return` or `throw` in any block
   on that path. On that path the check reads what decides whether the arm runs in this runner: every
   member of each chain, each call's options folded to their final values, and a `skip` the arm calls
-  through its own test context. Inside a suite's options a name is followed only to a `const` it is
-  bound to where it is used. **Everything outside that shape is refused, not modelled** — an arm
-  under an `if`, in a loop, a `try`, a helper or a function declaration, a suite reached through a
-  `let`, options from a call or a parameter — because whether it runs is decided by something the
-  check does not read. Two consequences are deliberate. A shape the check refuses although the
-  runner would run it is not a defect: the landing is rewritten into the shape. A shape inside the
-  allow-list that the check credits although the runner would not run it **is** a defect, and the
-  repair either reads it or narrows the allow-list. What no static read can see — an environment
-  variable, a command-line filter, the runner's own include and exclude — is outside rule 6, and a
-  reviewer reading a landing reads it under the configuration CI runs.
+  through its own test context. Options and tables are read only where they are written — `const`
+  freezes a binding, not the object behind it — and a name inside them is followed only to a `const`
+  bound to a primitive. The test context is credited only when it is read as a member other than
+  `skip`; taking it apart, handing it on or aliasing it is refused. **Everything outside that shape
+  is refused, not modelled** — an arm under an `if`, in a loop, a `try`, a helper or a function
+  declaration, a suite reached through a `let`, options or a table from a name, a call or a
+  parameter — because whether it runs is decided by something the check does not read. Two
+  consequences are deliberate. A shape the check refuses although the runner would run it is not a
+  defect: the landing is rewritten into the shape. A shape inside the allow-list that the check
+  credits although the runner would not run it **is** a defect, and the repair either reads it or
+  narrows the allow-list. What no static read can see — an environment variable, a command-line
+  filter, the runner's own include and exclude — is outside rule 6, and a reviewer reading a landing
+  reads it under the configuration CI runs.
 
   **What these seven cannot hold, said here rather than found in phase 2.** They are rules about
   _edges_: that a cell names a test, that the test names the row back, that the test exists, runs,
