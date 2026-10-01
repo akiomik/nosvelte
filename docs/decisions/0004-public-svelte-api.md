@@ -182,11 +182,10 @@ tab whose timers are throttled. So there is no second clock, and two things end 
 attempt reaching an outcome, or the attempt ceasing to exist — the consumer torn down, the entry
 removed, the attempt replaced by another fetch of the same request, the trigger that opened no
 request. Those abort, and the call resolves rather than rejects (ruling 5); so does a provider
-disposed under the call, with its own reason, and only a call made after the provider is gone
-rejects. An attempt that failed is still an outcome rather than a rejection. The forward leg is
-re-opened in a new generation either way, and is not part of what the Promise waits for — forward
-liveness is the activity axis and the diagnostics, which report continuously and do not need a
-Promise to say so.
+disposed under the call, with its own reason, while a call made after the provider is gone rejects.
+An attempt that failed is still an outcome rather than a rejection. The forward leg is re-opened in
+a new generation either way, and is not part of what the Promise waits for — forward liveness is the
+activity axis and the diagnostics, which report continuously and do not need a Promise to say so.
 
 **Removing the ceiling did not put a guarantee of termination in its place, and this record wrote
 one down as though it had.** The sentence was "a running attempt always reaches an end because the
@@ -1432,11 +1431,11 @@ survives.** A request built with neither an explicit verifier nor a provider is 
 request fails** — `status: 'error'` with an Error naming the two ways out, use it inside a provider,
 which supplies one, or pass `verifyEvent`. **This said "the hook throws" and that is the one thing
 it must not do**: an exception on the way through a component is the shape this redesign is
-answering, and the refusal is carried as a rejected query function for exactly that reason. No
-construction throws by decision any more: `C16`'s first render was the one place, until ruling 13
-moved a refused first relay list onto the diagnostics hook as well. Nothing is asked of the relay
-first, which matters, because refusing after the REQ has gone means the events are already on their
-way to a consumer that trusts whatever arrives. `AE11` is the witness, and it fails when the
+answering, and the refusal is carried as a rejected query function for exactly that reason. A
+refused relay list no longer throws at construction: `C16`'s first render was where it did, until
+ruling 13 moved that refusal onto the diagnostics hook as well. Nothing is asked of the relay first,
+which matters, because refusing after the REQ has gone means the events are already on their way to
+a consumer that trusts whatever arrives. `AE11` is the witness, and it fails when the
 accept-everything fallback is put back.
 
 The alternative was to keep that fallback as residue, and it was rejected: the round that found a
