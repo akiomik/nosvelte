@@ -2549,13 +2549,13 @@ cannot be settled here, and `non-goal`, for what is deliberately not done. Readi
 kind is how to see what this record is actually promising.
 
 **Every claim in this record about what a dependency does is a measurement at a version, and these
-are the versions**: rx-nostr 3.7.5, `rx-nostr-crypto` 3.1.3, `tanstack-svelte-query-v6` 6.1.38, and
-the `@tanstack/query-core` 5.101.4 that resolves underneath that one rather than the 5.90.2 at the
-top level — and the top-level copy is on the list because this record reads the two query libraries'
-context keys against each other, which is a claim about that copy and not only about the aliased
-one. `SEN10` asserts all five against the installed tree, so a bump fails a test rather than being
-inherited quietly. Some claims carry their version inline, where the figure beside it is doing work;
-the rest are dated by this one.
+are the versions**: rx-nostr 3.7.5 (3.7.6 on the production line — see `0003`), `rx-nostr-crypto`
+3.1.3, `tanstack-svelte-query-v6` 6.1.38, and the `@tanstack/query-core` 5.101.4 that resolves
+underneath that one rather than the 5.90.2 at the top level — and the top-level copy is on the list
+because this record reads the two query libraries' context keys against each other, which is a claim
+about that copy and not only about the aliased one. `SEN10` asserts all five against the installed
+tree, so a bump fails a test rather than being inherited quietly. Some claims carry their version
+inline, where the figure beside it is doing work; the rest are dated by this one.
 
 **Two of the five were added because this paragraph said they were missing.** `rx-nostr-crypto` and
 the top-level `@tanstack/svelte-query` were prose here and in nothing that runs, which made the p95

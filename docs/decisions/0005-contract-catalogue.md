@@ -1264,8 +1264,8 @@ that does not hold.
    identity, event ownership; then finite request, backlog, failure, refresh; then provider scope,
    transport lifetime, diagnostics, recovery, live request; then all eleven request components and
    the package declarations.
-5. **Terminate the rows a slice covers as that slice lands**, rather than leaving 335 TBD to be
-   filled at the end: a slice turns its public and architecture rows red first and implements the
+5. **Terminate the rows a slice covers as that slice lands**, rather than leaving the `TBD` rows to
+   be filled at the end: a slice turns its public and architecture rows red first and implements the
    internal seam that satisfies them in the same pass.
 
 | Route          | Rows    | What phase 2 owes on it                                                                                                                                            |
@@ -1278,7 +1278,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **342 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **0 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **335 are
+Of those, **24 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **311 are
 TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1299,13 +1299,13 @@ rotted ledger entries twice. `id`, `route`, then the evidence, one row per line.
 ```text
 A1-C1        architecture  TBD
 A2-C1        public        TBD
-A2-S1        sentinel      TBD
+A2-S1        sentinel      test:DS8
 A3-C1        public        TBD
 A4-C1        public        TBD
 A4-C2        no-test       no-test:the row records a decision, not a behaviour
 A4-C3        architecture  TBD
 A4b-C1       discharged    discharged:A15;see the row
-A4b-S1       sentinel      TBD
+A4b-S1       sentinel      test:DS28
 A5-C1        public        TBD
 A5-C2        public        TBD
 A5-C4        public        TBD
@@ -1331,12 +1331,12 @@ A5-C11       public        TBD
 A5-C12       public        TBD
 A5-C13       public        TBD
 A5-C14       public        TBD
-A5-S5        sentinel      TBD
-A5-S6        sentinel      TBD
+A5-S5        sentinel      test:DS12
+A5-S6        sentinel      test:DS13
 A6-C1        public        TBD
 A6-C2        architecture  TBD
 A6-C3        public        TBD
-A6-C4        sentinel      TBD
+A6-C4        sentinel      test:DS11
 A6-C5        public        TBD
 A6-C6        internal      TBD
 A6-C7        architecture  TBD
@@ -1381,7 +1381,7 @@ A13-C8       internal      TBD
 A13-C9       public        TBD
 A13-C10      public        TBD
 A13-C7       architecture  TBD
-A13-S1       sentinel      TBD
+A13-S1       sentinel      test:DS21
 A14-C1       internal      TBD
 A15-C1       public        TBD
 A-α-C1       public        TBD
@@ -1394,7 +1394,7 @@ A-γ-C5       architecture  TBD
 A-γ-C3       internal      TBD
 A-γ-C6       architecture  TBD
 A-γ-C4       internal      TBD
-A-γ-S1       sentinel      TBD
+A-γ-S1       sentinel      test:DS14
 A-ε-C1       public        TBD
 A-ε-C2       public        TBD
 A-ε-C3       public        TBD
@@ -1428,8 +1428,8 @@ B3-C5        internal      TBD
 B3-C6        internal      TBD
 B3-C7        internal      TBD
 B3-C8        internal      TBD
-B3-S1        sentinel      TBD
-B3-S2        sentinel      TBD
+B3-S1        sentinel      test:DS17
+B3-S2        sentinel      test:DS18
 B4-C1        public        TBD
 B4-C2        internal      TBD
 B5-C1        internal      TBD
@@ -1448,7 +1448,7 @@ B7a-C2       internal      TBD
 B7a-C3       public        TBD
 B7a-C4       public        TBD
 B7b-C1       internal      TBD
-B7b-S1       sentinel      TBD
+B7b-S1       sentinel      test:DS4
 B7b-C2       internal      TBD
 B7b-C3       internal      TBD
 B7b-C4       internal      TBD
@@ -1473,7 +1473,7 @@ B-α-C22      public        TBD
 B-α-C3       public        TBD
 B-α-C7       public        TBD
 B-α-C8       discharged    discharged:C6;see the row
-B-α-C9       sentinel      TBD
+B-α-C9       sentinel      test:DS25
 B-α-C10      internal      TBD
 B-α-C11      public        TBD
 B-α-C12      public        TBD
@@ -1530,9 +1530,9 @@ C8-C2        architecture  TBD
 C8-C3        architecture  TBD
 C8-C4        architecture  TBD
 C8-C5        architecture  TBD
-C-δ-S3       sentinel      TBD
-A5-S7        sentinel      TBD
-A-ε-S1       sentinel      TBD
+C-δ-S3       sentinel      test:DS20
+A5-S7        sentinel      test:DS23
+A-ε-S1       sentinel      test:DS24
 C9-C1        architecture  TBD
 C11-C1       public        TBD
 C11-C2       public        TBD
@@ -1549,9 +1549,9 @@ C11-C18      internal      absent:0002 A16 — the Given needs a caller-owned re
 C11-C9       public        TBD
 C11-C10      public        TBD
 C11-C11      public        TBD
-C11-S1       sentinel      TBD
-C11-S2       sentinel      TBD
-C11-S3       sentinel      TBD
+C11-S1       sentinel      test:DS15
+C11-S2       sentinel      test:DS16
+C11-S3       sentinel      test:DS22
 C11-C12      public        TBD
 C11-C13      internal      TBD
 C11-C14      public        TBD
@@ -1593,12 +1593,12 @@ A16-C8       architecture  TBD
 B8-C1        public        TBD
 B8-C2        public        TBD
 A5-C3        public        TBD
-A1-S1        sentinel      TBD
-A5-S1        sentinel      TBD
-A5-S2        sentinel      TBD
-A5-S3        sentinel      TBD
+A1-S1        sentinel      test:DS7
+A5-S1        sentinel      test:DS1
+A5-S2        sentinel      test:DS5
+A5-S3        sentinel      test:DS9
 A5-S4        public        TBD
-B4-S1        sentinel      TBD
+B4-S1        sentinel      test:DS3
 B4-C3        internal      TBD
 B4-C4        public        TBD
 B4-C5        internal      TBD
@@ -1633,8 +1633,8 @@ C16-C3       public        TBD
 C16-C4       public        TBD
 C16-C5       public        TBD
 C16-A1       architecture  TBD
-C-δ-S1       sentinel      TBD
-C-δ-S2       sentinel      TBD
+C-δ-S1       sentinel      test:DS6
+C-δ-S2       sentinel      test:DS19
 C-δ-C1       public        TBD
 C-δ-C2       public        TBD
 C-δ-C3       public        TBD
@@ -3690,9 +3690,10 @@ what is disposable.
 - no part of this asks for a job called `contract-ledger` to exist again.
 
 A `sentinel` row is a measurement of a dependency, which is worth nothing without the version it was
-taken against. Those are pinned by a test rather than by prose — rx-nostr 3.7.5,
-`tanstack-svelte-query-v6` 6.1.38, and the query-core 5.101.4 that resolves underneath it, which is
-_not_ the 5.90.2 at the top level. A bump fails that test and the measurements have to be re-taken.
+taken against. Those are pinned by a test rather than by prose — rx-nostr 3.7.5 on the spike and
+3.7.6 on the production line (`0003` says what moved), `tanstack-svelte-query-v6` 6.1.38, and the
+query-core 5.101.4 that resolves underneath it, which is _not_ the 5.90.2 at the top level. A bump
+fails that test and the measurements have to be re-taken.
 
 **`consulted` names rounds, and it had become a commit counter.** Every one of these five records
 carries `consulted: redesign review rounds 1-N` in its front matter, and for eleven commits running

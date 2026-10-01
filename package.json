@@ -61,6 +61,7 @@
     "publint": "^0.3.22",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
+    "tanstack-svelte-query-v6": "npm:@tanstack/svelte-query@^6.1.38",
     "tslib": "^2.4.1",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.0.0",
