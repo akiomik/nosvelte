@@ -1965,7 +1965,7 @@ the one the suite's stand-in makes:
 - `engine-only`, `static`, `none` — nothing beyond the code under test; declarations and the module
   graph; and not executable at all.
 
-**The five domains fall out as `engine` 169, `transport` 78, `svelte` 45, `rationale` 30 and
+**The five domains fall out as `engine` 169, `transport` 78, `svelte` 46, `rationale` 30 and
 `surface` 27** — restated here, and **read back out of this sentence** by `CAT31` and compared to
 the table below, because a figure nobody re-derives is a figure that rots and this record has had
 two of those. The line used to say they were "counted by `CAT31` … rather than restated here", which
