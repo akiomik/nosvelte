@@ -101,9 +101,10 @@ error channel; the spike-only pass-throughs are raw, because a throw there has n
 reported. **This paragraph said "the two seams" for three rounds after the arm said six**, which an
 adversarial pass measured: the record's three-way table and the check's had drifted apart, and the
 check is the one that runs. `WR19` is what fails when a new read disagrees: it takes the population
-from the published options type, classifies each of its 23 fields out of the file's own text, and
-asserts `seam: ['rxNostr', 'verifyEvent', 'client', 'live', 'clock', 'attempts']` — so the mutation
-this paragraph used to describe, an unguarded `getOpts().live` in `activity`, moves the field out of
+from the spike hook's options type (`UseStreamedReqOpts`, not a published one), classifies each of
+its 23 fields out of the file's own text, and asserts
+`seam: ['rxNostr', 'verifyEvent', 'client', 'live', 'clock', 'attempts']` — so the mutation this
+paragraph used to describe, an unguarded `getOpts().live` in `activity`, moves the field out of
 `seam` and kills it. What the guard _does_ with an unreadable `live` is **not** observable, and the
 claim stops there: such a descriptor is refused as well, so nothing is in flight and either default
 renders `idle`, measured with a surgical `catch { return true }` that passes every arm. The
@@ -702,13 +703,15 @@ rank table is keyed by the union itself, so adding a member without ranking it s
 a new cause cannot silently fall out of the order it was never given a place in. What the type does
 not enforce is that the ranks are **distinct**. Two members given the same number compile, and where
 they tie the sort is stable, so what survives is the order the causes were collected in — derivation
-order, which is not canonical and is exactly what the rank exists to replace. On this tree the four
+order, which is not canonical and is exactly what the rank exists to replace. On this tree the five
 ranks are pairwise distinct and behavior tests assert the exact array for the pairs that co-occur,
 so the order is fixed by measurement rather than by construction. **And the order itself is here,
 because a port cannot re-derive it from anything else in these records**: `refused`, `timeout`,
-`verification-timeout`, `ended`. That was measured by reading these records as a port would — the
-rank table is argued at length and its contents were nowhere, so "a canonical order" was a promise
-with no way to keep it.
+`verification-timeout`, `ended`, `ephemeral-event-omitted` — the last because it is the one cause
+that is not about a relay failing to answer: the relays did answer, and this library took something
+out of what they said. That was measured by reading these records as a port would — the rank table
+is argued at length and its contents were nowhere, so "a canonical order" was a promise with no way
+to keep it.
 
 **And the gap is narrower than that reads, which is worth knowing before paying to close it.**
 Derivation order here already ascends through the ranks, so a tie alone changes nothing observable:
@@ -732,7 +735,7 @@ uniqueness is weaker for the same reason the current type is: it guards a table 
 exist.
 
 **One thing the porter must not inherit.** The falsifier recorded beside the rank table — add a
-fifth member and nothing else, and the build fails right there — is true and re-runnable for as long
+sixth member and nothing else, and the build fails right there — is true and re-runnable for as long
 as the `Record` stands, which is why it is not being replaced here. It changes character the day the
 tuple lands: the failure moves from "does not compile at the table" to "cannot be written at all",
 and it lands at the site that adds the unranked cause rather than at the table. A port reading that

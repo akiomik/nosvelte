@@ -440,8 +440,9 @@ puts on the resolving side. It is recorded as that attempt's failure, by the sam
 failure of an attempt uses, so `refresh()` resolves `{kind: 'error'}` and a first mount reaches the
 primary `error` state and the `error` slot (`A11-C9`, `A11-C10`, `A11-C11`, `A11-C12`, `A11-C13`).
 Synthesising a _different_ outcome remains rejected for the reason it always was: `RefreshOutcome`'s
-`not-started` carries reasons the engine decides _before_ asking (`server`, `no-readable-relay`),
-which is a different fact from one discovered after the query function returned.
+`not-started` carries reasons the engine decides _before_ asking (`server`, `no-readable-relay`,
+`deferred`, `released`), which is a different fact from one discovered after the query function
+returned.
 
 **The alternative was named by the reviewer and is rejected.** Redefine the attempt as starting when
 the stamp first appears on the value, and this case becomes "no attempt ran" honestly rather than by
@@ -474,10 +475,10 @@ on the **first chunk** of an attempt, so an accumulator that folds one chunk wit
 handed and returns satisfied the test while leaving no end and no failure at all: with a backward
 refusal as that chunk, the REQ goes out, both legs are stamped, `break` closes the stream and the
 wire, and the query **succeeds** over a value carrying no outcome — `streaming([])` with
-`activity: idle` behind the `loading` slot, while `refresh()` rejects with an abandonment
-`AbortError`. The stopped-request spinner, for the fourth round running. A stamp says a chunk
-arrived; the boundary needs the attempt to have ended, which is `backlog` or `failure` under this id
-— the same pair the wait itself reads. `A11-C15` is the row and `AC12` is the witness.
+`activity: idle` behind the `loading` slot, while `refresh()` rejected, as it then did, with an
+abandonment `AbortError`. The stopped-request spinner, for the fourth round running. A stamp says a
+chunk arrived; the boundary needs the attempt to have ended, which is `backlog` or `failure` under
+this id — the same pair the wait itself reads. `A11-C15` is the row and `AC12` is the witness.
 
 **That second half has been answered wrongly twice, and the record carries both, because this
 boundary has moved in consecutive rounds.** The first version asked only the first half. The second
@@ -577,7 +578,8 @@ carried in this same round:
 - **it resolves and a terminal outcome for its attempt is on the value it returned** — a backlog end
   or a failure under that id. Nothing to do;
 - **it resolves with no terminal outcome, and this invocation's controller is aborted** — an abort,
-  because C11 puts a torn-down attempt on the rejecting side (`A11-C14`);
+  because C11 puts a torn-down attempt on the cancelled side, which `refresh()` resolves as
+  `cancelled` (`A11-C14`);
 - **it resolves with no terminal outcome and that controller is not aborted** — an
   `AccumulatorContractError`, recorded as that attempt's failure (`A11-C9`, `A11-C10`, `A11-C13`,
   `A11-C15`).
@@ -1477,12 +1479,14 @@ went wrong is an outcome.
 
 **The message survives, on the two entrances it is true of**, which this paragraph never said and an
 adversarial pass asked about: a `refresh()` over an entry the cache does not hold, and one over a
-request the caller has disabled. The third entrance — a query the layer had paused — is closed by
-configuring `networkMode: 'always'`, which is why that configuration is not an optimisation. A port
-reading only the paragraph above deletes a message it still owes. The alternative considered and
-rejected was to define a pre-`streamFn` failure as a "call failure" that must always reject; it
-needs A14 and C11 narrowed to exclude a state a consumer can reach with a type-legal accumulator,
-which is narrowing the contract to fit the implementation.
+request disabled through the spike hook's `enabled` pass-through, which v1 does not publish — the
+published way to say _not yet_ is a deferred plan, which resolves `not-started / deferred`
+(`C3-C5`). The third entrance — a query the layer had paused — is closed by configuring
+`networkMode: 'always'`, which is why that configuration is not an optimisation. A port reading only
+the paragraph above deletes a message it still owes. The alternative considered and rejected was to
+define a pre-`streamFn` failure as a "call failure" that must always reject; it needs A14 and C11
+narrowed to exclude a state a consumer can reach with a type-legal accumulator, which is narrowing
+the contract to fit the implementation.
 
 **Request identity is still defined once** — `canonicalKey` over the normalized descriptor — and a
 lane is a cache entry, so `refresh()` resolves, rejects and single-flights the same way on both
@@ -1792,15 +1796,15 @@ rule, not the arrival.
 REQ — true five times, which is rx-nostr's shipped ceiling. Past it every relay is `error`, `error`
 is terminal, terminal is absorbing, and the leg ends with nothing scheduled to reopen it: the one
 `reconnect()` in the engine is the preflight, and a preflight runs when a new request starts. A tab
-that slept therefore holds a subscription-less request that renders `default`, which is the
-silence-reading-as-health this design refuses everywhere else. **The repair belongs to the
-provider**: `A13` now owns a liveness trigger that schedules recovery on a backoff, with the
-browser's `online` and visibility-return as hints that bring the wait forward rather than as the
-trigger — relying on them alone cannot recover from a relay-specific failure. **Recovery starts a
-new attempt** rather than reviving an ended leg, so this row's absorbing rule stays true _within_ an
-attempt, which is the scope it was always about. Handing `retry` to the consumer would leak the
-ownership `A16` just took back; rewriting a terminal outcome after the fact would make "terminal"
-mean nothing.
+that slept therefore held, before `A13`'s liveness trigger, a subscription-less request that
+rendered `default`, which is the silence-reading-as-health this design refuses everywhere else.
+**The repair belongs to the provider**: `A13` now owns a liveness trigger that schedules recovery on
+a backoff, with the browser's `online` and visibility-return as hints that bring the wait forward
+rather than as the trigger — relying on them alone cannot recover from a relay-specific failure.
+**Recovery starts a new attempt** rather than reviving an ended leg, so this row's absorbing rule
+stays true _within_ an attempt, which is the scope it was always about. Handing `retry` to the
+consumer would leak the ownership `A16` just took back; rewriting a terminal outcome after the fact
+would make "terminal" mean nothing.
 
 A port that implements the narrow reading absorbs nothing on a real network, and a later `connected`
 — which another request's `refresh()` can cause on the shared client — writes `active` back over
@@ -2446,17 +2450,17 @@ one of those columns.
   is that every wait ends, not that the request ends inside the timeout a caller chose.
 - Good: an outcome a consumer is handed cannot be overtaken by something that had already happened
   when it was decided.
-- Bad: **the published cause union has a fourth member for a case a hung verifier reaches, and a
-  slow one can reach too.** The backward leg's wait is bounded — a floor of one second, or the
-  slowest verification that leg has seen times a safety factor, re-armed whenever an event clears —
-  and if candidates are still being verified when it expires they are discarded and the attempt ends
-  incomplete. That is `verification-timeout`, and every consumer that switches on a cause now has a
-  branch for it. **"Pathological" stood here and is withdrawn**: A-ζ's floor is the deadline
-  outright for a leg that has verified nothing, so a first verification slower than a second is cut
-  whether or not anything is wrong with it. What makes that acceptable is a policy about the shipped
-  verifier rather than a case nobody can reach. **The alternative was worse, and this bullet is the
-  record of the round it was taken.** For a round the two arrived under one word —
-  `if (viaTimer || gates.backward.phase === 'cut')` — so "nothing came back" and "what came back
+- Bad: **the published cause union has a member, `verification-timeout`, for a case a hung verifier
+  reaches, and a slow one can reach too.** The backward leg's wait is bounded — a floor of one
+  second, or the slowest verification that leg has seen times a safety factor, re-armed whenever an
+  event clears — and if candidates are still being verified when it expires they are discarded and
+  the attempt ends incomplete. That is `verification-timeout`, and every consumer that switches on a
+  cause now has a branch for it. **"Pathological" stood here and is withdrawn**: A-ζ's floor is the
+  deadline outright for a leg that has verified nothing, so a first verification slower than a
+  second is cut whether or not anything is wrong with it. What makes that acceptable is a policy
+  about the shipped verifier rather than a case nobody can reach. **The alternative was worse, and
+  this bullet is the record of the round it was taken.** For a round the two arrived under one word
+  — `if (viaTimer || gates.backward.phase === 'cut')` — so "nothing came back" and "what came back
   could not be checked in time" were both `'timeout'`. The argument for keeping them folded was that
   the union should not grow for a rare case, which is the growth `B-η` and the drain's own design
   both declined. What that argument missed is that `IncompleteCause` is not an internal enum:

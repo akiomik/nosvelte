@@ -594,8 +594,8 @@ class RelayConfigurationError extends Error {
   readonly urls: readonly string[];
 }
 
-// **Both hooks are context-bound, so both are created during component
-// initialisation** — the same rule every hook in this framework already has,
+// **The hooks are context-bound — `useReq`, `useRelayDiagnostics` and
+// `useSend` — so each is created during component initialisation** — the same rule every hook in this framework already has,
 // stated because this record is what a consumer reads and because getting it
 // wrong is not a compile error. A request built later — from a click handler,
 // or in an effect root opened outside initialisation — cannot reach the
@@ -604,7 +604,8 @@ class RelayConfigurationError extends Error {
 // two answers a helpful `catch` produces — a missing provider reported from
 // inside one, or the browser side taken silently under a server render. A
 // handle may be used from anywhere afterwards, and so may the diagnostics
-// result — every member either of them declares. It is the construction that
+// result and the operation `useSend` returns (`C6-C17`) — every member any of
+// them declares. It is the construction that
 // has a window, and `A12-C4` holds both halves.
 //
 // **"Afterwards" is about place, and the *time* question has a different answer
@@ -654,22 +655,23 @@ class RelayConfigurationError extends Error {
 // state change a consumer can see. A consumer must not drive UI from a handle
 // whose component is gone.
 //
-// **`refresh()` on one is the third input, and this passage has now been wrong
-// about it in both directions.** It first said the member stays honest because
-// a disposed provider is reported. The repair called that "wrong in both
-// halves", and **that was itself wrong**: a disposed provider *is* reported —
-// `refresh()` rejects with the terminated-connection error, which `P29` holds
-// and which a real provider unmount reproduces. What does not follow is the
-// inference. Reporting a disposed provider says nothing about the case where
-// the provider is alive and only the reader is gone, which is the case this
-// passage is about. Measured: the REQ goes
-// out, the relay answers, `refresh()` resolves `complete` — and the handle
-// still answers the pre-refresh events, because the subscription that would
-// have shown them went with the root. The work is real and its result is
-// invisible *there*. So a consumer awaiting `refresh()` on a held handle gets a
-// true outcome about a request whose answer it will not be shown, which is
-// recorded rather than repaired — showing it would mean re-subscribing a reader
-// whose root is gone.
+// **`refresh()` on one is the third input, and ruling 11 closed it.** A
+// handle's write capability is revoked when the root that created it is
+// released: a refresh already in flight resolves `cancelled /
+// consumer-released`, and every call after the release resolves `not-started /
+// released` at once and sends no REQ (`0005`'s `C11-C19`). A provider that is
+// gone is a different input, and a call after it rejects with
+// `provider-disposed` (`RM8`). What follows is what this passage measured
+// before the ruling, kept because it is why the ruling exists: the REQ went
+// out, the relay answered, `refresh()` resolved `complete` — and the handle
+// still answered the pre-refresh events, because the subscription that would
+// have shown them went with the root. A consumer awaiting `refresh()` on a held
+// handle got a true outcome about a request whose answer it would not be
+// shown.
+//
+// The next three paragraphs are those measurements, taken before the ruling
+// landed; a released handle can no longer make the call they describe, and
+// `C11-C19` is the row that holds the repair in their arrangements.
 //
 // **And "a live reader on the same key sees it" is not the consolation this
 // passage offered it as. It is the hazard.** A refresh moves the shared entry,
@@ -705,16 +707,15 @@ class RelayConfigurationError extends Error {
 // at all, so nothing in the value distinguishes one this consumer caused from
 // one a detached sibling did. That is a fact a port can check against its own
 // type rather than a claim it has to trust. So the
-// honest description of a detached handle is not "a stale view": it is a **write
-// capability on a shared entry with no read-back**.
+// honest description of a detached handle was not "a stale view": it was a
+// **write capability on a shared entry with no read-back**.
 //
-// So the instruction above is not enough on its own. "Do not drive UI from a
-// handle whose component is gone" is advice to the holder, and the damage lands
-// on somebody else: **do not call `refresh()` on one either.** A port that
-// wants this closed rather than recorded has one honest option — reject
-// `refresh()` once the caller's root is gone — and that is a different decision
-// from anything here, because it would also take away the cache-warming a
-// detached refresh does for whoever is still reading.
+// So the instruction above was not enough on its own: "do not drive UI from a
+// handle whose component is gone" is advice to the holder, and the damage
+// landed on somebody else. The one honest option this passage named — revoking
+// `refresh()` once the caller's root is gone, at the price of the cache-warming
+// a detached refresh did for whoever was still reading — is the one ruling 11
+// took.
 
 function useReq(plan: () => ReqPlan): ReqHandle;
 
@@ -1079,10 +1080,11 @@ Absent on purpose, and each absence is a decision above: no second entry (C8), n
 key, no descriptor normaliser, and no general-purpose selector.
 
 **And five a consumer will look for, which were not on this list until an adversarial pass asked for
-them by name.** There is no way to say _not yet_ — no `enabled`, no deferral of a request the
-descriptor describes — so a search box mints an entry and a `REQ` per keystroke, and the only stop
-is unmounting the component. **That one is ruled to change**: `useReq` takes a plan rather than a
-descriptor, so that deferred and asked are distinguishable rather than encoded —
+them by name.** Three of them have been ruled since, and the passage says which. There was no way to
+say _not yet_ — no `enabled`, no deferral of a request the descriptor describes — so a search box
+minted an entry and a `REQ` per keystroke, and the only stop was unmounting the component. **That
+one landed (ruling 4)**: `useReq` takes a plan rather than a descriptor, so that deferred and asked
+are distinguishable rather than encoded —
 
     type ReqPlan = { kind: 'deferred' } | { kind: 'request'; descriptor: ReqDescriptor };
 
@@ -1093,15 +1095,14 @@ it occupies **one inert entry per client**, shared by every deferred hook, which
 rather than a promise of none — reporting `loading` with `activity: 'idle'`, resolving `refresh()`
 as `{ kind: 'not-started', reason: 'deferred' }`, applying the ordinary mount triggers when it
 becomes a request, and releasing the observer without deleting the entry when it goes back. It is
-written in an indented block rather than a fenced one because the fenced blocks in this record are
-what the library ships and `LK13` holds them to that; this ships with the implementation.
+repeated here in an indented block rather than a fenced one because the fenced declarations — the
+`useReq` signature above and `ReqPlan` beside `ReqDescriptor` below — are the ones `LK13` holds.
 `filters: []` and `authors: []` are **not** the encoding — they stay `B8`'s genuine empty-set
 questions, which is also what stops a descriptor being validated for a question nobody is asking.
 There is no `cancel()`: `refresh()` closes and re-opens, which is the opposite. And an abort is
 therefore not something a consumer raises at all — it is the teardown's, a consumer holds no signal,
-and since ruling 5 it resolves `cancelled` rather than rejecting. Each is a v1 omission rather than
-an oversight: a deferral flag is a field on the descriptor and so a cache-identity question
-(`0003`), and a cancel is a handle operation whose interaction with the query layer's own lifetime
+and since ruling 5 it resolves `cancelled` rather than rejecting. The cancel is a v1 omission rather
+than an oversight: it is a handle operation whose interaction with the query layer's own lifetime
 nobody has decided. **Per-relay selection was the fourth, and it is no longer an omission
 (ruling 3)**: the relay set was the provider's prop alone, so two relay sets on one page meant two
 providers, which `C6` says share nothing — two connections, two caches, the same event twice. That
@@ -1765,10 +1766,11 @@ type RefreshOutcome =
   | { readonly kind: 'cancelled'; readonly reason: 'consumer-released' | 'provider-disposed' }
   | {
       readonly kind: 'not-started';
-      // Three "nothing was asked"es with three remedies: the side the render is
+      // Four "nothing was asked"es with four remedies: the side the render is
       // on, the provider's readable list — or a request that named an empty
-      // target set on purpose — and the consumer's own plan, which they change
-      // by asking.
+      // target set on purpose — the consumer's own plan, which they change by
+      // asking, and a handle whose root was released, which nothing revives
+      // (`C11-C19`).
       readonly reason: 'server' | 'no-readable-relay' | 'deferred' | 'released';
     };
 ```
@@ -2122,18 +2124,18 @@ serializer, which this record does not.
 column: if two rows would send a consumer to the same remedy, they share a code. Nothing here is a
 taxonomy of the library's internals.
 
-| Where it enters                                                                                                                        | `code`                  | Beyond the base                            | Which surfaces carry it                                                              | What a consumer does                                      |
-| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| A descriptor field this library refuses — including an `rxNostr` **the caller owns** and disposed                                      | `invalid-descriptor`    | `field`                                    | `state.error`, `lastError`, the `error` slot, **and what `refresh()` rejects with**  | fix the field it names                                    |
-| A filter field it does not support, or cannot accept as written                                                                        | `unsupported-filter`    | `field`                                    | the same four                                                                        | change the filter                                         |
-| Anything **thrown** below the seven guarded descriptor reads — a filter element getter, `scope.id`                                     | `descriptor-unreadable` | the captured four, `source: 'descriptor'`  | the same four                                                                        | their own code threw; the copy quotes what it said        |
-| A descriptor's `relays` names a relay the provider does not read from                                                                  | `relay-not-in-scope`    | `url`, `configured`                        | the same four                                                                        | name a relay the provider reads, or configure it there    |
-| No provider above the hook                                                                                                             | `missing-provider`      | —                                          | the same four                                                                        | put the tree under a provider                             |
-| A relay or the transport gave out                                                                                                      | `relay-failed`          | the captured four, `source: 'relay'`       | **`legEnded.error`, and nothing else**                                               | retry, or look at the relay                               |
-| The answer came back partial                                                                                                           | `incomplete-result`     | `incompleteCauses`                         | `status: 'incomplete'` and its slot; `lastError` when nothing threw                  | refresh, widen the settle timeout, or render what arrived |
-| An accumulator broke the contract this library folds through                                                                           | `accumulator-contract`  | —                                          | `state.error`, `lastError`, the slot, **and `RefreshOutcome`'s `{ kind: 'error' }`** | fix the accumulator                                       |
-| A `refresh()` called after the **provider** revoked the transport it owns — a call the revoke lands under resolves `cancelled` instead | `provider-disposed`     | —                                          | **only what `refresh()` rejects with**                                               | this handle will not recover; make a new provider         |
-| Anything the query rejected with that is none of the above                                                                             | `unspecified`           | the captured four, `source: 'unspecified'` | `state.error`, `lastError`, the slot, **and the outcome**                            | read `message`; the library cannot attribute it           |
+| Where it enters                                                                                                                                          | `code`                  | Beyond the base                            | Which surfaces carry it                                                              | What a consumer does                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| A descriptor field this library refuses — including, at the internal seam v1 does not publish, an `rxNostr` **the caller owns** and disposed (`C11-C18`) | `invalid-descriptor`    | `field`                                    | `state.error`, `lastError`, the `error` slot, **and what `refresh()` rejects with**  | fix the field it names                                    |
+| A filter field it does not support, or cannot accept as written                                                                                          | `unsupported-filter`    | `field`                                    | the same four                                                                        | change the filter                                         |
+| Anything **thrown** below the seven guarded descriptor reads — a filter element getter, `scope.id`                                                       | `descriptor-unreadable` | the captured four, `source: 'descriptor'`  | the same four                                                                        | their own code threw; the copy quotes what it said        |
+| A descriptor's `relays` names a relay the provider does not read from                                                                                    | `relay-not-in-scope`    | `url`, `configured`                        | the same four                                                                        | name a relay the provider reads, or configure it there    |
+| No provider above the hook                                                                                                                               | `missing-provider`      | —                                          | the same four                                                                        | put the tree under a provider                             |
+| A relay or the transport gave out                                                                                                                        | `relay-failed`          | the captured four, `source: 'relay'`       | **`legEnded.error`, and nothing else**                                               | retry, or look at the relay                               |
+| The answer came back partial                                                                                                                             | `incomplete-result`     | `incompleteCauses`                         | `status: 'incomplete'` and its slot; `lastError` when nothing threw                  | refresh, widen the settle timeout, or render what arrived |
+| An accumulator broke the contract this library folds through                                                                                             | `accumulator-contract`  | —                                          | `state.error`, `lastError`, the slot, **and `RefreshOutcome`'s `{ kind: 'error' }`** | fix the accumulator                                       |
+| A `refresh()` called after the **provider** revoked the transport it owns — a call the revoke lands under resolves `cancelled` instead                   | `provider-disposed`     | —                                          | **only what `refresh()` rejects with**                                               | this handle will not recover; make a new provider         |
+| Anything the query rejected with that is none of the above                                                                                               | `unspecified`           | the captured four, `source: 'unspecified'` | `state.error`, `lastError`, the slot, **and the outcome**                            | read `message`; the library cannot attribute it           |
 
 **This table and the six surface aliases are the fixed v1 contract.** Six, and the count said seven:
 the seventh column — what `refresh()` rejects with — has no published alias, which is a decision
@@ -2478,7 +2480,7 @@ not.
 // **`relays` ships**, and it is one change with three decisions in it: `C3`
 // (what `req` was reached for), `C6` (a provider is a resource domain rather
 // than an identity) and `B3` (the key uses the set a request is actually asked
-// over). A subset field added to today's single scope-generation key leaves the
+// over). A subset field added to the single scope-generation key ruling 15 replaced leaves the
 // NIP-65 loop standing, which is why they are one change and not three.
 //
 // **What it does not buy**: connecting to a relay the provider has not accepted.
@@ -2879,31 +2881,37 @@ mapping owes them the pair's type as well, and that is a wider surface than this
 | `incomplete`   | none     | —                  | `error`   | `IncompleteResultError` |
 | `error`        | —        | —                  | `error`   | `error`                 |
 
+The last column is what the mapping itself hands over. Every outlet is also handed the request as
+`RequestOutletContext` (ruling 10), so "none" means no argument beyond that.
+
 **A deferred request renders the `loading` snippet for as long as it is deferred, and the table is
 where that has to be said.** `loading` is what the primary state reports when nothing has been asked
 — a server render (0002 A12), or a provider whose relay list has not arrived (0003 B-γ) — and the
-table takes `state` alone, so the component layer cannot distinguish it from a request that _is_ in
-flight. The distinction is on `activity`, which is `idle` in the first case and `refreshing`/`live`
-in the second, and a consumer who needs it reads the hook rather than the slot. **The cost is a
-spinner over an empty relay list**, and it is chosen: the alternatives were a sixth `ReqState`
-member (which every consumer's `switch` would have to grow, for a case that resolves itself the
-moment relays arrive) and admitting `activity` as a column of this table (which makes the slot
-mapping a function of two axes and hands the components a reason to disagree with each other). Named
-here because a port reading "reports so" (B-γ) will otherwise invent a published state for it.
+table takes `state` alone, so the slot cannot distinguish it from a request that _is_ in flight. The
+distinction is on `activity`, which is `idle` in the first case and `refreshing`/`live` in the
+second, and since ruling 10 the `loading` snippet is handed the request, so a consumer who needs it
+reads `request.activity` there. **The cost is a spinner over an empty relay list**, and it is
+chosen: the alternatives were a sixth `ReqState` member (which every consumer's `switch` would have
+to grow, for a case that resolves itself the moment relays arrive) and admitting `activity` as a
+column of this table (which makes the slot mapping a function of two axes and hands the components a
+reason to disagree with each other). Named here because a port reading "reports so" (B-γ) will
+otherwise invent a published state for it.
 
 **The `default` row's argument is `Outlets<T>`'s parameter, and this column said `events`, `status`
 instead for as long as the table has existed.** That pair is the vocabulary of the components being
 replaced — their default slot takes a `status: ReqStatus`, a type this surface does not publish and
 this record names nowhere but here — and it disagreed with this record's own component declarations
-twice over: the member is `state: ReqState`, and eight of the eleven request components are not
-handed a list at all. `T` is `{ events: readonly ReqEvent[]; state: ReqState }` for `EventList`,
-`UniqueEventList` and `UserReactionList`, and `{ event: ReqEvent; state: ReqState }` for the other
-eight, both declared above. The prop types were taken as the true half because they are what a
-consumer compiles against and because `ReqStatus` does not survive the redesign; what changed here
-is the table. **Eight of the eleven also lose a name in the migration** — the default slot's
-argument is `metadata`, `contacts`, `article`, `relayListMetadata`, `reactions` and so on today, and
-is `event` or `events` for every component here. That is a rename in every consumer's markup, and it
-is said here because the type block above is otherwise the only place this surface mentions it.
+twice over: the state is not a `status`, and eight of the eleven request components are not handed a
+list at all. `T` is `{ events: readonly ReqEvent[] }` for `EventList`, `UniqueEventList` and
+`UserReactionList`, and `{ event: ReqEvent }` for the other eight, both declared above, and the
+snippet is handed `T & RequestOutletContext`: the state is `request.state`, the one route to it
+since ruling 10 took `state` off `Events` and `Event`. The prop types were taken as the true half
+because they are what a consumer compiles against and because `ReqStatus` does not survive the
+redesign; what changed here is the table. **Eight of the eleven also lose a name in the migration**
+— the default slot's argument is `metadata`, `contacts`, `article`, `relayListMetadata`, `reactions`
+and so on today, and is `event` or `events` for every component here. That is a rename in every
+consumer's markup, and it is said here because the type block above is otherwise the only place this
+surface mentions it.
 
 **Why it stood: the check reads four columns of five.** `LK14` turns each row into the state it
 describes and puts it through the shipped mapping, which observes `state.status`, `events`,
@@ -3182,10 +3190,10 @@ Closes **1, 3, 4, 8, 14, 15** and 16's component table. The pieces:
 5. the complete descriptor every component builds.
 
 **The invariant it exists to keep is that equal key implies equal wire semantics.** Each piece alone
-breaks it: a subset field on today's generation-counter key leaves an explicit request re-keyed by
-an unrelated relay (15); a boolean `defer` on the active descriptor makes a key for a question
-nobody asked (4); and a component whose descriptor is unstated cannot be shown to land on the same
-key as the `useReq` a consumer writes beside it (16).
+breaks it: a subset field on the generation-counter key ruling 15 replaced leaves an explicit
+request re-keyed by an unrelated relay (15); a boolean `defer` on the active descriptor makes a key
+for a question nobody asked (4); and a component whose descriptor is unstated cannot be shown to
+land on the same key as the `useReq` a consumer writes beside it (16).
 
 **What `Closes` enumerates, and where the rulings that are in no unit went.** It lists the public
 decisions a slice takes _implementation responsibility_ for — not a classification of each ruling's
@@ -3202,7 +3210,8 @@ falls out of every unit is visible by arithmetic rather than by nobody noticing.
 Closes **2, 5, 10, 11**. All four outlets reach the same handle; expected cancellations are typed
 outcomes rather than rejections; the write capability is revoked when the root is released. **The
 invariant is that the component surface and `useReq` have one failure and lifetime contract** —
-today they have two, because a component consumer cannot reach the axis the failures were routed to.
+before ruling 10 they had two, because a component consumer could not reach the axis the failures
+were routed to.
 
 ### Unit C — provider liveness and diagnostics
 
