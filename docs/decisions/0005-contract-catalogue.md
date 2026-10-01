@@ -1182,39 +1182,32 @@ So a row carries two fields of its own, in the roster below, and neither is infe
      name, and a row's `test:` cannot name a test that does not name it back. One test may carry
      several rows;
   5. a row may not be carried by a test that does not exist;
-  6. the test **runs** — not inside a `skip`, `only`, `todo`, `skipIf` or `runIf`, in any position
-     in the chain — and it is not table-driven, which is a shape this bridge cannot record one id
-     per arm for and therefore refuses at the file rather than silently at the row. A parametrised
-     `describe` is not that: its arms are ordinary declarations that run once per case, and six of
-     this branch's own suites are written that way;
+  6. the test **runs** — which the bridge establishes by crediting two written shapes and nothing
+     else, set out below; a modifier, an options object, a table, a use of the test context or a
+     conditional placement is refused rather than read. A parametrised `describe` is one of the
+     shapes refused: its arms do run once per case, but the table is one more thing to read, so a
+     landing inside one is written as a plain `describe` instead;
   7. the test **asserts** something: a matcher after an `expect(…)`, or `assert`, or `expectTypeOf`.
      A title that contains the word does not count, and neither does `expect(x)` with no matcher —
      both were measured passing the first spelling of this rule.
 
-  **How rule 6 is decided, and where it stops.** "Runs" is read from the syntax tree, and the read
-  is an **allow-list**: a landing is credited only when its arm is a call to the runner's own `it(`
-  or `it.fails(` — imported from `vitest` under its own name or global, not a local binding of the
-  name — made as a statement of its own — or as an arrow's whole body — at the top of the file or
-  inside the callback of the runner's own `describe` or `suite` chain — a table-driven one only when
-  its table can be seen to hold a row — placed the same way all the way up and each written
-  directly, with no alias, parenthesis or computed member, with no `return` or `throw` in any block
-  on that path. On that path the check reads what decides whether the arm runs in this runner: every
-  member of each chain, each call's options folded to their final values, and a `skip` the arm calls
-  through its own test context. Options and tables are read only where they are written — `const`
-  freezes a binding, not the object behind it — and a name inside them is followed only to a `const`
-  bound to a primitive. The test context is credited only when it is read through `expect`,
-  `signal`, `onTestFailed`, `onTestFinished` or `annotate`, none of which leads back to it — `task`
-  does, as `ctx.task.context` — and taking it apart, handing it on or aliasing it is refused.
-  `undefined` is the global only when nothing in the file binds the name. **Everything outside that
-  shape is refused, not modelled** — an arm under an `if`, in a loop, a `try`, a helper or a
-  function declaration, a suite reached through a `let`, options or a table from a name, a call or a
-  parameter — because whether it runs is decided by something the check does not read. Two
-  consequences are deliberate. A shape the check refuses although the runner would run it is not a
-  defect: the landing is rewritten into the shape. A shape inside the allow-list that the check
-  credits although the runner would not run it **is** a defect, and the repair either reads it or
-  narrows the allow-list. What no static read can see — an environment variable, a command-line
-  filter, the runner's own include and exclude — is outside rule 6, and a reviewer reading a landing
-  reads it under the configuration CI runs.
+  **How rule 6 is decided, and where it stops.** "Runs" is read from the syntax tree, and what is
+  credited is **two shapes and nothing else**. An arm is `it('ID: …', () => { … })`: the runner's
+  own `it` — imported from `vitest` under its own name, or global — written directly, a string
+  title, a callback that takes no parameter (and in a `function`, does not read `arguments`), and at
+  most a numeric timeout after it. It is called as a statement of its own, at the top of the file or
+  inside the callback of a suite of the one shape a suite may have:
+  `describe('title', () => { … })`, the runner's own `describe`, a string title and a callback that
+  takes no parameter, placed the same way all the way up, with no `return` or `throw` in any block
+  on the path. **Nothing is interpreted** — no modifier, no options object, no table, no test
+  context — so there is nothing to interpret wrongly. This is narrower than it was: for several
+  rounds the check credited more and read what decides whether the extra shapes run, and each round
+  a reviewer found a reading that disagreed with the runner. Two consequences are deliberate. A
+  shape refused although the runner would run it is not a defect: the landing is rewritten into one
+  of the two. A shape inside the two that the check credits although the runner would not run it
+  **is** a defect. What no static read can see — an environment variable, a command-line filter, the
+  runner's own include and exclude — is outside rule 6, and a reviewer reading a landing reads it
+  under the configuration CI runs.
 
   **What these seven cannot hold, said here rather than found in phase 2.** They are rules about
   _edges_: that a cell names a test, that the test names the row back, that the test exists, runs,

@@ -479,150 +479,69 @@ describe('the production contract bridge', () => {
       ]).duplicates
     ).toEqual([]);
 
-    // What does not run, read out of the syntax tree, both ways. Each case is
-    // a whole statement, because the tree is what decides.
-    const disabledIn = (statement: string): string[] => inspect(statement, 'x.test.ts').disabled;
-    for (const statement of [
-      `${'describe'}.skip('x', () => {});`,
-      `${'it'}.concurrent.skip('CT: y', () => {});`,
-      `${'test'}.todo('CT: z');`,
-      `${'describe'}.skipIf(true)('x', () => {});`,
-      `${'it'}.runIf(false)('CT: y', () => {});`,
-      `${'describe'}.each([1]).skip('x', () => {});`,
-      `${'it'}.each([1]).skip('CT: y', () => {});`,
-      `${'describe'}.skip.each${'`'}a${'`'}('x', () => {});`,
-      `${'suite'}.only('x', () => {});`,
-      `${'it'}.each([1])('CT: y %s', () => {});`,
-      `${'it'}.for([1])('CT: y %s', () => {});`,
-      `${'it'}('CT: y', { skip: true }, () => {});`,
-      `${'describe'}('x', { meta: {}, skip: true }, () => {});`,
-      `${'describe'}('x', { 'only': 1 }, () => {});`,
-      `${'describe'}('x', { todo }, () => {});`,
-      `${'it'}('CT: y', (ctx) => { const n = 1; ctx.skip(); });`,
-      `${'it'}('CT: y', ctx => { ctx['skip'](); });`,
-      `${'it'}('CT: y', function (ctx) { const n = 1; ctx.skip(); });`,
-      `${'it'}('CT: y', async (context) => { await x(); context.skip(true, 'later'); });`,
-      `${'it'}('CT: y', ({ skip }) => { const n = 1; skip(); });`,
-      `${'it'}('CT: y', ({ skip: skipTest }) => { const n = 1; skipTest(); });`,
-      `${'describe'}('x', { ['skip']: true }, () => {});`,
-      `${'describe'}('x', { ...{ only: true } }, () => {});`,
-      `const options = { skip: true }; ${'describe'}('x', options, () => {});`,
-      `const quiet = ${'describe'}.skip; quiet('x', () => {});`,
-      `${'describe'}[mode]('x', () => {});`,
-      `${'describe'}('x', makeOptions(), () => {});`,
-      `${'describe'}('x', { [key]: true }, () => {});`,
-      `function make(options) { ${'describe'}('x', options, () => {}); }`,
-      `let quiet = ${'describe'}.skip; quiet = ${'describe'}; quiet('x', () => { ${'it'}('CT1: y', () => {}); });`,
-      `forEachRelay(() => { ${'it'}('CT1: y', () => {}); });`,
-      // Refused rather than traced: an object or array behind a name can be
-      // changed after it was written, and a test context can be taken apart
-      // or handed on.
-      `const options = { skip: false }; options.skip = true; ${'describe'}('x', options, () => {});`,
-      `const options = { timeout: 5 }; ${'describe'}('x', options, () => {});`,
-      `${'it'}('CT: y', (ctx) => { const { skip: skipTest } = ctx; skipTest(); });`,
-      `${'it'}('CT: y', (ctx) => { helper(ctx); });`,
-      `${'it'}('CT: y', (ctx) => { const c = ctx; c.skip(); });`,
-      `${'it'}('CT: y', (ctx) => { ctx[member](); });`,
-      `${'it'}('CT: y', ({ skip: skipTest }) => { skip(); });`,
-      `${'it'}('CT: y', ({ task, ...rest }) => { rest.skip(); });`,
-      `${'it'}('CT: y', function () { arguments[0].skip(); });`,
-      // Only the members on the list, none of which leads back to the context.
-      `${'it'}('CT: y', (ctx) => { ctx.task.context.skip(); });`,
-      `${'it'}('CT: y', (ctx) => { expect(ctx.task).toBeDefined(); });`,
-      `${'it'}('CT: y', ({ task }) => { task.context.skip(); });`,
-      // A local binding called `undefined` is not the global.
-      `${'describe'}('x', () => { const undefined = true; ${'describe'}('y', { skip: undefined }, () => {}); });`,
-      `${'describe'}('x', () => { const undefined = { skip: true }; ${'describe'}('y', undefined, () => {}); });`
-    ])
-      expect(disabledIn(statement), `${statement} does not run`).not.toEqual([]);
-    for (const statement of [
-      `${'it'}('CT: y', () => {});`,
-      `${'it'}.fails('CT: y', () => {});`,
-      `${'describe'}('skip and only', () => {});`,
-      `${'describe'}.each([1])('$name', () => {});`,
-      `${'it'}('CT: y', { timeout: 20_000 }, () => {});`,
-      `${'describe'}('x', { meta: { skip: true } }, () => {});`,
-      `${'describe'}('x', { skip: false }, () => {});`,
-      `${'describe'}('x', () => { const o = { skip: true }; });`,
-      `${'it'}('CT: y', (ctx) => { ctx.expect(1).toBe(1); });`,
-      `${'it'}('CT: y', (ctx) => { ctx.onTestFinished(() => {}); });`,
-      `${'describe'}('x', { skip: undefined }, () => {});`,
-      `${'it'}('CT: y', (ctx) => { other.skip(); });`,
-      `${'it'}('CT: y', ({ expect }) => { source.pipe(skip(1)); });`,
-      `${'it'}('CT: y', () => { const skip = 1; });`,
-      `${'it'}('CT: y', () => {}, 20_000);`,
-      `const quiet = false; ${'describe'}('x', { skip: quiet }, () => {});`,
-      `const plain = ${'describe'}; plain('x', () => {});`,
-      `${'describe'}['each']([1])('x', () => {});`,
-      `${'describe'}('x', { ...{ skip: true }, skip: false }, () => {});`,
-      `${'describe'}('x', { skip: 0, only: '' }, () => {});`,
-      `${'describe'}('x', () => { beforeEach(() => {}); ${'it'}('CT1: y', () => {}); });`
-    ])
-      expect(disabledIn(statement), `${statement} runs`).toEqual([]);
-    // Resolved rather than refused: a computed key that is a literal, a spread
-    // of an object written in place and a `const` bound to a primitive are
-    // read, so each is reported as disabled by its options and not merely as
-    // options nobody could read.
-    for (const statement of [
-      `${'describe'}('x', { ['skip']: true }, () => {});`,
-      `${'describe'}('x', { ...{ only: true } }, () => {});`,
-      `const quiet = true; ${'describe'}('x', { skip: quiet }, () => {});`,
-      // The final value of each key, after every spread.
-      `${'describe'}('x', { skip: false, ...{ skip: true } }, () => {});`
-    ])
-      expect(disabledIn(statement), statement).toEqual([`x.test.ts:1 (disabled by its options)`]);
-    // **Where an arm is credited, as an allow-list, both ways.** Placed
-    // anywhere this check does not follow, an arm is refused rather than
-    // modelled; placed in the shapes it does follow, it is credited.
+    // **What is credited: two shapes, both ways.** Every case holds one
+    // id-shaped arm, and the only question is whether that arm is credited or
+    // refused as not in the shape. Nothing is interpreted, so a shape that
+    // would run — an ordinary option, a parametrised suite — is refused as
+    // surely as one that would not; that is the stated price.
+    const refusedIn = (statement: string): boolean =>
+      inspect(statement, 'x.test.ts').disabled.some((why) =>
+        why.endsWith('(not in the shape this bridge credits)')
+      );
     const armStatement = `${'it'}('CT1: y', () => { expect(1).toBe(1); });`;
+    const inSuite = (opening: string): string => `${opening} () => { ${armStatement} });`;
     for (const statement of [
+      // Anything on the arm beyond a title, a bare callback and a timeout.
+      `${'it'}.skip('CT1: y', () => {});`,
+      `${'it'}.only('CT1: y', () => {});`,
+      `${'it'}.fails('CT1: y', () => {});`,
+      `${'it'}.each([1])('CT1: y %s', () => {});`,
+      `${'it'}('CT1: y', { skip: true }, () => {});`,
+      `${'it'}('CT1: y', { timeout: 5 }, () => {});`,
+      `${'it'}('CT1: y', (ctx) => { ctx.skip(); });`,
+      `${'it'}('CT1: y', ({ expect }) => { expect(1).toBe(1); });`,
+      `${'it'}('CT1: y', function () { arguments[0].skip(); });`,
+      `${'it'}('CT1: y', () => {}, someTimeout);`,
+      `${'it'}('CT1: y', () => {}, 5, 6);`,
+      // Anything on a suite beyond a title and a bare callback.
+      inSuite(`${'describe'}.skip('x',`),
+      inSuite(`${'describe'}.each([1])('x %s',`),
+      inSuite(`${'describe'}.skip.each${'`'}a${'`'}('x',`),
+      inSuite(`${'describe'}('x', { skip: false },`),
+      inSuite(`${'describe'}('x', { timeout: 5 },`),
+      inSuite(`${'suite'}('x',`),
+      `${'describe'}('x', (ctx) => { ${armStatement} });`,
+      `${'describe'}('x', () => { ${armStatement} }, { skip: true });`,
+      `${'describe'}(title, () => { ${armStatement} });`,
+      // Names that are not the runner's own.
+      `const ${'it'} = ${'test'}.skip; ${armStatement}`,
+      `const ${'describe'} = (name, fn) => {}; ${inSuite(`${'describe'}('x',`)}`,
+      `import { ${'describe'} as ${'it'} } from 'vitest'; ${armStatement}`,
+      `const group = ${'describe'}; group('x', () => { ${armStatement} });`,
+      // Placed anywhere but a statement in the file or in a suite's callback.
       `if (process.env.CI) { ${armStatement} }`,
-      `for (const x of [1]) { ${armStatement} }`,
       `if (process.env.CI) ${armStatement}`,
       `for (const x of [1]) ${armStatement}`,
       `try { ${armStatement} } catch {}`,
       `function register() { ${armStatement} } register();`,
+      `forEachRelay(() => { ${armStatement} });`,
       `${'describe'}('x', () => { if (flag) return; ${armStatement} });`,
+      `${'describe'}('x', () => ${armStatement.replace(/;$/, '')});`,
       `${'describe'}('x', () => { ${'it'}('CT2: outer', () => { ${armStatement} }); });`,
-      `await ${armStatement}`,
-      // A known name counts only when it is the runner's own.
-      `const ${'it'} = ${'test'}.skip; ${armStatement}`,
-      `function register(${'it'}) { ${'describe'}('x', () => { ${armStatement} }); }`,
-      `const ${'describe'} = (name, fn) => {}; ${'describe'}('x', () => { ${armStatement} });`,
-      // A table with no row declares nothing.
-      `${'describe'}.each([])('x', () => { ${armStatement} });`,
-      `${'describe'}.each([...rows])('x', () => { ${armStatement} });`,
-      `let rows = [1]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
-      `${'describe'}.each${'`'}a${'`'}('x', () => { ${armStatement} });`,
-      `${'describe'}.each([,])('x', () => { ${armStatement} });`,
-      // Only a chain written directly: no alias, parenthesis or rename.
-      `const group = ${'describe'}; group('x', () => { ${armStatement} });`,
-      `const group = ${'describe'}.each([]); group('x', () => { ${armStatement} });`,
-      // A table behind a name can be emptied after it was written.
-      `const rows = [1]; rows.length = 0; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
-      `const rows = [{ a: 1 }]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
-      `(${'describe'}.each([1]))('x', () => { ${armStatement} });`,
-      `import { ${'describe'} as ${'it'} } from 'vitest'; ${armStatement}`
+      `await ${armStatement}`
     ])
-      expect(
-        disabledIn(statement).some((why) =>
-          why.endsWith('(declared where this bridge does not credit an arm)')
-        ),
-        `${statement} is not credited`
-      ).toBe(true);
+      expect(refusedIn(statement), `${statement} is not credited`).toBe(true);
     for (const statement of [
       armStatement,
-      `${'describe'}('x', () => { ${armStatement} });`,
-      `${'suite'}('x', function () { ${'describe'}.each([1])('y %s', () => { ${armStatement} }); });`,
-      `${'describe'}('x', () => ${armStatement.replace(/;$/, '')});`,
-      `import { ${'describe'}, ${'it'} } from 'vitest'; ${'describe'}.each([1])('x %s', () => { ${armStatement} });`,
-      `${'describe'}.each${'`'}a\n${'$'}{1}${'`'}('x', () => { ${armStatement} });`
+      `${'it'}('CT1: y', () => { expect(1).toBe(1); }, 20_000);`,
+      `${'it'}('CT1: y', async function () { expect(1).toBe(1); });`,
+      inSuite(`${'describe'}('x',`),
+      `${'describe'}('x', function () { ${inSuite(`${'describe'}('y',`)} });`,
+      `import { ${'describe'}, ${'it'} } from 'vitest'; ${inSuite(`${'describe'}('x',`)}`,
+      `${'describe'}('x', () => { beforeEach(() => {}); const n = 1; ${armStatement} });`,
+      `${'describe'}('x', () => { ${'it'}('CT2: other', () => { return; }); ${armStatement} });`
     ])
-      expect(disabledIn(statement), `${statement} is credited`).toEqual([]);
-
-    // One report per declaration: a chain is read at its last link, so the
-    // curried call inside it is not a second suite.
-    expect(disabledIn(`${'describe'}.skipIf(true)('x', () => {});`)).toEqual(['x.test.ts:1']);
+      expect(inspect(statement, 'x.test.ts').disabled, `${statement} is credited`).toEqual([]);
 
     // The walker itself, over a directory that exists.
     const sandbox = mkdtempSync(join(tmpdir(), 'nosvelte-contracts-'));
@@ -662,7 +581,9 @@ describe('the production contract bridge', () => {
         'CT7 in deep/empty.test.ts',
         'CT9 in deep/empty.test.ts'
       ]);
-      expect(found.disabled.sort()).toEqual(['deep/skipped.test.ts:2']);
+      expect(found.disabled.sort()).toEqual([
+        'deep/skipped.test.ts:3 (not in the shape this bridge credits)'
+      ]);
       expect(found.unreadable).toEqual([]);
       expect(found.duplicates).toEqual([]);
       writeFileSync(
@@ -677,68 +598,31 @@ describe('the production contract bridge', () => {
         ].join('\n')
       );
       expect(collectFrom(sandbox).disabled.sort()).toEqual([
-        'deep/skipped.test.ts:2',
-        'wrapped.test.ts:2 (disabled by its options)'
+        'deep/skipped.test.ts:3 (not in the shape this bridge credits)',
+        'wrapped.test.ts:2 (not in the shape this bridge credits)'
       ]);
       rmSync(join(sandbox, 'wrapped.test.ts'));
-      // A modifier after the first call of a suite chain: through the walker,
-      // because the chain is what the walker extracts. The curried form, which
-      // runs, is the control.
-      // How a suite is disabled, through the walker, because the declaration
-      // the walker extracts is what decides: a modifier after the first call,
-      // a tagged template, the `suite` alias, and the suite's own options. The
-      // running forms beside them are the controls — a curried `.each`, an
-      // ordinary option, and a body that happens to hold `skip: true`.
-      const tick = String.fromCharCode(96);
-      const suiteSource = (opening: string, id: string, body = ''): string =>
+      // Through the walker as well: a suite out of shape refuses the arm inside
+      // it, and the plain suite beside it is credited.
+      const suiteSource = (opening: string, id: string): string =>
         [
           `${opening} () => {`,
-          ...(body === '' ? [] : [`  ${body}`]),
           '  // @contracts A8-C1',
           `  ${'it'}('${id}: inside', () => { expect(1).toBe(1); });`,
           '});'
         ].join('\n');
       const suites: Record<string, string> = {
         'each-skip': suiteSource(`${'describe'}.each([1]).skip('x %s',`, 'CT14'),
-        'each-only': suiteSource(`${'describe'}.each([1]).only('x %s',`, 'CT15'),
-        'tagged-skip': suiteSource(
-          `${'describe'}.skip.each${tick}\n  a\n  $${'{'}1}\n${tick}('x $a',`,
-          'CT17'
-        ),
-        'alias-skip': suiteSource(`${'suite'}.skip('x',`, 'CT18'),
-        'options-skip': suiteSource(`${'describe'}('x', { skip: true },`, 'CT19'),
-        'options-only': suiteSource(`${'suite'}('x', { only: true },`, 'CT20'),
-        'each-runs': suiteSource(`${'describe'}.each([1])('x %s',`, 'CT16'),
-        'options-run': suiteSource(`${'describe'}('x', { timeout: 5 },`, 'CT21'),
-        'body-says-skip': suiteSource(`${'describe'}('x',`, 'CT22', 'const o = { skip: true };')
+        'options-run': suiteSource(`${'describe'}('x', { timeout: 5 },`, 'CT15'),
+        plain: suiteSource(`${'describe'}('x',`, 'CT16')
       };
       for (const [file, source] of Object.entries(suites))
         writeFileSync(join(sandbox, `${file}.test.ts`), source);
-      const walked = collectFrom(sandbox);
-      expect(walked.disabled.sort()).toEqual([
-        'alias-skip.test.ts:1',
-        'deep/skipped.test.ts:2',
-        'each-only.test.ts:1',
-        'each-skip.test.ts:1',
-        'options-only.test.ts:1 (disabled by its options)',
-        'options-skip.test.ts:1 (disabled by its options)',
-        'tagged-skip.test.ts:1'
+      expect(collectFrom(sandbox).disabled.sort()).toEqual([
+        'deep/skipped.test.ts:3 (not in the shape this bridge credits)',
+        'each-skip.test.ts:3 (not in the shape this bridge credits)',
+        'options-run.test.ts:3 (not in the shape this bridge credits)'
       ]);
-      expect(walked.tests.has('CT17'), 'the arm inside the tagged suite was read').toBe(true);
-
-      // And an arm that skips itself through its context, after a statement,
-      // so that nothing but the body check can see it.
-      writeFileSync(
-        join(sandbox, 'context-skip.test.ts'),
-        [
-          '  // @contracts A9-C1',
-          `  ${'it'}('CT23: skips itself', (ctx) => { const x = 1; ctx.skip(); expect(x).toBe(1); });`
-        ].join('\n')
-      );
-      expect(collectFrom(sandbox).disabled).toContain(
-        'context-skip.test.ts:2 (skipped from inside its body)'
-      );
-      rmSync(join(sandbox, 'context-skip.test.ts'));
       for (const file of Object.keys(suites)) rmSync(join(sandbox, `${file}.test.ts`));
       writeFileSync(
         join(sandbox, 'prose.test.ts'),
