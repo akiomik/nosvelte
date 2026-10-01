@@ -294,7 +294,9 @@ character changed here fails rather than drifts; and it fails on the comparison 
 timeout if the duplication ever stops, which is what a characterization test is for. **Which
 direction that runs matters and was chosen deliberately**: the test reads the record because the
 record is what survives, and a record citing a test id it cannot check is the same unchecked claim
-one level indirect.
+one level indirect. **`CN1` itself is the spike branch's**: these records reached the library's main
+line without it, and carrying it there is the port's (`0005`'s roster, the `src/tests/stores/`
+line); until it lands, nothing on that line checks this fence.
 
 **What makes it evidence about the split rather than a bug report** is where the fix has to go. On
 the shipped path the relay's identity is whatever string the caller wrote, established nowhere and

@@ -494,13 +494,15 @@ that existed was fetched is decided by the backward leg — its end, its timeout
 whether anything can still arrive is decided by the forward leg. The first is on the value's
 completeness; the second is the activity axis and the diagnostics, which 0004 owns.
 
-**The completeness axis has all four of its inputs now, and one of them used to be unreachable.**
-`IncompleteCause` names `timeout`, `verification-timeout`, `refused` and `ended`. `ended` had a
-variant in the type, a branch in the derivation and no code path that could set it. The backward leg
-ended on a single signal — rx-nostr completing the subscription, or the request's own timer — and
-rx-nostr _completes_ that subscription when every target relay's connection has died (measured at
-rx-nostr 3.7.5, SEN13), so a backlog that reached nobody was reported as one that had heard from
-everybody. 0002's A5 is where that is fixed; what changes here is what the backlog record holds.
+**The completeness axis has all five of its inputs now, and one of them used to be unreachable.**
+`IncompleteCause` names `timeout`, `verification-timeout`, `refused`, `ended` and
+`ephemeral-event-omitted` — the last is B7a's, above: an arrival this library took out of the
+answer. `ended` had a variant in the type, a branch in the derivation and no code path that could
+set it. The backward leg ended on a single signal — rx-nostr completing the subscription, or the
+request's own timer — and rx-nostr _completes_ that subscription when every target relay's
+connection has died (measured at rx-nostr 3.7.5, SEN13), so a backlog that reached nobody was
+reported as one that had heard from everybody. 0002's A5 is where that is fixed; what changes here
+is what the backlog record holds.
 
 `verification-timeout` is the fourth, and it is the one input that is **not** about a relay: it says
 the backward leg's signature gate was cut while still holding candidates it had admitted and not yet

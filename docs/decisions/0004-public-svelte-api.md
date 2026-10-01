@@ -87,14 +87,15 @@ the strength it can be re-run at.
 **There is a fifth state.** Four could not say that an answer arrived and is not the whole answer,
 so the same partial fetch was reported as a success or a failure depending on how many events
 happened to arrive from elsewhere — and the error it rendered had no error to render, since nothing
-had failed. `incomplete` carries why: the timer ran out, a relay refused, the leg died, or the
-verifier answered too slowly to be waited for — four causes, which is what `IncompleteCause`
-declares and what this sentence, the first description a reader meets, listed three of. The slots
-stay at four; an incomplete answer with something in it renders what it has, and what marks it
-partial travels on the state and, when there is nothing to render, on the argument the error slot is
-handed — an `IncompleteResultError` built from that state's own causes. This sentence used to end
-"on the state and the diagnostics, which now report the same thing", and the diagnostics report the
-most recent failure, which is the same thing only while nothing has thrown.
+had failed. `incomplete` carries why: the timer ran out, a relay refused, the leg died, the verifier
+answered too slowly to be waited for, or an ephemeral event was taken out of the backlog (`0003`'s
+B7a) — five causes, which is what `IncompleteCause` declares, and this sentence, the first
+description a reader meets, has listed three and then four of them. The slots stay at four; an
+incomplete answer with something in it renders what it has, and what marks it partial travels on the
+state and, when there is nothing to render, on the argument the error slot is handed — an
+`IncompleteResultError` built from that state's own causes. This sentence used to end "on the state
+and the diagnostics, which now report the same thing", and the diagnostics report the most recent
+failure, which is the same thing only while nothing has thrown.
 
 **C-δ's map is the scope's membership and the client's connections, and that is two answers rather
 than one.** The question that went back to the review was whether the relay axis should report the
@@ -180,10 +181,12 @@ exist — which it cannot tell from a request whose own settle timeout is thirty
 tab whose timers are throttled. So there is no second clock, and two things end the wait: the
 attempt reaching an outcome, or the attempt ceasing to exist — the consumer torn down, the entry
 removed, the attempt replaced by another fetch of the same request, the trigger that opened no
-request. Those abort; a disposed provider still rejects; an attempt that failed is still an outcome
-rather than a rejection. The forward leg is re-opened in a new generation either way, and is not
-part of what the Promise waits for — forward liveness is the activity axis and the diagnostics,
-which report continuously and do not need a Promise to say so.
+request. Those abort, and the call resolves rather than rejects (ruling 5); so does a provider
+disposed under the call, with its own reason, and only a call made after the provider is gone
+rejects. An attempt that failed is still an outcome rather than a rejection. The forward leg is
+re-opened in a new generation either way, and is not part of what the Promise waits for — forward
+liveness is the activity axis and the diagnostics, which report continuously and do not need a
+Promise to say so.
 
 **Removing the ceiling did not put a guarantee of termination in its place, and this record wrote
 one down as though it had.** The sentence was "a running attempt always reaches an end because the
@@ -302,23 +305,27 @@ that window reaches neither. The events already held are kept, so nothing visibl
 in a live feed is not nothing. Closing it needs the two legs to have separate lifetimes, and that is
 a change to 0002 rather than a wording change here.
 
-**An abort is told apart by `name`, and that is the contract.** The two kinds of rejection are acted
-on differently and always have been: a consumer whose component went away wants the abort ignored,
-and wants a refused descriptor or a disposed provider shown. Without a stated discriminant every
-rejection looks the same in a `catch`, so the abort carries `name: 'AbortError'` — the vocabulary
-the platform already uses for a cancelled `fetch`, and one a consumer is likely to be handling
-before they meet this library. Nothing else this Promise rejects with uses that name.
+**A lifetime ending is told apart by the outcome, not in a `catch`.** The two kinds of ending are
+acted on differently and always have been: a consumer whose component went away wants the abort
+ignored, and wants a refused descriptor or a disposed provider shown. This paragraph used to make
+the abort a rejection carrying `name: 'AbortError'`, so that the two could be told apart in a
+`catch`; ruling 5 moved it instead. The consumer going away, the attempt being replaced, and the
+provider disposing under the call resolve `{ kind: 'cancelled' }` with a reason naming whose
+lifetime ended, and what stays on the rejection — a refused descriptor, a missing provider, a call
+made after the provider is gone — is what a consumer wants shown. An abort raised by something that
+is not this library's still rejects, with the value it was raised with: an outcome that answered
+"cancelled" for a reason it cannot recognise would swallow the one case a consumer has to see.
 
-A class is deliberately not published in its place. Publishing one asks a consumer to import a
-symbol to ask a question the platform already answers, and the answer has to keep working for an
-abort raised by something that is not ours.
+No class is published for the cancellation either. The discriminant is the outcome's `kind` and
+`reason`, which are values a consumer already holds.
 
 Because the outcomes differ in ways a consumer acts on, it returns them rather than resolving to
 nothing. A refusal or a timeout is not an exception — the attempt happened and came back partial —
-so it resolves as `incomplete` rather than rejecting. A rejected descriptor, a disposed provider or
-an abort during the call are failures of the call itself, and reject. A request that cannot be sent
-at all resolves as `not-started` with the reason, because "nothing came back" and "nothing was
-asked" are the distinction C12 exists to keep.
+so it resolves as `incomplete` rather than rejecting. A rejected descriptor, a missing provider or a
+call made after the provider is gone are failures of the call itself, and reject; an abort during
+the call — including the provider disposing under it — is a lifetime ending, and resolves
+`cancelled`. A request that cannot be sent at all resolves as `not-started` with the reason, because
+"nothing came back" and "nothing was asked" are the distinction C12 exists to keep.
 
 **"A disposed provider" is a browser sentence, and the order the two questions are asked in is
 decided.** On the server there is no transport to dispose — C6 now says the provider owns none there
@@ -747,8 +754,9 @@ interface ReqHandle {
   readonly activity: QueryActivity;
   readonly diagnostics: ReqDiagnostics;
   // C11, decided above: one meaning whatever the request, resolving on *that*
-  // attempt's outcome, rejecting only for a refused descriptor, a disposed
-  // provider or an abort.
+  // attempt's outcome — `cancelled` when a lifetime ends under it — and
+  // rejecting only for a refused descriptor, a missing provider or a provider
+  // already gone.
   refresh(): Promise<RefreshOutcome>;
 }
 
@@ -1089,16 +1097,18 @@ written in an indented block rather than a fenced one because the fenced blocks 
 what the library ships and `LK13` holds them to that; this ships with the implementation.
 `filters: []` and `authors: []` are **not** the encoding — they stay `B8`'s genuine empty-set
 questions, which is also what stops a descriptor being validated for a question nobody is asking.
-There is no `cancel()`: `refresh()` closes and re-opens, which is the opposite. And the `AbortError`
-this record contracts is therefore not reachable by a consumer at all — it is the teardown's, and a
-consumer holds no signal. Each is a v1 omission rather than an oversight: a deferral flag is a field
-on the descriptor and so a cache-identity question (`0003`), and a cancel is a handle operation
-whose interaction with the query layer's own lifetime nobody has decided. **Per-relay selection is
-the fourth**: the relay set is the provider's prop, so two relay sets on one page means two
+There is no `cancel()`: `refresh()` closes and re-opens, which is the opposite. And an abort is
+therefore not something a consumer raises at all — it is the teardown's, a consumer holds no signal,
+and since ruling 5 it resolves `cancelled` rather than rejecting. Each is a v1 omission rather than
+an oversight: a deferral flag is a field on the descriptor and so a cache-identity question
+(`0003`), and a cancel is a handle operation whose interaction with the query layer's own lifetime
+nobody has decided. **Per-relay selection was the fourth, and it is no longer an omission
+(ruling 3)**: the relay set was the provider's prop alone, so two relay sets on one page meant two
 providers, which `C6` says share nothing — two connections, two caches, the same event twice. That
-is the one `req` use case the descriptor does not cover, and `C3`'s falsifier names exactly that
-shape; it is recorded here as a known gap for a reviewer to rule on rather than left for a port to
-discover.
+was the one `req` use case the descriptor did not cover, and `C3`'s falsifier names exactly that
+shape; it was recorded here as a known gap for a reviewer to rule on, and the ruling added
+`ReqDescriptor.relays`, a target set resolved inside the provider's readable scope. The passage is
+kept as the state that ruling answered.
 
 **And the fifth is not an omission of an option but of a direction — sending — and v1 publishes it
 as an operation rather than as the connection (ruling 17).** Today's surface exports `app`, a
@@ -1831,9 +1841,11 @@ type ReqErrorCode = ReqError['code'];
 // **capability, not the client**: the request path — `requestTargets`, the
 // machine, the stream — takes operations, and no expression anywhere yields an
 // `RxNostr` a caller can keep. Disposal is one linearised operation: revoke,
-// cancel the running attempts, reject what `refresh()` still holds, dispose
-// last (`0005`'s `C11-C17`). A request cannot fail with this code, because after
-// the revoke there is no request to fail.
+// cancel the running attempts — a `refresh()` still outstanding resolves
+// `{ kind: 'cancelled', reason: 'provider-disposed' }` — and dispose last
+// (`0005`'s `C11-C17`). What rejects with this code is a `refresh()` called
+// *after* the teardown; a request cannot fail with it, because after the revoke
+// there is no request to fail.
 //
 // **A lease that handed the client back would not buy this**, and one did for a
 // round: `claim()` returned the raw `RxNostr`, so revocation changed only the
@@ -2009,8 +2021,9 @@ type RelayLegError = Extract<ReqError, { readonly code: 'relay-failed' }>;
 // typed, so the discriminant a consumer needs is `state.error.code`.
 //
 // **Ruled to change: the lifecycle cancellations leave this channel.** An
-// ordinary navigation is not a failure, so `attempt-abandoned` and
-// `provider-disposed` move to the resolved value —
+// ordinary navigation is not a failure, so `attempt-abandoned`, and a
+// `provider-disposed` that lands under a call already outstanding, move to the
+// resolved value —
 //
 //     | { kind: 'cancelled'; reason: 'consumer-released' | 'provider-disposed' }
 //     | { kind: 'not-started'; reason: 'released' | 'deferred' | 'server' | 'no-readable-relay' }
@@ -2022,13 +2035,17 @@ type RelayLegError = Extract<ReqError, { readonly code: 'relay-failed' }>;
 // the union shrinks with them**: if `attempt-abandoned` and `provider-disposed`
 // then reach no published channel, their `ReqError` variants are deleted rather
 // than left as members a consumer can branch on and never receive.
+// `attempt-abandoned` reached none and its variant is gone; `provider-disposed`
+// still reaches the rejection of a `refresh()` called *after* the teardown, so
+// it stays.
 //
 // **And what `refresh()` rejects with is a runtime contract, not a published
 // type.** A promise's rejection has no place in a TypeScript signature, so an
 // exported alias for it buys a consumer nothing they can hold. The set is
-// **`invalid-descriptor`, `unsupported-filter`, `descriptor-unreadable`,
-// `missing-provider`, `attempt-abandoned` and `provider-disposed`**, one witness
-// per code: `RM4`, `RM1`, `RM11`, `RM26`, `RM2` and `RM8` in that order. The list
+// **`invalid-descriptor`, `unsupported-filter`, `relay-not-in-scope`,
+// `descriptor-unreadable`, `missing-provider` and `provider-disposed`**, one
+// witness per code: `RM4`, `RM1`, `RM28`, `RM11`, `RM26` and `RM8` in that
+// order; `attempt-abandoned` left it with the lifecycle cancellations. The list
 // used to name four arms for five codes and two of them produced neither —
 // `descriptor-unreadable` had no rejection witness at all. `missing-provider`
 // joined when the code did, and its cell in `0005`'s matrix was `—` for a
@@ -2105,17 +2122,18 @@ serializer, which this record does not.
 column: if two rows would send a consumer to the same remedy, they share a code. Nothing here is a
 taxonomy of the library's internals.
 
-| Where it enters                                                                                    | `code`                  | Beyond the base                            | Which surfaces carry it                                                              | What a consumer does                                      |
-| -------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| A descriptor field this library refuses — including an `rxNostr` **the caller owns** and disposed  | `invalid-descriptor`    | `field`                                    | `state.error`, `lastError`, the `error` slot, **and what `refresh()` rejects with**  | fix the field it names                                    |
-| A filter field it does not support, or cannot accept as written                                    | `unsupported-filter`    | `field`                                    | the same four                                                                        | change the filter                                         |
-| Anything **thrown** below the seven guarded descriptor reads — a filter element getter, `scope.id` | `descriptor-unreadable` | the captured four, `source: 'descriptor'`  | the same four                                                                        | their own code threw; the copy quotes what it said        |
-| A relay or the transport gave out                                                                  | `relay-failed`          | the captured four, `source: 'relay'`       | **`legEnded.error`, and nothing else**                                               | retry, or look at the relay                               |
-| The answer came back partial                                                                       | `incomplete-result`     | `incompleteCauses`                         | `status: 'incomplete'` and its slot; `lastError` when nothing threw                  | refresh, widen the settle timeout, or render what arrived |
-| An attempt was given up before it answered                                                         | `attempt-abandoned`     | —                                          | **only what `refresh()` rejects with**                                               | your call was superseded, or the consumer went away       |
-| An accumulator broke the contract this library folds through                                       | `accumulator-contract`  | —                                          | `state.error`, `lastError`, the slot, **and `RefreshOutcome`'s `{ kind: 'error' }`** | fix the accumulator                                       |
-| The **provider** revoked the transport it owns, with a `refresh()` outstanding                     | `provider-disposed`     | —                                          | **only what `refresh()` rejects with**                                               | this handle will not recover; make a new provider         |
-| Anything the query rejected with that is none of the above                                         | `unspecified`           | the captured four, `source: 'unspecified'` | `state.error`, `lastError`, the slot, **and the outcome**                            | read `message`; the library cannot attribute it           |
+| Where it enters                                                                                                                        | `code`                  | Beyond the base                            | Which surfaces carry it                                                              | What a consumer does                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| A descriptor field this library refuses — including an `rxNostr` **the caller owns** and disposed                                      | `invalid-descriptor`    | `field`                                    | `state.error`, `lastError`, the `error` slot, **and what `refresh()` rejects with**  | fix the field it names                                    |
+| A filter field it does not support, or cannot accept as written                                                                        | `unsupported-filter`    | `field`                                    | the same four                                                                        | change the filter                                         |
+| Anything **thrown** below the seven guarded descriptor reads — a filter element getter, `scope.id`                                     | `descriptor-unreadable` | the captured four, `source: 'descriptor'`  | the same four                                                                        | their own code threw; the copy quotes what it said        |
+| A descriptor's `relays` names a relay the provider does not read from                                                                  | `relay-not-in-scope`    | `url`, `configured`                        | the same four                                                                        | name a relay the provider reads, or configure it there    |
+| No provider above the hook                                                                                                             | `missing-provider`      | —                                          | the same four                                                                        | put the tree under a provider                             |
+| A relay or the transport gave out                                                                                                      | `relay-failed`          | the captured four, `source: 'relay'`       | **`legEnded.error`, and nothing else**                                               | retry, or look at the relay                               |
+| The answer came back partial                                                                                                           | `incomplete-result`     | `incompleteCauses`                         | `status: 'incomplete'` and its slot; `lastError` when nothing threw                  | refresh, widen the settle timeout, or render what arrived |
+| An accumulator broke the contract this library folds through                                                                           | `accumulator-contract`  | —                                          | `state.error`, `lastError`, the slot, **and `RefreshOutcome`'s `{ kind: 'error' }`** | fix the accumulator                                       |
+| A `refresh()` called after the **provider** revoked the transport it owns — a call the revoke lands under resolves `cancelled` instead | `provider-disposed`     | —                                          | **only what `refresh()` rejects with**                                               | this handle will not recover; make a new provider         |
+| Anything the query rejected with that is none of the above                                                                             | `unspecified`           | the captured four, `source: 'unspecified'` | `state.error`, `lastError`, the slot, **and the outcome**                            | read `message`; the library cannot attribute it           |
 
 **This table and the six surface aliases are the fixed v1 contract.** Six, and the count said seven:
 the seventh column — what `refresh()` rejects with — has no published alias, which is a decision
@@ -2140,21 +2158,22 @@ its remedy.
 **Read the fourth column, because it is the half a table like this usually gets wrong.** Every cell
 above is measured, and four of them were wrong when they were written from the class list instead of
 from the paths: `attempt-abandoned` was recorded as reaching `state.error` and `lastError` and
-reaches neither — it is an `AbortSignal` reason, and the only reader that publishes it is
-`refresh()`'s rejection; `internal-failure` was recorded as reaching `legEnded.error`, which no
-value can, because every leg-end reason goes through the relay door; `relay-failed` was recorded as
-also reaching `state.error`, which it does not with either accumulator this library ships, since a
-relay giving out writes a leg record and the answer comes back **incomplete** rather than failed;
-and the three descriptor codes omitted the rejection, which is the second, deliberate publication
-point.
+reached neither — it is an `AbortSignal` reason, and the one reader that published it was
+`refresh()`'s rejection, which it has since left for the resolved `cancelled` outcome (ruling 5);
+`internal-failure` was recorded as reaching `legEnded.error`, which no value can, because every
+leg-end reason goes through the relay door; `relay-failed` was recorded as also reaching
+`state.error`, which it does not with either accumulator this library ships, since a relay giving
+out writes a leg record and the answer comes back **incomplete** rather than failed; and the three
+descriptor codes omitted the rejection, which is the second, deliberate publication point.
 
 **The distinction a consumer most needs from this table is rejects-versus-resolves.** `refresh()`
-**rejects** for a descriptor refusal, an abandoned attempt and a disposed provider; it **resolves**
-`{ kind: 'error' }` for an accumulator's contract and for anything unattributable. A caller who
-awaited it inside a `try` sees the first three there and has to inspect the outcome for the other
-two.
+**rejects** for a descriptor refusal, a missing provider and a call made after the provider is gone;
+it **resolves** `{ kind: 'error' }` for an accumulator's contract and for anything unattributable,
+and `{ kind: 'cancelled' }` for an abandoned attempt and a provider disposed under the call. A
+caller who awaited it inside a `try` sees the first three there and has to inspect the outcome for
+the rest.
 
-**`unspecified` is the complement, not a ninth entrance.** It is the permanent home for a cause this
+**`unspecified` is the complement, not a tenth entrance.** It is the permanent home for a cause this
 library cannot attribute, and a new internal cause maps into it rather than growing the union,
 because **adding a member is a breaking change** — an exhaustive `switch` in a consumer stops
 compiling. There was a second such home, `internal-failure`, and it is gone: it had collected a
@@ -2950,22 +2969,23 @@ answer _is_, they outlive every write that does not change it, and an Error in p
 compared any other way.
 
 **What the members mean is 0002's and 0003's to say, and what a consumer does with them is this
-record's.** `IncompleteCause` has four: `timeout`, `verification-timeout`, `refused` and `ended`.
-This surface publishes them because a partial answer is not one thing to a caller — retry copy,
-failure classification and telemetry all branch on _which_ partial — so the union is sized by what a
-consumer must be able to distinguish rather than by how often each member is reached. The pair that
-most needs distinguishing is the two the request owns, and they are independent facts rather than
-two classes. `timeout` says this request stopped hearing from a backward target — its own settle
-timer drew the boundary, or a target was still undetermined when the outcome was derived — and what
-it points at is the relays and the network. `verification-timeout` says the backward leg's signature
-gate was cut with candidates still inside it (A-ε), and what it points at is the verifier or the
-device. **Neither implies anything about the other, and one relay produces both** (`A-ε-C14`), so a
-consumer handed both has two things to act on rather than a classification to make. **Raising
-`settleTimeoutMs` is not the recovery for the second**: the drain budget is A-ζ's, it belongs to the
-gate, and no caller sets it. They were one word for a round; a consumer reading it could act on
-neither, and the branch a caller could not write is the cost that decided it. **A consumer that
-wants one word writes the fold itself** — `causes` is the non-empty list, and choosing a
-representative from it is a pure function this library does not have to pick for them.
+record's.** `IncompleteCause` has five: `timeout`, `verification-timeout`, `refused`, `ended` and
+`ephemeral-event-omitted`. This surface publishes them because a partial answer is not one thing to
+a caller — retry copy, failure classification and telemetry all branch on _which_ partial — so the
+union is sized by what a consumer must be able to distinguish rather than by how often each member
+is reached. The pair that most needs distinguishing is the two the request owns, and they are
+independent facts rather than two classes. `timeout` says this request stopped hearing from a
+backward target — its own settle timer drew the boundary, or a target was still undetermined when
+the outcome was derived — and what it points at is the relays and the network.
+`verification-timeout` says the backward leg's signature gate was cut with candidates still inside
+it (A-ε), and what it points at is the verifier or the device. **Neither implies anything about the
+other, and one relay produces both** (`A-ε-C14`), so a consumer handed both has two things to act on
+rather than a classification to make. **Raising `settleTimeoutMs` is not the recovery for the
+second**: the drain budget is A-ζ's, it belongs to the gate, and no caller sets it. They were one
+word for a round; a consumer reading it could act on neither, and the branch a caller could not
+write is the cost that decided it. **A consumer that wants one word writes the fold itself** —
+`causes` is the non-empty list, and choosing a representative from it is a pure function this
+library does not have to pick for them.
 
 **And it is one array across the surfaces, not one array per surface.** An incomplete answer
 publishes its causes three times — `state.causes`, the `incompleteCauses` of the Error the error
