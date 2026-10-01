@@ -1432,11 +1432,12 @@ survives.** A request built with neither an explicit verifier nor a provider is 
 request fails** — `status: 'error'` with an Error naming the two ways out, use it inside a provider,
 which supplies one, or pass `verifyEvent`. **This said "the hook throws" and that is the one thing
 it must not do**: an exception on the way through a component is the shape this redesign is
-answering, and the refusal is carried as a rejected query function for exactly that reason. The
-place where a throw at construction _is_ the decision is `C16`'s first render, and it is argued
-there. Nothing is asked of the relay first, which matters, because refusing after the REQ has gone
-means the events are already on their way to a consumer that trusts whatever arrives. `AE11` is the
-witness, and it fails when the accept-everything fallback is put back.
+answering, and the refusal is carried as a rejected query function for exactly that reason. No
+construction throws by decision any more: `C16`'s first render was the one place, until ruling 13
+moved a refused first relay list onto the diagnostics hook as well. Nothing is asked of the relay
+first, which matters, because refusing after the REQ has gone means the events are already on their
+way to a consumer that trusts whatever arrives. `AE11` is the witness, and it fails when the
+accept-everything fallback is put back.
 
 The alternative was to keep that fallback as residue, and it was rejected: the round that found a
 verifier not reaching the engine cannot ship one path where none has to, and signature verification

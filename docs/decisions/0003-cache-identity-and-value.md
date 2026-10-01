@@ -505,8 +505,8 @@ connection has died (measured at rx-nostr 3.7.5, SEN13), so a backlog that reach
 reported as one that had heard from everybody. 0002's A5 is where that is fixed; what changes here
 is what the backlog record holds.
 
-`verification-timeout` is the fourth, and it is the one input that is **not** about a relay: it says
-the backward leg's signature gate was cut while still holding candidates it had admitted and not yet
+`verification-timeout` is the fourth, and it is an input that is **not** about a relay: it says the
+backward leg's signature gate was cut while still holding candidates it had admitted and not yet
 verified inside the boundary (0002's A-ε defines that boundary, and why such a candidate was never
 `accepted`), and it says nothing about how far any relay got. Every relay can have answered and the
 answer still carry it — and so can a relay that sent one EVENT and no EOSE at all (`A-ε-C14`). It is
@@ -707,11 +707,10 @@ order, which is not canonical and is exactly what the rank exists to replace. On
 ranks are pairwise distinct and behavior tests assert the exact array for the pairs that co-occur,
 so the order is fixed by measurement rather than by construction. **And the order itself is here,
 because a port cannot re-derive it from anything else in these records**: `refused`, `timeout`,
-`verification-timeout`, `ended`, `ephemeral-event-omitted` — the last because it is the one cause
-that is not about a relay failing to answer: the relays did answer, and this library took something
-out of what they said. That was measured by reading these records as a port would — the rank table
-is argued at length and its contents were nowhere, so "a canonical order" was a promise with no way
-to keep it.
+`verification-timeout`, `ended`, `ephemeral-event-omitted` — the last because the relays did answer
+and this library took something out of what they said. That was measured by reading these records as
+a port would — the rank table is argued at length and its contents were nowhere, so "a canonical
+order" was a promise with no way to keep it.
 
 **And the gap is narrower than that reads, which is worth knowing before paying to close it.**
 Derivation order here already ascends through the ranks, so a tie alone changes nothing observable:
