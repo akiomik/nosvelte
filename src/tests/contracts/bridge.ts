@@ -149,6 +149,33 @@ export const callAt = (source: string, at: number): string => {
 };
 
 /**
+ * The whole declaration chain that starts at `at`: the callee, every member
+ * and every call after it — `describe.each([1]).skip('x', fn)` and the curried
+ * `describe.each([1])('x', fn)` alike.
+ *
+ * `callAt` stops at the first call's closing parenthesis, which for a
+ * parametrised suite is `describe.each([1])`, so a disabling modifier written
+ * after it was invisible and the arms inside were credited as running.
+ */
+export const chainAt = (source: string, at: number): string => {
+  let index = at;
+  let text = '';
+  for (;;) {
+    const open = source.indexOf('(', index);
+    if (open === -1) break;
+    const callee = source.slice(index, open);
+    // Only a name, or members of one, may stand between two calls.
+    if (!/^\s*(?:\.?\s*[A-Za-z_$][\w$]*\s*)*$/.test(callee)) break;
+    const call = callAt(source, open);
+    text += callee + call;
+    index = open + call.length;
+    if (!/^\s*[.(]/.test(source.slice(index))) break;
+  }
+
+  return text;
+};
+
+/**
  * The rows each test arm declares, its call text, and the ids declared twice.
  *
  * A marker `@contracts <id> …` belongs to the arm it sits **directly** above:
@@ -279,9 +306,10 @@ export const collectFrom = (root: string): Landings => {
     const strippedLines = stripped.split('\n');
     for (const [at, line] of source.split('\n').entries()) {
       if (!/^\s*(it|describe|test)\b/.test(line)) continue;
-      // The call rather than the line, because the title may be on the next one.
+      // The whole chain rather than the line, because the title may be on the
+      // next one and a modifier may follow the first call.
       const from = strippedLines.slice(0, at).join('\n').length + (at > 0 ? 1 : 0);
-      const call = callAt(stripped, from).replace(/\s+/g, ' ').trim();
+      const call = chainAt(stripped, from).replace(/\s+/g, ' ').trim();
       for (const why of collectDisabled(call)) disabled.push(`${file}:${at + 1}${why}`);
       // Only a title that means to be an id — one with a digit in it — is held
       // to the id shape; `it('rejects: an empty filter', …)` is prose.

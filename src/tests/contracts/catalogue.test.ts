@@ -562,6 +562,26 @@ describe('the production contract bridge', () => {
         'wrapped.test.ts:2 (disabled by its options)'
       ]);
       rmSync(join(sandbox, 'wrapped.test.ts'));
+      // A modifier after the first call of a suite chain: through the walker,
+      // because the chain is what the walker extracts. The curried form, which
+      // runs, is the control.
+      const suite = (chain: string, id: string): string =>
+        [
+          `${'describe'}${chain}('x %s', () => {`,
+          '  // @contracts A8-C1',
+          `  ${'it'}('${id}: inside', () => { expect(1).toBe(1); });`,
+          '});'
+        ].join('\n');
+      writeFileSync(join(sandbox, 'each-skip.test.ts'), suite('.each([1]).skip', 'CT14'));
+      writeFileSync(join(sandbox, 'each-only.test.ts'), suite('.each([1]).only', 'CT15'));
+      writeFileSync(join(sandbox, 'each-runs.test.ts'), suite('.each([1])', 'CT16'));
+      expect(collectFrom(sandbox).disabled.sort()).toEqual([
+        'deep/skipped.test.ts:2',
+        'each-only.test.ts:1',
+        'each-skip.test.ts:1'
+      ]);
+      for (const file of ['each-skip', 'each-only', 'each-runs'])
+        rmSync(join(sandbox, `${file}.test.ts`));
       writeFileSync(
         join(sandbox, 'prose.test.ts'),
         [

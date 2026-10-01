@@ -587,9 +587,13 @@ describe('query-core, exercised directly', () => {
     // not because A12 needs it. It is measured against the resolved query-core
     // (`DS10` pins the version).
     const client = new QueryClient({
-      defaultOptions: { queries: { enabled: true, staleTime: 111 } }
+      defaultOptions: { queries: { enabled: true, staleTime: 111, refetchOnWindowFocus: false } }
     });
-    client.setQueryDefaults(['nosvelte'], { enabled: true, gcTime: 222 });
+    client.setQueryDefaults(['nosvelte'], {
+      enabled: true,
+      gcTime: 222,
+      refetchOnWindowFocus: true
+    });
 
     // The library's own options, as `useStreamedReq` composes them on the
     // server: our key, and the one value A12 turns on.
@@ -607,6 +611,19 @@ describe('query-core, exercised directly', () => {
     expect(resolved.staleTime).toBe(111);
     expect(resolved.gcTime).toBe(222);
 
+    // **The boundary between the two default layers, on a key only they
+    // contest.** `enabled` is `true` in both and the other keys are disjoint, so
+    // without this key the two layers could fold in either order with every
+    // assertion above unchanged — a reviewer reversed them and measured that.
+    // `refetchOnWindowFocus` is set by both, differently, and left unset per
+    // query: the per-key value is the one that wins, and the reverse order of
+    // the same two layers would answer the other way.
+    expect(resolved.refetchOnWindowFocus).toBe(true);
+    const clientWide = { refetchOnWindowFocus: false };
+    const perKey = { refetchOnWindowFocus: true };
+    expect({ ...clientWide, ...perKey }.refetchOnWindowFocus).toBe(true);
+    expect({ ...perKey, ...clientWide }.refetchOnWindowFocus).toBe(false);
+
     // **The control, in the same run: the reverse fold answers differently on
     // this very input.** Without it, `enabled: false` winning is equally
     // satisfied by an input on which both orders agree — which is the shape of
@@ -621,6 +638,9 @@ describe('query-core, exercised directly', () => {
     // not taken on trust: with the per-query value absent, the consumer's
     // default is what the query runs under.
     expect(client.defaultQueryOptions({ queryKey: ['nosvelte', 'sen28b'] }).enabled).toBe(true);
+    expect(
+      client.defaultQueryOptions({ queryKey: ['nosvelte', 'sen28b'] }).refetchOnWindowFocus
+    ).toBe(true);
 
     client.clear();
   });
