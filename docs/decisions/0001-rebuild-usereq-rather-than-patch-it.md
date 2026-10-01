@@ -358,7 +358,7 @@ of them built so that a defect found in the same round had a falsifier at all.
 0002's `A-ε`, `A5` and `A11` sections, 0003's `B-θ`, `B-η` and relay-naming sections, 0004's
 "Refusing a relay list". So there is one place to correct when one of them changes. **A narrowing
 argued in its own record and missing from this table is a defect in this table**, which is the only
-claim the table itself makes — **with one class excepted, and named**: the seventeen rulings in 0004
+claim the table itself makes — **with one class excepted, and named**: the eighteen rulings in 0004
 change decisions too, and 0004's own "Where each ruling stands" table is their list, so they are not
 copied here. The one entered above is the ruling that reversed a row of this table.
 
