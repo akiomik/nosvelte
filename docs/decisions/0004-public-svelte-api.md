@@ -2004,8 +2004,8 @@ type ReqLastError = ReqStateError | IncompleteError;
  * It was two. `internal-failure` was in this union because the machine names the
  * reason itself when every relay in scope stops — and `endForward` puts every
  * reason through the relay door, which re-derives anything that did not come
- * from a relay. Measured, on all nine codes: what reaches `legEnded.error` is
- * `relay-failed`, always. A union member no path can produce is a promise a
+ * from a relay. Measured, on all nine codes the union had then: what reaches
+ * `legEnded.error` is `relay-failed`, always. A union member no path can produce is a promise a
  * consumer can branch on and never see taken.
  */
 type RelayLegError = Extract<ReqError, { readonly code: 'relay-failed' }>;
