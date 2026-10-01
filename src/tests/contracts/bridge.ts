@@ -462,8 +462,15 @@ const skipsThroughContext = (call: ts.CallExpression): boolean => {
  * including after a curried call or a tagged template), a disabling top-level
  * option, a table-driven arm (`it.each`, `it.for`), an arm that skips itself
  * through its test context, and an id-shaped title the arm-id shape does not
- * read. What it cannot see is a decision made at run time, such as a suite
- * declared only under an `if`.
+ * read.
+ *
+ * Arms are credited by an allow-list (`credited`), and that is where this
+ * check stops: a shape outside it is refused rather than modelled, so a
+ * refusal of something the runner would run is the price and not a defect,
+ * while crediting something inside it that the runner would not run is. What
+ * no static read can see — an environment variable, a command-line filter,
+ * the runner's include and exclude — is outside it. 0005 states the same line
+ * beside rule 6.
  */
 export const inspect = (
   source: string,
@@ -497,36 +504,65 @@ export const inspect = (
   const disabled: string[] = [];
   const unreadable: string[] = [];
   const shape = new RegExp(`^(${TEST_ID}):`);
-  // Whether a function handed to this call declares an arm somewhere inside it.
-  const wrapsArm = (call: ts.CallExpression): boolean => {
+  // **The shape an arm is credited in, as an allow-list.** An arm counts only
+  // when it is called as a statement of its own — or as an arrow's whole body —
+  // at the top of the file or in the callback of a `describe` or `suite` chain,
+  // that chain placed the same way, all the way up; and no block on the way
+  // holds a `return` or a `throw`. Anything else — an `if`, a loop, a `try`, a
+  // helper call, a function declaration, a suite reached through a `let` — is
+  // a place where whether the arm runs is decided by something this check does
+  // not read, so it is refused rather than modelled. The chain modifiers and
+  // options of every suite on the way are judged where that suite is visited.
+  // Whether a block can end early — a `return` or a `throw` anywhere in it,
+  // nested statements included, but not inside a function of its own.
+  const leaves = (block: ts.Block): boolean => {
     let found = false;
     const look = (node: ts.Node): void => {
-      if (found) return;
-      if (ts.isCallExpression(node) && armCallee(node.expression)) {
-        const title = node.arguments[0];
-        if (title !== undefined && ts.isStringLiteralLike(title) && shape.test(title.text))
-          found = true;
-      }
-      ts.forEachChild(node, look);
+      if (found || ts.isFunctionLike(node)) return;
+      if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) found = true;
+      else ts.forEachChild(node, look);
     };
-    for (const argument of call.arguments)
-      if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) look(argument.body);
+    for (const statement of block.statements) look(statement);
 
     return found;
   };
+  const credited = (arm: ts.CallExpression): boolean => {
+    let node: ts.Node = arm;
+    for (;;) {
+      const parent = node.parent;
+      let holder: ts.Node;
+      if (ts.isExpressionStatement(parent) && parent.expression === node) {
+        const block = parent.parent;
+        if (ts.isSourceFile(block)) return true;
+        if (!ts.isBlock(block)) return false;
+        if (leaves(block)) return false;
+        holder = block.parent;
+      } else if (ts.isArrowFunction(parent) && parent.body === node) holder = parent;
+      else return false;
+      if (!ts.isArrowFunction(holder) && !ts.isFunctionExpression(holder)) return false;
+      const suite = holder.parent;
+      if (!ts.isCallExpression(suite) || !suite.arguments.some((argument) => argument === holder))
+        return false;
+      const { root } = resolve(suite.expression);
+      if (root !== 'describe' && root !== 'suite') return false;
+      node = suite;
+    }
+  };
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && outermost(node)) {
-      const { root, names, opaque } = resolve(node.expression);
-      // A call this check cannot identify as a suite, around an arm: whether
-      // that arm runs is the call's decision, and nothing here can read it.
+    if (ts.isCallExpression(node) && armCallee(node.expression)) {
+      const title = node.arguments[0];
       if (
-        (root === undefined || !SUITES.has(root)) &&
-        !armCallee(node.expression) &&
-        wrapsArm(node)
+        title !== undefined &&
+        ts.isStringLiteralLike(title) &&
+        shape.test(title.text) &&
+        !credited(node)
       )
         disabled.push(
-          `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1} (arms inside a call this bridge cannot read)`
+          `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1} (declared where this bridge does not credit an arm)`
         );
+    }
+    if (ts.isCallExpression(node) && outermost(node)) {
+      const { root, names, opaque } = resolve(node.expression);
       if (root !== undefined && SUITES.has(root)) {
         const at = `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
         if (names.some((name) => DISABLING.has(name))) disabled.push(at);

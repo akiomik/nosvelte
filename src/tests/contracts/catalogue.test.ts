@@ -563,6 +563,36 @@ describe('the production contract bridge', () => {
       `${'describe'}('x', { skip: false, ...{ skip: true } }, () => {});`
     ])
       expect(disabledIn(statement), statement).toEqual([`x.test.ts:1 (disabled by its options)`]);
+    // **Where an arm is credited, as an allow-list, both ways.** Placed
+    // anywhere this check does not follow, an arm is refused rather than
+    // modelled; placed in the shapes it does follow, it is credited.
+    const armStatement = `${'it'}('CT1: y', () => { expect(1).toBe(1); });`;
+    for (const statement of [
+      `if (process.env.CI) { ${armStatement} }`,
+      `for (const x of [1]) { ${armStatement} }`,
+      `if (process.env.CI) ${armStatement}`,
+      `for (const x of [1]) ${armStatement}`,
+      `try { ${armStatement} } catch {}`,
+      `function register() { ${armStatement} } register();`,
+      `${'describe'}('x', () => { if (flag) return; ${armStatement} });`,
+      `${'describe'}('x', () => { ${'it'}('CT2: outer', () => { ${armStatement} }); });`,
+      `await ${armStatement}`
+    ])
+      expect(
+        disabledIn(statement).some((why) =>
+          why.endsWith('(declared where this bridge does not credit an arm)')
+        ),
+        `${statement} is not credited`
+      ).toBe(true);
+    for (const statement of [
+      armStatement,
+      `${'describe'}('x', () => { ${armStatement} });`,
+      `${'suite'}('x', function () { ${'describe'}.each([1])('y %s', () => { ${armStatement} }); });`,
+      `${'describe'}('x', () => ${armStatement.replace(/;$/, '')});`,
+      `const group = ${'describe'}; group('x', () => { ${armStatement} });`
+    ])
+      expect(disabledIn(statement), `${statement} is credited`).toEqual([]);
+
     // One report per declaration: a chain is read at its last link, so the
     // curried call inside it is not a second suite.
     expect(disabledIn(`${'describe'}.skipIf(true)('x', () => {});`)).toEqual(['x.test.ts:1']);
