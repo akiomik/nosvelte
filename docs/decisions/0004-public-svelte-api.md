@@ -540,6 +540,15 @@ type RelayConfigurationErrorCode =
 // below.
 
 class RelayConfigurationError extends Error {
+  // The four `Error` gives it, re-declared read-only for the reason
+  // `IncompleteResultError`'s are below: inherited members are where "readonly
+  // to the depth a consumer can reach" (`B5-C6`) was false. This block printed
+  // `code` and `urls` alone while the spike's class carried all four, so the
+  // shape a port copied from here let `err.message = '…'` compile.
+  declare readonly message: string;
+  declare readonly name: string;
+  declare readonly stack?: string;
+  declare readonly cause?: undefined;
   readonly code: RelayConfigurationErrorCode;
   // **Empty for `invalid-relay-input`, and that is the field working rather
   // than failing.** The other four codes are each about relays — one the
