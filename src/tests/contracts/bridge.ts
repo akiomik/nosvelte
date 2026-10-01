@@ -308,6 +308,65 @@ const bindingOf = (checker: ts.TypeChecker, name: ts.Identifier): Binding => {
   return 'unknown';
 };
 
+/**
+ * Whether a name is the runner's own: imported from `vitest`, or bound to
+ * nothing in the file (the runner's globals). A local binding that shadows
+ * `it` or `describe` — `const it = test.skip` — is not, whatever it holds.
+ */
+const runnerName = (checker: ts.TypeChecker, name: ts.Identifier): boolean => {
+  const declaration = checker.getSymbolAtLocation(name)?.declarations?.[0];
+  if (declaration === undefined) return true;
+  if (!ts.isImportSpecifier(declaration)) return false;
+  const from = declaration.parent.parent.parent.moduleSpecifier;
+
+  return ts.isStringLiteral(from) && from.text === 'vitest';
+};
+
+/**
+ * Whether a table-driven suite has a row to run. `describe.each([])` declares
+ * nothing, so the arms written inside it never run. A table counts only when
+ * it can be seen to hold a row: an array literal with an element that is not
+ * a spread, a `const` bound to one, or a tagged template with a value in it.
+ */
+const tableHasRow = (suite: ts.CallExpression, checker: ts.TypeChecker): boolean => {
+  const rows = (table: ts.Node | undefined, depth: number): boolean => {
+    if (table === undefined || depth > 8) return false;
+    if (ts.isArrayLiteralExpression(table))
+      return table.elements.some((element) => !ts.isSpreadElement(element));
+    if (ts.isTemplateExpression(table)) return table.templateSpans.length > 0;
+    if (ts.isIdentifier(table)) {
+      const bound = bindingOf(checker, table);
+
+      return bound !== undefined && bound !== 'unknown' && rows(bound, depth + 1);
+    }
+
+    return false;
+  };
+  let at: ts.Expression = suite.expression;
+  for (;;) {
+    if (ts.isCallExpression(at)) {
+      const callee = at.expression;
+      const name = ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : ts.isElementAccessExpression(callee)
+          ? literalOf(callee.argumentExpression)
+          : undefined;
+      if (name === 'each' || name === 'for') return rows(at.arguments[0], 0);
+      at = callee;
+    } else if (ts.isTaggedTemplateExpression(at)) {
+      const tag = at.tag;
+      if (
+        ts.isPropertyAccessExpression(tag) &&
+        (tag.name.text === 'each' || tag.name.text === 'for')
+      )
+        return rows(at.template, 0);
+      at = tag;
+    } else if (ts.isPropertyAccessExpression(at) || ts.isElementAccessExpression(at))
+      at = at.expression;
+    else return true;
+  }
+};
+
 /** Whether `call` is the last link of its chain rather than a link inside one. */
 const outermost = (call: ts.CallExpression): boolean => {
   const parent = call.parent;
@@ -488,7 +547,12 @@ export const inspect = (
     let chain = unwind(expression);
     for (let depth = 0; depth < 8; depth += 1) {
       const root = chain.root;
-      if (root === undefined || SUITES.has(root.text)) break;
+      if (root === undefined) break;
+      if (SUITES.has(root.text)) {
+        // A known name counts only when it is the runner's own.
+        if (!runnerName(checker, root)) chain = { ...chain, root: undefined };
+        break;
+      }
       const bound = bindingOf(checker, root);
       if (bound === undefined || bound === 'unknown') break;
       const inner = unwind(bound);
@@ -527,6 +591,7 @@ export const inspect = (
     return found;
   };
   const credited = (arm: ts.CallExpression): boolean => {
+    if (resolve(arm.expression).root !== 'it') return false;
     let node: ts.Node = arm;
     for (;;) {
       const parent = node.parent;
@@ -545,6 +610,7 @@ export const inspect = (
         return false;
       const { root } = resolve(suite.expression);
       if (root !== 'describe' && root !== 'suite') return false;
+      if (!tableHasRow(suite, checker)) return false;
       node = suite;
     }
   };

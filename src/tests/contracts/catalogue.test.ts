@@ -576,7 +576,16 @@ describe('the production contract bridge', () => {
       `function register() { ${armStatement} } register();`,
       `${'describe'}('x', () => { if (flag) return; ${armStatement} });`,
       `${'describe'}('x', () => { ${'it'}('CT2: outer', () => { ${armStatement} }); });`,
-      `await ${armStatement}`
+      `await ${armStatement}`,
+      // A known name counts only when it is the runner's own.
+      `const ${'it'} = ${'test'}.skip; ${armStatement}`,
+      `function register(${'it'}) { ${'describe'}('x', () => { ${armStatement} }); }`,
+      `const ${'describe'} = (name, fn) => {}; ${'describe'}('x', () => { ${armStatement} });`,
+      // A table with no row declares nothing.
+      `${'describe'}.each([])('x', () => { ${armStatement} });`,
+      `${'describe'}.each([...rows])('x', () => { ${armStatement} });`,
+      `let rows = [1]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
+      `${'describe'}.each${'`'}a${'`'}('x', () => { ${armStatement} });`
     ])
       expect(
         disabledIn(statement).some((why) =>
@@ -589,7 +598,10 @@ describe('the production contract bridge', () => {
       `${'describe'}('x', () => { ${armStatement} });`,
       `${'suite'}('x', function () { ${'describe'}.each([1])('y %s', () => { ${armStatement} }); });`,
       `${'describe'}('x', () => ${armStatement.replace(/;$/, '')});`,
-      `const group = ${'describe'}; group('x', () => { ${armStatement} });`
+      `const group = ${'describe'}; group('x', () => { ${armStatement} });`,
+      `import { ${'describe'}, ${'it'} } from 'vitest'; ${'describe'}.each([1])('x %s', () => { ${armStatement} });`,
+      `const rows = [{ a: 1 }]; ${'describe'}.each(rows)('x', () => { ${armStatement} });`,
+      `${'describe'}.each${'`'}a\n${'$'}{1}${'`'}('x', () => { ${armStatement} });`
     ])
       expect(disabledIn(statement), `${statement} is credited`).toEqual([]);
 
