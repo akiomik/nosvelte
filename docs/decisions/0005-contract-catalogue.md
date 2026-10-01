@@ -2,7 +2,9 @@
 status: accepted
 date: 2026-10-02
 decision-makers: akiomik
-consulted: redesign review rounds 1-30, the r7 review of rounds 31-32, and the external reviews of r33 and r34
+consulted:
+  redesign review rounds 1-30, the r7 review of rounds 31-32, and the external reviews of r33 and
+  r34
 informed: nosvelte users
 ---
 
@@ -11,24 +13,22 @@ informed: nosvelte users
 ## Context and Problem Statement
 
 [0002](0002-request-engine.md), [0003](0003-cache-identity-and-value.md) and
-[0004](0004-public-svelte-api.md) carry every decision this design rests on
-between them, each as a row of one table with an id. **A count stood here and was
-wrong by four**, which is the reason one no longer does: the number was written
-once and the tables kept being added to, and a figure in prose has no way to
-notice. The check that reads those tables is what knows how many there are, and
-it recomputes rather than comparing against anything written down. Their
-Confirmation sections named about a dozen tests in prose, which is not a bridge:
-there was no way to tell which decisions had a contract and which did not, and
-one entry in an earlier list named one test while describing another without
-anything noticing.
+[0004](0004-public-svelte-api.md) carry every decision this design rests on between them, each as a
+row of one table with an id. **A count stood here and was wrong by four**, which is the reason one
+no longer does: the number was written once and the tables kept being added to, and a figure in
+prose has no way to notice. The check that reads those tables is what knows how many there are, and
+it recomputes rather than comparing against anything written down. Their Confirmation sections named
+about a dozen tests in prose, which is not a bridge: there was no way to tell which decisions had a
+contract and which did not, and one entry in an earlier list named one test while describing another
+without anything noticing.
 
-The spike those tests live in is deleted once these records are accepted. So the
-catalogue has to be here, in a form that survives it and that a check can read.
+The spike those tests live in is deleted once these records are accepted. So the catalogue has to be
+here, in a form that survives it and that a check can read.
 
 ## Decision Outcome
 
-Every decision is classified, and every row that is _behavior_ or _architecture_
-carries a contract stated as an observation rather than as a test name.
+Every decision is classified, and every row that is _behavior_ or _architecture_ carries a contract
+stated as an observation rather than as a test name.
 
 | Kind              | Meaning                                                                          |
 | ----------------- | -------------------------------------------------------------------------------- |
@@ -39,718 +39,592 @@ carries a contract stated as an observation rather than as a test name.
 | `non-goal`        | states what is deliberately not done                                             |
 | `rationale`       | measures the state or configuration a decision rejects, rather than the decision |
 
-Four decisions have no contract of an executable kind, and a check names each
-with the reason. **C7** — one component implementation instead of eleven — does
-not exist yet, so what can be observed is the state it replaces. **That used to
-cover "the arguments each slot is handed" as well, and it no longer does**: the
-argument was decided in 0004's table, derived nowhere, and the only published
-Error a component could have reached for was `lastError` — which is a different
-fact and, on a value whose attempt answered incompletely and then threw, a
-different Error. The mapping derives the slot _and_ its argument now, so what is
-left for the component is passing it on. `C5-C4` is where the argument is
-observed. **C2** is a decision to do nothing,
-and there is nothing to observe about a thing that is not there. **B-δ** and
-**B-ζ** are decisions to do nothing _and_ claims about what stays possible —
-that pagination could be added without a different cache value, that a moving
-window is the caller's to avoid — so their rows carry witnesses for the second
-half while the first half has nothing to observe. Separating the two matters: the first is a gap that closes when the
-implementation lands, the second never closes and should not be waited on.
+Four decisions have no contract of an executable kind, and a check names each with the reason.
+**C7** — one component implementation instead of eleven — does not exist yet, so what can be
+observed is the state it replaces. **That used to cover "the arguments each slot is handed" as well,
+and it no longer does**: the argument was decided in 0004's table, derived nowhere, and the only
+published Error a component could have reached for was `lastError` — which is a different fact and,
+on a value whose attempt answered incompletely and then threw, a different Error. The mapping
+derives the slot _and_ its argument now, so what is left for the component is passing it on. `C5-C4`
+is where the argument is observed. **C2** is a decision to do nothing, and there is nothing to
+observe about a thing that is not there. **B-δ** and **B-ζ** are decisions to do nothing _and_
+claims about what stays possible — that pagination could be added without a different cache value,
+that a moving window is the caller's to avoid — so their rows carry witnesses for the second half
+while the first half has nothing to observe. Separating the two matters: the first is a gap that
+closes when the implementation lands, the second never closes and should not be waited on.
 
-**A11 lost two rows rather than witnesses being re-pointed.** `A11-C2` observed
-the internal stream seam — `createEventStream`, two subscribers, no
-deduplication — and that seam is deleted. C9 had already withdrawn the low-level
-entry, nothing in the library called it, and it passed already-expired events
-through, so the contract has no subject rather than no test. `C9-C1` is where
+**A11 lost two rows rather than witnesses being re-pointed.** `A11-C2` observed the internal stream
+seam — `createEventStream`, two subscribers, no deduplication — and that seam is deleted. C9 had
+already withdrawn the low-level entry, nothing in the library called it, and it passed
+already-expired events through, so the contract has no subject rather than no test. `C9-C1` is where
 "there is no low-level entry" is still observed.
 
-`A11-C4` is gone for a different reason: **its subject stopped being the seam's.**
-It drove `'reset'` and `'replace'` through both accumulators, and both modes are
-now out of `AccumulateParams` — A2's `'append'` is fixed inside the shipping
-adapter, so there is no second implementation of the other two for a parity
-contract to compare. The row's disappearance is not a loss of measurement.
-What it observed is upstream's behaviour, and upstream is where it is now
-measured, directly and without this library in the path: `CTR-5` (the default
-mode empties the entry), `CTR-6` (`'append'` accumulates), `CTR-7` (`'replace'`
-discards at the end of the stream) and `CTR-8` (a `'reset'` with `initialData`
-shows the seed rather than clearing). `AC1` and `AC2` were deleted rather than
-moved, because those four already measure what they measured — the same facts,
-one layer closer to the dependency that decides them. Narrowing the seam is what
-made the fallback's own claim true: it is written over `setQueryData` /
-`getQueryData` and nothing else, where reproducing the two dropped modes had
-required the query cache's `find`, `isFetched`, `setState` and `resetState`.
+`A11-C4` is gone for a different reason: **its subject stopped being the seam's.** It drove
+`'reset'` and `'replace'` through both accumulators, and both modes are now out of
+`AccumulateParams` — A2's `'append'` is fixed inside the shipping adapter, so there is no second
+implementation of the other two for a parity contract to compare. The row's disappearance is not a
+loss of measurement. What it observed is upstream's behaviour, and upstream is where it is now
+measured, directly and without this library in the path: `CTR-5` (the default mode empties the
+entry), `CTR-6` (`'append'` accumulates), `CTR-7` (`'replace'` discards at the end of the stream)
+and `CTR-8` (a `'reset'` with `initialData` shows the seed rather than clearing). `AC1` and `AC2`
+were deleted rather than moved, because those four already measure what they measured — the same
+facts, one layer closer to the dependency that decides them. Narrowing the seam is what made the
+fallback's own claim true: it is written over `setQueryData` / `getQueryData` and nothing else,
+where reproducing the two dropped modes had required the query cache's `find`, `isFetched`,
+`setState` and `resetState`.
 
-**And A11 gained one.** `A11-C1` runs one suite against two accumulators, which
-says the fallback answers the same way — and says nothing about whether a
-request reached it. The mutation that ignores the injected accumulator and calls
-the shipping one directly left every parity expectation green, and stood in the
-ledger as undetected on the argument that catching it would mean a test about
-the code's shape. That argument contradicted this file: `architecture` is
-defined three paragraphs above as module boundaries, ownership and published
-symbols, which is the class a claim about _which module's function runs_ belongs
-to. `A11-C5` is that observation, made as a run rather than as a reading — an
-accumulator that delegates to the real fallback and records that it was asked,
-with the request's answer asserted alongside. It is what makes `A11-C1`'s green
-mean something, and the two are not substitutes: the seam-ignoring mutation
-leaves `A11-C1` passing and kills `A11-C5`. `A11-C3` observes two hooks sharing
-an attempt across both accumulators.
+**And A11 gained one.** `A11-C1` runs one suite against two accumulators, which says the fallback
+answers the same way — and says nothing about whether a request reached it. The mutation that
+ignores the injected accumulator and calls the shipping one directly left every parity expectation
+green, and stood in the ledger as undetected on the argument that catching it would mean a test
+about the code's shape. That argument contradicted this file: `architecture` is defined three
+paragraphs above as module boundaries, ownership and published symbols, which is the class a claim
+about _which module's function runs_ belongs to. `A11-C5` is that observation, made as a run rather
+than as a reading — an accumulator that delegates to the real fallback and records that it was
+asked, with the request's answer asserted alongside. It is what makes `A11-C1`'s green mean
+something, and the two are not substitutes: the seam-ignoring mutation leaves `A11-C1` passing and
+kills `A11-C5`. `A11-C3` observes two hooks sharing an attempt across both accumulators.
 
-Three clauses are decided and not contracted here, named rather than left to be
-noticed. **C8**'s count — that there is one entry rather than two — is not
-observable in a spike with no `exports` map; what is observable is that nothing
-internal reaches the one entry there is (`C8-C1`), and that nothing is published
-below it (`C9-C1`). **C1** and **C14** both decide that the four outlets are
-snippets rather than legacy slots, and no row observes it: the components are
-not converted here, because the spike is deleted and converting twelve of them
-would be work thrown away — so this closes when the implementation lands, and it
-is the one place a reader should not take a green suite as evidence. And **A5**
-enumerates six events, of which two are witnessed under neighbouring decisions
-rather than its own: abort by `A3-C1`, live end by `B10-C1`. The first two close
-with the implementation; the third is an allocation, and moving it would only
-move the gap.
+Three clauses are decided and not contracted here, named rather than left to be noticed. **C8**'s
+count — that there is one entry rather than two — is not observable in a spike with no `exports`
+map; what is observable is that nothing internal reaches the one entry there is (`C8-C1`), and that
+nothing is published below it (`C9-C1`). **C1** and **C14** both decide that the four outlets are
+snippets rather than legacy slots, and no row observes it: the components are not converted here,
+because the spike is deleted and converting twelve of them would be work thrown away — so this
+closes when the implementation lands, and it is the one place a reader should not take a green suite
+as evidence. And **A5** enumerates six events, of which two are witnessed under neighbouring
+decisions rather than its own: abort by `A3-C1`, live end by `B10-C1`. The first two close with the
+implementation; the third is an allocation, and moving it would only move the gap.
 
-**Spike witness** is where the observation is made today. It is deleted with the
-spike. **Implementation test** says what a port owes in order to make the same
-observation afterwards.
+**Spike witness** is where the observation is made today. It is deleted with the spike.
+**Implementation test** says what a port owes in order to make the same observation afterwards.
 
-**It is an instruction, not a status, and a reviewer measured what having both
-cost.** The column used to be the gate as well — `TBD` meant "not landed" — and
-the port-route roster added a second gate in `Production evidence`. With two,
-nothing said which edit completes a row: updating one leaves the other saying
-the opposite, and updating both contradicts the rule that phase 2 moves one
-field. **`Production evidence` is the only status**; this column is immutable
-port instruction, and the four openings below describe what the instruction is,
-not how far the port has got.
+**It is an instruction, not a status, and a reviewer measured what having both cost.** The column
+used to be the gate as well — `TBD` meant "not landed" — and the port-route roster added a second
+gate in `Production evidence`. With two, nothing said which edit completes a row: updating one
+leaves the other saying the opposite, and updating both contradicts the rule that phase 2 moves one
+field. **`Production evidence` is the only status**; this column is immutable port instruction, and
+the four openings below describe what the instruction is, not how far the port has got.
 
-**Four things that column may say, and no fifth.** The column used to have an
-escape hatch — a row whose Given the port could not construct was allowed to
-"carry the reason instead of the row" — and an escape hatch with no shape is a
-permanent one. Every row resolves to exactly one of these:
+**Four things that column may say, and no fifth.** The column used to have an escape hatch — a row
+whose Given the port could not construct was allowed to "carry the reason instead of the row" — and
+an escape hatch with no shape is a permanent one. Every row resolves to exactly one of these:
 
-- **ported** — the port writes this observation. The column says what it needs
-  in order to write it, including any seam of its own it has to hold.
-- **replaced** — the Given as written needs something a consumer cannot do, but
-  the property it protects **is** publicly observable, so the row is rewritten
-  against the public path. A replacement names what it replaced.
-- **discharged** — the property is made unreachable by another decision, so the
-  port owes an _observation_ of nothing and a _guarantee_ of the decision that
-  discharges it. **The column names that decision's id and the condition under
-  which the row comes back.**
-- **retired** — the row observed a mechanism that exists only in the spike, and
-  the mechanism does not port. **The column says which mechanism**, in the form
-  the `poisonId` family already uses.
+- **ported** — the port writes this observation. The column says what it needs in order to write it,
+  including any seam of its own it has to hold.
+- **replaced** — the Given as written needs something a consumer cannot do, but the property it
+  protects **is** publicly observable, so the row is rewritten against the public path. A
+  replacement names what it replaced.
+- **discharged** — the property is made unreachable by another decision, so the port owes an
+  _observation_ of nothing and a _guarantee_ of the decision that discharges it. **The column names
+  that decision's id and the condition under which the row comes back.**
+- **retired** — the row observed a mechanism that exists only in the spike, and the mechanism does
+  not port. **The column says which mechanism**, in the form the `poisonId` family already uses.
 
-**`retired` still has no instance, and the story of how this paragraph said
-otherwise for an hour is the most useful thing in it.** `replaced` has exactly
-one, `C-δ-C2`. `retired` had one for the length of one edit: `C16-A1` was filed
-that way on the ground that a port builds the real provider and has no stand-in
-left to police. **The ground was false** — witnessing a refusal under an error
-boundary needs a wrapper component, so a port has a harness whatever else it has
-— and the row is `ported` with a shrinking declared list instead. **What that
-settles is the test for the word**: it is not "the spike built something the port
-will not", it is "**the reach this row is written through does not exist
-afterwards**". A stand-in fails that test, because a port has stand-ins too. So
-the spelling is still a hypothesis, and the first row that genuinely qualifies
-settles the form.
+**`retired` still has no instance, and the story of how this paragraph said otherwise for an hour is
+the most useful thing in it.** `replaced` has exactly one, `C-δ-C2`. `retired` had one for the
+length of one edit: `C16-A1` was filed that way on the ground that a port builds the real provider
+and has no stand-in left to police. **The ground was false** — witnessing a refusal under an error
+boundary needs a wrapper component, so a port has a harness whatever else it has — and the row is
+`ported` with a shrinking declared list instead. **What that settles is the test for the word**: it
+is not "the spike built something the port will not", it is "**the reach this row is written through
+does not exist afterwards**". A stand-in fails that test, because a port has stand-ins too. So the
+spelling is still a hypothesis, and the first row that genuinely qualifies settles the form.
 
-**What that first instance settled, and what it did not.** The paragraph
-previously argued that `replaced` would carry no marker at all — a replaced row
-waits under `TBD` like any other, indistinguishable from a row that was always
-portable, so nothing could check that a replacement names what it replaced. The
-first replacement did not do that. It opens `TBD, **replaced**` and then names
-the Given it lost and the reach that went with it. **So the marker exists now,
-and no check reads it**: the column's machine-readable openings are `TBD`,
-`discharged by `, and `retired`, and `TBD` is the one that means "the port still
-owes a test" — which is true of `ported` and `replaced` alike, since a
-replacement is still a row somebody has to write against the port. The two
-states differ in what happened to the row's _reach_, not in what the port owes,
-and that is why the opening does not separate them.
+**What that first instance settled, and what it did not.** The paragraph previously argued that
+`replaced` would carry no marker at all — a replaced row waits under `TBD` like any other,
+indistinguishable from a row that was always portable, so nothing could check that a replacement
+names what it replaced. The first replacement did not do that. It opens `TBD, **replaced**` and then
+names the Given it lost and the reach that went with it. **So the marker exists now, and no check
+reads it**: the column's machine-readable openings are `TBD`, `discharged by `, and `retired`, and
+`TBD` is the one that means "the port still owes a test" — which is true of `ported` and `replaced`
+alike, since a replacement is still a row somebody has to write against the port. The two states
+differ in what happened to the row's _reach_, not in what the port owes, and that is why the opening
+does not separate them.
 
-**The cost of that, stated rather than left to be found.** A row can be rewritten
-against a public path and simply not say so, and nothing will notice; a row can
-say `**replaced**` and not name what it replaced, and nothing will notice that
-either. It remains the softest corner of this vocabulary. Inventing a checkable
-word was rejected once as a word whose only purpose is to be checkable — and with
-one instance in hand the argument is now weaker than it was, because there is
-something real to check against. **The point to enforce it is not quite "a second
-replacement lands"** — it is a second replacement written _without knowledge of
-the first_. With one instance, any predicate strong enough to pass it was chosen
-after seeing it, and "it passes the real row" carries almost no information when
-the real row is the only row there has ever been. That was measured rather than
-supposed: the strongest non-word-matching candidate — a marked cell must cite
-something that resolves in a namespace this repo maintains — passes the real
-cell, fails a marked cell that cites nothing, fails one citing an id nothing
-defines, and **also passes a cell that cites the discharging decision and says
-nothing whatever about what it replaced**. That last row is the ceiling, and a
-check installed under the name "a replacement names what it replaced" while
-having that ceiling would be the same defect this record spent the session
-removing from a different check.
+**The cost of that, stated rather than left to be found.** A row can be rewritten against a public
+path and simply not say so, and nothing will notice; a row can say `**replaced**` and not name what
+it replaced, and nothing will notice that either. It remains the softest corner of this vocabulary.
+Inventing a checkable word was rejected once as a word whose only purpose is to be checkable — and
+with one instance in hand the argument is now weaker than it was, because there is something real to
+check against. **The point to enforce it is not quite "a second replacement lands"** — it is a
+second replacement written _without knowledge of the first_. With one instance, any predicate strong
+enough to pass it was chosen after seeing it, and "it passes the real row" carries almost no
+information when the real row is the only row there has ever been. That was measured rather than
+supposed: the strongest non-word-matching candidate — a marked cell must cite something that
+resolves in a namespace this repo maintains — passes the real cell, fails a marked cell that cites
+nothing, fails one citing an id nothing defines, and **also passes a cell that cites the discharging
+decision and says nothing whatever about what it replaced**. That last row is the ceiling, and a
+check installed under the name "a replacement names what it replaced" while having that ceiling
+would be the same defect this record spent the session removing from a different check.
 
-**`discharged` and `retired` are the two that need a way back**, so both name
-their grounding contract and their resumption condition. Without the second, a
-decision that is later relaxed leaves a row that was closed against it standing
-closed, and nothing connects the two. **What the `poisonId` family justifies is
-`retired` — a spike-only _reach_ not porting — and it is not a precedent for
-dropping a production property**; those are `discharged` at best, and `replaced`
-where the property survives on the public path.
+**`discharged` and `retired` are the two that need a way back**, so both name their grounding
+contract and their resumption condition. Without the second, a decision that is later relaxed leaves
+a row that was closed against it standing closed, and nothing connects the two. **What the
+`poisonId` family justifies is `retired` — a spike-only _reach_ not porting — and it is not a
+precedent for dropping a production property**; those are `discharged` at best, and `replaced` where
+the property survives on the public path.
 
 **Which way this reads when the two disagree.** Once
-[0001](0001-rebuild-usereq-rather-than-patch-it.md) is accepted, the decisions
-and the contract rows below are what is decided; the spike, its tests and its
-doc comments are evidence that the decision is reachable, and nothing more. So a
-disagreement between a row and the code it is witnessed by is a **defect in one
-of them, adjudicated against the record** — either the row states something the
-decision did not decide, or the spike does not implement what was decided. It is
-never resolved by taking the code as the statement and rewriting the row to
-match: that is how a decision comes to say whatever was built, and it is the
-inverse of the reason the catalogue is here rather than in the spike. The spike
-is deleted; a record that had been edited to agree with it would be left
-asserting a design nobody chose.
+[0001](0001-rebuild-usereq-rather-than-patch-it.md) is accepted, the decisions and the contract rows
+below are what is decided; the spike, its tests and its doc comments are evidence that the decision
+is reachable, and nothing more. So a disagreement between a row and the code it is witnessed by is a
+**defect in one of them, adjudicated against the record** — either the row states something the
+decision did not decide, or the spike does not implement what was decided. It is never resolved by
+taking the code as the statement and rewriting the row to match: that is how a decision comes to say
+whatever was built, and it is the inverse of the reason the catalogue is here rather than in the
+spike. The spike is deleted; a record that had been edited to agree with it would be left asserting
+a design nobody chose.
 
-**One family of rows carries a condition in that column rather than a bare
-`TBD`**, because the state they observe cannot be reached by driving a relay. A request fails
-here only when its own fold throws, and no relay behaviour produces that: a
-relay refusing a subscription neither errors nor completes it (`A5-S1`), and a
-backward request whose every target relay dies _completes_ rather than erroring
-(`A5-S6`). The spike reaches the state through `poisonId`, a descriptor field
-that exists only for the spike and does not port. So the port has to inject the
-throw into the reducer the seam is handed — which belongs to the hook rather
-than to either accumulator, so one injection covers both and a port that reaches
-inside each accumulator instead has two seams where one was enough — which is
-where the spike's own poison check sits — and a port that looks for a wire-level
-failure instead will find none and leave the row with no witness rather than
-with a failing one. The rows are `A14-C1`, `C5-C1`, `C5-C2`, `C5-C3`, `C5-C4`, `C11-C15`,
-`C11-C16`, `A13-C4`, `A11-C6`, `A11-C7`, `A11-C8`, `A11-C9`, `A11-C10`,
-`A11-C11`, `A11-C12`, `A11-C13`, `A11-C14`, `A11-C15`, `A11-C16`, `C15-C3` and
-the first half of `C12-C3`. **`A11-C17` carries a condition as well and is not
-one of this family**, which is why it is named here rather than added to the
-list: its subject is the capability this library hands across the seam rather
-than a hostile function standing in for one, so what a port supplies is not a
-hostile _accumulator_. **It is not injection-free either, which this said for a
-round.** The arm needs a producer written to open a subscription on every
-acquisition and instrumented to count what reaches it — the row is about the
-capability holding that producer to one acquisition, and a producer that would
-not have forked anyway leaves the row asserting nothing.
+**One family of rows carries a condition in that column rather than a bare `TBD`**, because the
+state they observe cannot be reached by driving a relay. A request fails here only when its own fold
+throws, and no relay behaviour produces that: a relay refusing a subscription neither errors nor
+completes it (`A5-S1`), and a backward request whose every target relay dies _completes_ rather than
+erroring (`A5-S6`). The spike reaches the state through `poisonId`, a descriptor field that exists
+only for the spike and does not port. So the port has to inject the throw into the reducer the seam
+is handed — which belongs to the hook rather than to either accumulator, so one injection covers
+both and a port that reaches inside each accumulator instead has two seams where one was enough —
+which is where the spike's own poison check sits — and a port that looks for a wire-level failure
+instead will find none and leave the row with no witness rather than with a failing one. The rows
+are `A14-C1`, `C5-C1`, `C5-C2`, `C5-C3`, `C5-C4`, `C11-C15`, `C11-C16`, `A13-C4`, `A11-C6`,
+`A11-C7`, `A11-C8`, `A11-C9`, `A11-C10`, `A11-C11`, `A11-C12`, `A11-C13`, `A11-C14`, `A11-C15`,
+`A11-C16`, `C15-C3` and the first half of `C12-C3`. **`A11-C17` carries a condition as well and is
+not one of this family**, which is why it is named here rather than added to the list: its subject
+is the capability this library hands across the seam rather than a hostile function standing in for
+one, so what a port supplies is not a hostile _accumulator_. **It is not injection-free either,
+which this said for a round.** The arm needs a producer written to open a subscription on every
+acquisition and instrumented to count what reaches it — the row is about the capability holding that
+producer to one acquisition, and a producer that would not have forked anyway leaves the row
+asserting nothing.
 
-**`C5-C3` wants a second injection on top of the throw, and a port that supplies
-only one will not reach the state.** The deadline has to pass while the request
-is being observed, which means an injected clock as well as an injected failure:
-the event must arrive, be shown, and then leave the read model with nothing else
-happening. Waiting out a real deadline is not the same test — it cannot say the
-event was ever displayable — and neither half alone reaches the row. A failure
-with nothing stored is `C5-C2`, and an expiry with no failure is `C13-C1`.
-`C12-C3`'s second half wants the clock and no failure at all, and its first
-wants the failure and no clock, which is why one row carries two witnesses
-rather than one that does both at once.
+**`C5-C3` wants a second injection on top of the throw, and a port that supplies only one will not
+reach the state.** The deadline has to pass while the request is being observed, which means an
+injected clock as well as an injected failure: the event must arrive, be shown, and then leave the
+read model with nothing else happening. Waiting out a real deadline is not the same test — it cannot
+say the event was ever displayable — and neither half alone reaches the row. A failure with nothing
+stored is `C5-C2`, and an expiry with no failure is `C13-C1`. `C12-C3`'s second half wants the clock
+and no failure at all, and its first wants the failure and no clock, which is why one row carries
+two witnesses rather than one that does both at once.
 
-**`A11-C6` through `A11-C16` want eleven different injections, and that is the
-point of contracting them apart.** They are named rather than counted off the end
-of the list above, because a list that gains a row moves whichever position a
-sentence like that was pointing at — which is what had happened to this one. They are a family because they share one
-Given — the engine may not assume the accumulator reaches its `streamFn`, drives
-it, closes it, folds what it yields into the value it returns, or returns at all
-— and they are separate rows because reaching each state needs a different
-function written by hand. The reducer can throw part way through the
-stream (`A11-C6`), the `QueryFunction` the accumulator returned can throw before
-it ever calls `streamFn` (`A11-C7`), the accumulator _factory_ can throw
-synchronously without returning a function at all (`A11-C8`), and the returned
-`QueryFunction` can **resolve** without ever calling `streamFn` (`A11-C9`),
-having pulled its stream once and walked away from it (`A11-C10`, whose second
-half is what that abandoned capability can still do once the invocation has
-ended, with `A11-C11` and `A11-C12` on what a consumer is then shown and what a
-second `refresh()` can do), having driven the stream to its end and handed back a
-value the chunks never reached (`A11-C13`, with `A11-C14` as its mirror on the
-teardown side), or having folded a prefix of the stream with the reducer it was
-handed and returned before the attempt ended (`A11-C15`). It can also **not
-resolve at all** (`A11-C16`), which is the one state the return boundary cannot
-see and the one the cancellation link at the entry exists for — **when a consumer
-goes away**, which is that row's Given and the whole of its reach. Where the
-consumer stays, nothing bounds it and nothing here claims to: see `A11-P1`. These
-are
-witnesses of the cells set out below, not a partition of them — the enumeration
-of shapes is what has been wrong four times. `A14-C1`'s Given used to be "a query function that throws",
-which covers the first three, while its porting note admitted only the first — so
-a port that read the Given would have believed the others were covered and a port
-that read the note would have written one test for three states. The Given is
-narrowed to what `M20` actually measures, and the states it was silently claiming
-have rows and witnesses of their own.
+**`A11-C6` through `A11-C16` want eleven different injections, and that is the point of contracting
+them apart.** They are named rather than counted off the end of the list above, because a list that
+gains a row moves whichever position a sentence like that was pointing at — which is what had
+happened to this one. They are a family because they share one Given — the engine may not assume the
+accumulator reaches its `streamFn`, drives it, closes it, folds what it yields into the value it
+returns, or returns at all — and they are separate rows because reaching each state needs a
+different function written by hand. The reducer can throw part way through the stream (`A11-C6`),
+the `QueryFunction` the accumulator returned can throw before it ever calls `streamFn` (`A11-C7`),
+the accumulator _factory_ can throw synchronously without returning a function at all (`A11-C8`),
+and the returned `QueryFunction` can **resolve** without ever calling `streamFn` (`A11-C9`), having
+pulled its stream once and walked away from it (`A11-C10`, whose second half is what that abandoned
+capability can still do once the invocation has ended, with `A11-C11` and `A11-C12` on what a
+consumer is then shown and what a second `refresh()` can do), having driven the stream to its end
+and handed back a value the chunks never reached (`A11-C13`, with `A11-C14` as its mirror on the
+teardown side), or having folded a prefix of the stream with the reducer it was handed and returned
+before the attempt ended (`A11-C15`). It can also **not resolve at all** (`A11-C16`), which is the
+one state the return boundary cannot see and the one the cancellation link at the entry exists for —
+**when a consumer goes away**, which is that row's Given and the whole of its reach. Where the
+consumer stays, nothing bounds it and nothing here claims to: see `A11-P1`. These are witnesses of
+the cells set out below, not a partition of them — the enumeration of shapes is what has been wrong
+four times. `A14-C1`'s Given used to be "a query function that throws", which covers the first
+three, while its porting note admitted only the first — so a port that read the Given would have
+believed the others were covered and a port that read the note would have written one test for three
+states. The Given is narrowed to what `M20` actually measures, and the states it was silently
+claiming have rows and witnesses of their own.
 
-**These rows were once described as "the two ways an accumulator can fail
-without reaching `streamFn`", the count has now been wrong four times, and the
-last version of it — "the resolving half, split by what the invocation did with
-its stream first: never started it, started it and walked away, or drove it to
-the end and dropped what it yielded" — was wrong in the same way as the three
-before.** It did not contain "folds some chunks with the standard reducer and
-returns before a terminal outcome", and that is a shape an alternative
-accumulator writes by accident rather than a hostile exhibit. **So the division
-is no longer stated as a list of what accumulators do at all.** What an
-accumulator may do is bounded only by what a function may do; enumerating shapes
-has failed four times and there is no reason to expect the fifth attempt to be
-different.
+**These rows were once described as "the two ways an accumulator can fail without reaching
+`streamFn`", the count has now been wrong four times, and the last version of it — "the resolving
+half, split by what the invocation did with its stream first: never started it, started it and
+walked away, or drove it to the end and dropped what it yielded" — was wrong in the same way as the
+three before.** It did not contain "folds some chunks with the standard reducer and returns before a
+terminal outcome", and that is a shape an alternative accumulator writes by accident rather than a
+hostile exhibit. **So the division is no longer stated as a list of what accumulators do at all.**
+What an accumulator may do is bounded only by what a function may do; enumerating shapes has failed
+four times and there is no reason to expect the fifth attempt to be different.
 
-What is offered as closed is an axis, and the axis is **what the engine decides
-at the return**, not what the accumulator did to get there. Three questions, each
-a reading of something the engine holds:
+What is offered as closed is an axis, and the axis is **what the engine decides at the return**, not
+what the accumulator did to get there. Three questions, each a reading of something the engine
+holds:
 
-1. **Did the invocation leave by throwing or by resolving?** Exhaustive, because
-   they are the two ways an `async` function leaves. Throwing is the `catch`,
-   which records a failure under this attempt whatever threw, so a terminal
-   outcome exists. `A11-C6`/`C7`/`C8` are three witnesses of that one cell, not a
-   partition of it.
-2. **Given it resolved: is a terminal outcome for its attempt on the value it
-   returned?** A reading of two fields — `backlog` and `failure`, by id, the same
-   pair the wait itself reads. Yes: nothing to do. No: question 3.
-3. **Given no terminal outcome: was this invocation torn down?** A reading of the
-   invocation's own `AbortController`. Yes is an abort (`A11-C14`); no is an
-   `AccumulatorContractError` recorded as that attempt's failure (`A11-C9`,
-   `A11-C10`, `A11-C13`, `A11-C15`).
+1. **Did the invocation leave by throwing or by resolving?** Exhaustive, because they are the two
+   ways an `async` function leaves. Throwing is the `catch`, which records a failure under this
+   attempt whatever threw, so a terminal outcome exists. `A11-C6`/`C7`/`C8` are three witnesses of
+   that one cell, not a partition of it.
+2. **Given it resolved: is a terminal outcome for its attempt on the value it returned?** A reading
+   of two fields — `backlog` and `failure`, by id, the same pair the wait itself reads. Yes: nothing
+   to do. No: question 3.
+3. **Given no terminal outcome: was this invocation torn down?** A reading of the invocation's own
+   `AbortController`. Yes is an abort (`A11-C14`); no is an `AccumulatorContractError` recorded as
+   that attempt's failure (`A11-C9`, `A11-C10`, `A11-C13`, `A11-C15`).
 
-The partition is total: 1 is exhaustive of leaving, 2 and 3 are booleans. **What
-it rests on** is that all three are decidable at the return from what the engine
-holds — and 2 is decidable only about the _value_, which is the accumulator's to
-construct. That bound is the subject of the paragraph below and is not assumed
-away.
+The partition is total: 1 is exhaustive of leaving, 2 and 3 are booleans. **What it rests on** is
+that all three are decidable at the return from what the engine holds — and 2 is decidable only
+about the _value_, which is the accumulator's to construct. That bound is the subject of the
+paragraph below and is not assumed away.
 
-**One state is not a cell of this, and saying so is the point of stating the axis
-rather than a list.** An invocation that never leaves has not reached the return,
-so there is nothing to attribute there — it is not a fourth case, it is the
-absence of the question. It is bounded from _outside_: query-core's cancellation
-is linked to the invocation at the query function's **entry**, so a consumer that
-goes away cancels the fetch and the engine abandons the attempt itself, whether
-or not the seam ever reached `streamFn` (`A11-C16`). A pending invocation whose
-consumer stays is bounded by nothing at all. That is a limit of the design, not a
-gap that has been closed, and it is recorded as one. What speaks about that state
-is `A11-P1` — a postcondition the two shipping accumulators satisfy and the
-seam's type cannot require — rather than anything the engine guarantees, and it
-speaks about both shapes of it: an invocation that never reached `streamFn`, and
-one that reached it and then stopped taking what it yields. It is stated over
-every request rather than over live ones for exactly that reason.
+**One state is not a cell of this, and saying so is the point of stating the axis rather than a
+list.** An invocation that never leaves has not reached the return, so there is nothing to attribute
+there — it is not a fourth case, it is the absence of the question. It is bounded from _outside_:
+query-core's cancellation is linked to the invocation at the query function's **entry**, so a
+consumer that goes away cancels the fetch and the engine abandons the attempt itself, whether or not
+the seam ever reached `streamFn` (`A11-C16`). A pending invocation whose consumer stays is bounded
+by nothing at all. That is a limit of the design, not a gap that has been closed, and it is recorded
+as one. What speaks about that state is `A11-P1` — a postcondition the two shipping accumulators
+satisfy and the seam's type cannot require — rather than anything the engine guarantees, and it
+speaks about both shapes of it: an invocation that never reached `streamFn`, and one that reached it
+and then stopped taking what it yields. It is stated over every request rather than over live ones
+for exactly that reason.
 
-**And the second question is a fact about the value, never about the wire.** The
-engine can see that an end for this attempt is recorded; it cannot see that the
-request behind it is over, because the value is the accumulator's to hand back.
-The two come apart for a **live** invocation that folds the backlog completion
-and returns with the forward leg still open: an end _is_ recorded, truthfully,
-and the request is not finished. That invocation takes cell 2's "yes" arm and is
-right to by this test. It is not repairable at the return either, because
-`refresh()` may already have resolved `complete` on the very end that makes the
-answer yes. **So A11 is not correct by construction for an arbitrary
-type-conforming function — and it is not asked to be.** That is the decision
-[0002](0002-request-engine.md)'s A11 now records rather than a shortfall it
-apologises for: A11 is **not a public extension point**, nothing published takes
-an accumulator, and what is substitutable is an implementation this library or a
-port _owns_ and has run against the conformance arms. The alternative that would
-make the stronger claim available — the engine owning the iteration and the seam
-lowered to the fold — is recorded there with its cost and with the five
-conditions that would reopen it; it is refused for v1 because the seam would stop
-sitting at the dependency, which is the one thing it is for. The two
-postconditions the internal accumulators carry instead are bridged here as
-`A11-P1` and `A11-P2`, and `A11-P5` is what stops the word "conformance" from
-being free: every accumulator this library ships has to be in the rosters the
-suite iterates. **`A11-P4` is a third**, and it differs from
-those two in who owes it: they are postconditions of the two accumulators this
-library ships, and it is one **every** accumulator owes, including a port's own —
-which is why it is the one with a boundary behind it rather than prose alone. It
-is contracted in the failure-matrix section below, where the cell it closes is.
-`A11-P3` is in 0002 as well and is **not** one of the postconditions at all: it is
-the separation between the engine's containment guarantee and the parity
-measurement, and it has a section of its own below.
+**And the second question is a fact about the value, never about the wire.** The engine can see that
+an end for this attempt is recorded; it cannot see that the request behind it is over, because the
+value is the accumulator's to hand back. The two come apart for a **live** invocation that folds the
+backlog completion and returns with the forward leg still open: an end _is_ recorded, truthfully,
+and the request is not finished. That invocation takes cell 2's "yes" arm and is right to by this
+test. It is not repairable at the return either, because `refresh()` may already have resolved
+`complete` on the very end that makes the answer yes. **So A11 is not correct by construction for an
+arbitrary type-conforming function — and it is not asked to be.** That is the decision
+[0002](0002-request-engine.md)'s A11 now records rather than a shortfall it apologises for: A11 is
+**not a public extension point**, nothing published takes an accumulator, and what is substitutable
+is an implementation this library or a port _owns_ and has run against the conformance arms. The
+alternative that would make the stronger claim available — the engine owning the iteration and the
+seam lowered to the fold — is recorded there with its cost and with the five conditions that would
+reopen it; it is refused for v1 because the seam would stop sitting at the dependency, which is the
+one thing it is for. The two postconditions the internal accumulators carry instead are bridged here
+as `A11-P1` and `A11-P2`, and `A11-P5` is what stops the word "conformance" from being free: every
+accumulator this library ships has to be in the rosters the suite iterates. **`A11-P4` is a third**,
+and it differs from those two in who owes it: they are postconditions of the two accumulators this
+library ships, and it is one **every** accumulator owes, including a port's own — which is why it is
+the one with a boundary behind it rather than prose alone. It is contracted in the failure-matrix
+section below, where the cell it closes is. `A11-P3` is in 0002 as well and is **not** one of the
+postconditions at all: it is the separation between the engine's containment guarantee and the
+parity measurement, and it has a section of its own below.
 
-**The postconditions are contracted here rather than referred to, because part of
-the correctness now rests on them.** This file used to point at 0002 for
-`A11-P1`–`A11-P3` and stop, which was defensible while the seam's type and the
-engine's guarantee carried the whole claim between them. They no longer do: the
-guarantee is narrowed to an invocation that **returned, threw, or was externally
-cancelled**, and what covers the rest is a postcondition of the two accumulators
-this library ships. A postcondition that a port can read and cannot run is the
-same thing as the parenthesised note the first of the three rules below forbids,
-so `A11-P1` and `A11-P2` are rows of the table like any other, and `A11-P4` is
-one for the same reason.
+**The postconditions are contracted here rather than referred to, because part of the correctness
+now rests on them.** This file used to point at 0002 for `A11-P1`–`A11-P3` and stop, which was
+defensible while the seam's type and the engine's guarantee carried the whole claim between them.
+They no longer do: the guarantee is narrowed to an invocation that **returned, threw, or was
+externally cancelled**, and what covers the rest is a postcondition of the two accumulators this
+library ships. A postcondition that a port can read and cannot run is the same thing as the
+parenthesised note the first of the three rules below forbids, so `A11-P1` and `A11-P2` are rows of
+the table like any other, and `A11-P4` is one for the same reason.
 
-**Both needed a witness of their own, and the round that said neither did was
-reading the end-to-end suite as if it were the clause.** `P1` and `P25` drive
-both kinds of request on both accumulators, and `P32` and `P45` read the axis on
-which an invocation that has stopped working says so — and every one of them is a
-_whole request_, with a relay mock, a hook, a reference machine, a query observer
-and an rx-nostr client standing between the clause and the function that has it.
-That costs twice. A chunk that arrives late is indistinguishable there from a
-chunk that was never folded, so those witnesses can be green for reasons that are
-not the clause's; and none of that apparatus survives this branch, so a
-postcondition whose whole purpose is to be portable had no witness that could
-port with it. `AC14`–`AC19` are the direct arms and are what each row is now
-bridged to first: both shipping accumulators invoked with a hand-driven
-`AsyncIterable` and a context the test builds, with no relay and no hook on the
-path, so what the arms need in order to run somewhere else is a query client, an
-abort controller and a stream. The end-to-end witnesses stay on both rows as the
-**composition** with A5 rather than as the clause itself — which is the only
-place that composition is visible, and is why they are not dropped now that the
-clause has arms of its own. What the rows do _not_ have is disjoint witness sets,
-and that is honest rather than convenient.
+**Both needed a witness of their own, and the round that said neither did was reading the end-to-end
+suite as if it were the clause.** `P1` and `P25` drive both kinds of request on both accumulators,
+and `P32` and `P45` read the axis on which an invocation that has stopped working says so — and
+every one of them is a _whole request_, with a relay mock, a hook, a reference machine, a query
+observer and an rx-nostr client standing between the clause and the function that has it. That costs
+twice. A chunk that arrives late is indistinguishable there from a chunk that was never folded, so
+those witnesses can be green for reasons that are not the clause's; and none of that apparatus
+survives this branch, so a postcondition whose whole purpose is to be portable had no witness that
+could port with it. `AC14`–`AC19` are the direct arms and are what each row is now bridged to first:
+both shipping accumulators invoked with a hand-driven `AsyncIterable` and a context the test builds,
+with no relay and no hook on the path, so what the arms need in order to run somewhere else is a
+query client, an abort controller and a stream. The end-to-end witnesses stay on both rows as the
+**composition** with A5 rather than as the clause itself — which is the only place that composition
+is visible, and is why they are not dropped now that the clause has arms of its own. What the rows
+do _not_ have is disjoint witness sets, and that is honest rather than convenient.
 
-**How the two obligations separate under an end-to-end witness they share was
-measured, and it is not uniform.** On the live arm they fail two different
-assertions of `P25`:
-an invocation that returns at the backlog end takes
-`expect(handle.activity).toBe('live')` with `expected 'idle' to be 'live'`, while
-one that stays inside its stream and stops folding takes
+**How the two obligations separate under an end-to-end witness they share was measured, and it is
+not uniform.** On the live arm they fail two different assertions of `P25`: an invocation that
+returns at the backlog end takes `expect(handle.activity).toBe('live')` with
+`expected 'idle' to be 'live'`, while one that stays inside its stream and stops folding takes
 `expect(idsOf(handle)).toContain('p25-after')` with
-`expected [ 'p25-held' ] to include 'p25-after'`. On the non-live arm they do not
-separate at all: both fail the same assertion of `P1` with the same message,
-`expected 'streaming' to be 'settled'`, to the character — the early return's
-`AccumulatorContractError` does not reach the status, because the value still
-carries an event and no ending, so the failure lands on the diagnostics axis
-instead. A change in either kill set is therefore judged by reading which
-assertion moved where that distinguishes anything, and by running the two edits
-where it does not. **On the direct arms the attribution is by subject rather than
-by which assertion fires first**, which is a reason to have them and not only a
-convenience: `AC14`, `AC17`, `AC17b`, `AC18` and `AC19` are stated over what was
-folded, what left the invocation by each of the two paths an error can take, how
-many streams were opened and how many iterators were taken from the one that was,
-and `AC15` and `AC16` over when the invocation settled. **Which is not the same as their separating**, and the
-difference is worth stating because the shape that shows it is one of the
-counterexamples: a fold that takes a prefix and `break`s out fails `AC14`, naming
-the chunks it never folded, and fails `AC16`, whose Given asserts the source
-exhausted itself rather than being closed from the consumer's side. It breaks
-both clauses and is recorded as breaking both, which is the intended reading —
-what the direct arms remove is the step where the reader has to work out which
-obligation a shared assertion's message was about.
+`expected [ 'p25-held' ] to include 'p25-after'`. On the non-live arm they do not separate at all:
+both fail the same assertion of `P1` with the same message, `expected 'streaming' to be 'settled'`,
+to the character — the early return's `AccumulatorContractError` does not reach the status, because
+the value still carries an event and no ending, so the failure lands on the diagnostics axis
+instead. A change in either kill set is therefore judged by reading which assertion moved where that
+distinguishes anything, and by running the two edits where it does not. **On the direct arms the
+attribution is by subject rather than by which assertion fires first**, which is a reason to have
+them and not only a convenience: `AC14`, `AC17`, `AC17b`, `AC18` and `AC19` are stated over what was
+folded, what left the invocation by each of the two paths an error can take, how many streams were
+opened and how many iterators were taken from the one that was, and `AC15` and `AC16` over when the
+invocation settled. **Which is not the same as their separating**, and the difference is worth
+stating because the shape that shows it is one of the counterexamples: a fold that takes a prefix
+and `break`s out fails `AC14`, naming the chunks it never folded, and fails `AC16`, whose Given
+asserts the source exhausted itself rather than being closed from the consumer's side. It breaks
+both clauses and is recorded as breaking both, which is the intended reading — what the direct arms
+remove is the step where the reader has to work out which obligation a shared assertion's message
+was about.
 
-**The singular in `A11-P1` is measured at two grains, and the second exists
-because the first was found insufficient by reading rather than by a failure.**
-`AC18` counts the calls to `streamFn`; `AC19` counts the iterators taken from
-what that call returned. A type-conforming accumulator passes the first and fails
-the second — call once, acquire twice, drive both — and on a **re-iterable**
-`AsyncIterable`, which is all the seam's type asks for, the second acquisition
-may be a second producer and a second set of subscriptions. So "called once" does
-not carry "opened one", and the row says both rather than leaving the step to the
-reader. Neither shipping accumulator acquires twice, and neither could corrupt
-anything here if it did — but **the reason recorded here for a round was the
-wrong one.** It was that `twoStageStream` is an async generator, so
-`[Symbol.asyncIterator]()` hands back the generator itself and there is nothing
-for a second acquisition to fork. That is true of `twoStageStream` and was never
-a reason: the seam's type is a general `AsyncIterable`, an implementation of it
-may hand back the identical object from every acquisition **and open a
-subscription on each one**, and so sameness never implied that an acquisition was
-an act without effect. The safety was a fact about which function we happened to
-put behind the seam, dressed as a property of the seam. **What holds it up now is
-a row of its own (`A11-C17`), and what that row is about changed with it**: not
-the producer's shape, but a capability the engine builds around whatever the
-producer is — acquiring it once, and handing the fold something the engine can
-withdraw. It was refused as a contract for several rounds on the argument that a
-port replaces this library's producer, so a sentence about that producer would
-arrive as a sentence about a stream the port does not have. The argument confused
-the function with the property. A port has a chunk producer behind this seam
-whatever it is called — the seam is an `AsyncIterable` of chunks and a fold, so
-something on the producing side is that request's producer by construction — and
-"it is reached once, by the engine, and what the fold holds can be withdrawn" is
-a sentence about that thing, which is what `A11-C17` is written to be run
-against. It is also a sentence a port has to **build** rather than one it may
-satisfy by accident, which is the second reason the move was worth making.
-**The row kept its id while its witnesses were replaced outright, and that
-belongs here rather than only in the branch's paperwork**: a reader tracing the
-id will otherwise read its history as continuous. What witnessed this row before
-measured the producer's **identity** — that a second acquisition hands back the
-same object — and it was retired rather than re-pointed, precisely because
-identity is not absence of effect. What witnesses it now measures the **wire**
-and the **count of acquisitions the underlying receives** instead. The id
-outlived a change of subject; nothing behind it did. Nor did the obligation move off the accumulator, because the
-two sides do not close the same door. **Singularity is carried by three rows and
-not by one**, and a port that takes any two of them has a hole where the third
-was: `A11-P1` counts calls and acquisitions inside the invocation and is read at
-one moment, `A11-C17` makes a call and an acquisition incapable of opening
-anything at any moment, and `A11-C10`'s second half withdraws the whole
-capability — call, acquisition and pull — once the invocation has ended. **The
-three no longer partition, and the overlap is recorded rather than left to be
-noticed**: `A11-C17` used to be about acquisitions alone, so a second _call_ was
-`A11-P1`'s door and nobody else's, and the capability closes both doors at once.
-What keeps the count worth carrying is that it is the only one of the three that
-is about what the two shipping accumulators **did** rather than about what they
-were handed — an accumulator that calls twice is misbehaving whether or not the
-capability makes it harmless — and it is what would report the capability having
-dropped out of the path. The point observation the first is stuck with is still
-the reason the other two exist, and each of the three is stated in
-[0002](0002-request-engine.md)'s A11 together with what it is silent about. What a relay-driven witness shows for a violation on _this_
-tree is not restated here either: it was written as a prediction and then
-measured, and [0002](0002-request-engine.md)'s A11 carries the prediction, the
-result and what a green result means, with the entries themselves in the ledger.
-A second copy of that answer here would be a second derivation of it, free to go
-stale the next time either half moves.
+**The singular in `A11-P1` is measured at two grains, and the second exists because the first was
+found insufficient by reading rather than by a failure.** `AC18` counts the calls to `streamFn`;
+`AC19` counts the iterators taken from what that call returned. A type-conforming accumulator passes
+the first and fails the second — call once, acquire twice, drive both — and on a **re-iterable**
+`AsyncIterable`, which is all the seam's type asks for, the second acquisition may be a second
+producer and a second set of subscriptions. So "called once" does not carry "opened one", and the
+row says both rather than leaving the step to the reader. Neither shipping accumulator acquires
+twice, and neither could corrupt anything here if it did — but **the reason recorded here for a
+round was the wrong one.** It was that `twoStageStream` is an async generator, so
+`[Symbol.asyncIterator]()` hands back the generator itself and there is nothing for a second
+acquisition to fork. That is true of `twoStageStream` and was never a reason: the seam's type is a
+general `AsyncIterable`, an implementation of it may hand back the identical object from every
+acquisition **and open a subscription on each one**, and so sameness never implied that an
+acquisition was an act without effect. The safety was a fact about which function we happened to put
+behind the seam, dressed as a property of the seam. **What holds it up now is a row of its own
+(`A11-C17`), and what that row is about changed with it**: not the producer's shape, but a
+capability the engine builds around whatever the producer is — acquiring it once, and handing the
+fold something the engine can withdraw. It was refused as a contract for several rounds on the
+argument that a port replaces this library's producer, so a sentence about that producer would
+arrive as a sentence about a stream the port does not have. The argument confused the function with
+the property. A port has a chunk producer behind this seam whatever it is called — the seam is an
+`AsyncIterable` of chunks and a fold, so something on the producing side is that request's producer
+by construction — and "it is reached once, by the engine, and what the fold holds can be withdrawn"
+is a sentence about that thing, which is what `A11-C17` is written to be run against. It is also a
+sentence a port has to **build** rather than one it may satisfy by accident, which is the second
+reason the move was worth making. **The row kept its id while its witnesses were replaced outright,
+and that belongs here rather than only in the branch's paperwork**: a reader tracing the id will
+otherwise read its history as continuous. What witnessed this row before measured the producer's
+**identity** — that a second acquisition hands back the same object — and it was retired rather than
+re-pointed, precisely because identity is not absence of effect. What witnesses it now measures the
+**wire** and the **count of acquisitions the underlying receives** instead. The id outlived a change
+of subject; nothing behind it did. Nor did the obligation move off the accumulator, because the two
+sides do not close the same door. **Singularity is carried by three rows and not by one**, and a
+port that takes any two of them has a hole where the third was: `A11-P1` counts calls and
+acquisitions inside the invocation and is read at one moment, `A11-C17` makes a call and an
+acquisition incapable of opening anything at any moment, and `A11-C10`'s second half withdraws the
+whole capability — call, acquisition and pull — once the invocation has ended. **The three no longer
+partition, and the overlap is recorded rather than left to be noticed**: `A11-C17` used to be about
+acquisitions alone, so a second _call_ was `A11-P1`'s door and nobody else's, and the capability
+closes both doors at once. What keeps the count worth carrying is that it is the only one of the
+three that is about what the two shipping accumulators **did** rather than about what they were
+handed — an accumulator that calls twice is misbehaving whether or not the capability makes it
+harmless — and it is what would report the capability having dropped out of the path. The point
+observation the first is stuck with is still the reason the other two exist, and each of the three
+is stated in [0002](0002-request-engine.md)'s A11 together with what it is silent about. What a
+relay-driven witness shows for a violation on _this_ tree is not restated here either: it was
+written as a prediction and then measured, and [0002](0002-request-engine.md)'s A11 carries the
+prediction, the result and what a green result means, with the entries themselves in the ledger. A
+second copy of that answer here would be a second derivation of it, free to go stale the next time
+either half moves.
 
-**Both are `behavior`, and the alternative was considered rather than assumed
-away.** The kind vocabulary classifies what a row is _about_ — something
-observable at runtime, for which a contract test must exist — and not who owes
-the obligation, which is what a `postcondition` kind would have recorded. Adding
-one would mean adding it to `CAT3`'s list, and every kind outside `behavior` and
-`architecture` is exempt from `CAT4`, `CAT12` and `CAT13`: a witness that exists,
-a mutation measured against it, and a witness that does not merely read our
-source. **There is a second way out of those three and it is the only other
-one**: a `production-only` witness, for an obligation no arm in a spike without
-components can reach. It is not free the way a kind would have been — `CAT4`
-charges it a `public` route and runtime needs, and it names the rows that hold
-it; four do. **That is the whole of what is enforced mechanically: the route
-and the needs.** It makes a static test the wrong evidence for such a row by the
-grammar's own terms; it does not make a production test that fails to observe
-the row's Given and Then impossible, and whether one does is the phase-2
-reviewer judgement this record reserves for every row. While this branch lives,
-`tools/review-packet.mjs` — branch-local, like every program under `tools/` —
-prints each row beside the assertions of the arm that witnesses it, which is
-what makes that comparison cheap; after it, the comparison is made by reading. This paragraph said there was
-one way out for a round after the second one existed, which is the same rot it
-is warning about. So
-inventing a kind would have removed all three checks from precisely the rows that
-exist _because_ the guarantee got weaker. That these are obligations on the two
-shipping accumulators rather than on the seam's type is said in each row's Given,
-which is where it can be read.
+**Both are `behavior`, and the alternative was considered rather than assumed away.** The kind
+vocabulary classifies what a row is _about_ — something observable at runtime, for which a contract
+test must exist — and not who owes the obligation, which is what a `postcondition` kind would have
+recorded. Adding one would mean adding it to `CAT3`'s list, and every kind outside `behavior` and
+`architecture` is exempt from `CAT4`, `CAT12` and `CAT13`: a witness that exists, a mutation
+measured against it, and a witness that does not merely read our source. **There is a second way out
+of those three and it is the only other one**: a `production-only` witness, for an obligation no arm
+in a spike without components can reach. It is not free the way a kind would have been — `CAT4`
+charges it a `public` route and runtime needs, and it names the rows that hold it; four do. **That
+is the whole of what is enforced mechanically: the route and the needs.** It makes a static test the
+wrong evidence for such a row by the grammar's own terms; it does not make a production test that
+fails to observe the row's Given and Then impossible, and whether one does is the phase-2 reviewer
+judgement this record reserves for every row. While this branch lives, `tools/review-packet.mjs` —
+branch-local, like every program under `tools/` — prints each row beside the assertions of the arm
+that witnesses it, which is what makes that comparison cheap; after it, the comparison is made by
+reading. This paragraph said there was one way out for a round after the second one existed, which
+is the same rot it is warning about. So inventing a kind would have removed all three checks from
+precisely the rows that exist _because_ the guarantee got weaker. That these are obligations on the
+two shipping accumulators rather than on the seam's type is said in each row's Given, which is where
+it can be read.
 
-**What a port must carry.** Each row's own arms are in its porting note; what
-follows is the part the two rows share, and it is the end-to-end half of both.
-Neither clause says when the stream is entitled to end — that is A5's question,
-answered per leg and per relay (`A5-C16` for the live case, where the request
-ends when the _last_ leg does and the forward one is not always last). What the
-end-to-end arms measure is the two factors multiplied: a stream A5 ended when it
-should, driven and awaited as A11 requires. Both rows need the same two requests
-for it, because a request that is not live and a live one exercise A5's two
-answers.
+**What a port must carry.** Each row's own arms are in its porting note; what follows is the part
+the two rows share, and it is the end-to-end half of both. Neither clause says when the stream is
+entitled to end — that is A5's question, answered per leg and per relay (`A5-C16` for the live case,
+where the request ends when the _last_ leg does and the forward one is not always last). What the
+end-to-end arms measure is the two factors multiplied: a stream A5 ended when it should, driven and
+awaited as A11 requires. Both rows need the same two requests for it, because a request that is not
+live and a live one exercise A5's two answers.
 
-- **The non-live arm**: a request driven to its terminal outcome and read
-  afterwards. It is the arm the exhibited counterexample lives in — an invocation
-  that takes one chunk from the stream and stops taking them leaves the settle
-  marker unfolded, so the request never settles and the `refresh()` over it never
-  answers. A port that omits this arm has left `A11-P1` untested for most of the
-  requests this library makes, which is what happened here while `A11-P1` spoke
-  only about live query functions. **What this arm cannot do is say which
-  obligation broke**, and that is measured rather than assumed: an invocation
-  that folds a prefix and returns and one that folds a prefix and hangs fail the
-  same assertion with the same message here.
-- **The live arm**: a request whose backlog ends while its forward leg is still
-  open, and an event published on that forward leg _after_ the backlog end which
-  still reaches the consumer. A port that stops at the backlog end has not
-  witnessed either postcondition on this arm: what the _value_ holds at that
-  moment — an end recorded under that attempt, no failure, a forward leg it never
-  saw close — is the same whether the invocation is still inside its stream or
-  returned there, which is the same "predicate easier to compute than the
-  question" this family has already been wrong about four times.
+- **The non-live arm**: a request driven to its terminal outcome and read afterwards. It is the arm
+  the exhibited counterexample lives in — an invocation that takes one chunk from the stream and
+  stops taking them leaves the settle marker unfolded, so the request never settles and the
+  `refresh()` over it never answers. A port that omits this arm has left `A11-P1` untested for most
+  of the requests this library makes, which is what happened here while `A11-P1` spoke only about
+  live query functions. **What this arm cannot do is say which obligation broke**, and that is
+  measured rather than assumed: an invocation that folds a prefix and returns and one that folds a
+  prefix and hangs fail the same assertion with the same message here.
+- **The live arm**: a request whose backlog ends while its forward leg is still open, and an event
+  published on that forward leg _after_ the backlog end which still reaches the consumer. A port
+  that stops at the backlog end has not witnessed either postcondition on this arm: what the _value_
+  holds at that moment — an end recorded under that attempt, no failure, a forward leg it never saw
+  close — is the same whether the invocation is still inside its stream or returned there, which is
+  the same "predicate easier to compute than the question" this family has already been wrong about
+  four times.
 
-  **The handle is not the value, and this record said otherwise for a round.**
-  The claim standing here was that the forward-after-backlog observation is what
-  separates a conforming invocation from one that returned at the backlog end.
-  It was measured, and in that direction it is wrong: `activity` is derived from
-  the query library's own fetch state, so an invocation that returns ends the
-  fetch and the handle reports `idle` before anything is published — the
-  returning invocation dies on `expect(handle.activity).toBe('live')`, one
-  assertion earlier, and never reaches the forward event at all. **The
-  observation is still required, and what it protects is a different
-  invocation**: one that stays inside its stream, holds `activity` at `live`
-  throughout, and simply stops folding past the backlog end. That one passes
-  everything before the forward event and fails on it. So a port needs both
-  observations, as two of them rather than as one assertion with two messages —
-  the return is caught on the activity axis, the fold on the answer. **What would
-  disprove this reading**: derive the activity axis from the value's own legs
-  rather than from the query library's fetch state, and the returning invocation
-  falls through to the forward-event assertion as the earlier claim had it.
+  **The handle is not the value, and this record said otherwise for a round.** The claim standing
+  here was that the forward-after-backlog observation is what separates a conforming invocation from
+  one that returned at the backlog end. It was measured, and in that direction it is wrong:
+  `activity` is derived from the query library's own fetch state, so an invocation that returns ends
+  the fetch and the handle reports `idle` before anything is published — the returning invocation
+  dies on `expect(handle.activity).toBe('live')`, one assertion earlier, and never reaches the
+  forward event at all. **The observation is still required, and what it protects is a different
+  invocation**: one that stays inside its stream, holds `activity` at `live` throughout, and simply
+  stops folding past the backlog end. That one passes everything before the forward event and fails
+  on it. So a port needs both observations, as two of them rather than as one assertion with two
+  messages — the return is caught on the activity axis, the fold on the answer. **What would
+  disprove this reading**: derive the activity axis from the value's own legs rather than from the
+  query library's fetch state, and the returning invocation falls through to the forward-event
+  assertion as the earlier claim had it.
 
-**Of the three endings `A11-P1` licenses, two are observed as endings and the
-third only as an absence, and that is a fact about the witnesses rather than a
-gap in them.** The iterator completing is exercised by `AC14`, which drives one
-to exhaustion and asserts the value that comes back; an error propagating is
-exercised twice over, by `AC17` from the iterator and by `AC17b` from the
-reducer — two ids for one clause, so that a ledger reading a kill can say which
-of the two paths it was on. The external cancel
-is not exercised at all: every witness of this row sees a drive that stopped with
-no cancel to excuse it, and `AC15` asserts the invocation's signal is _clear_ —
-as a premise, so that "still pending" cannot be a cancellation the test caused,
-which is the opposite of exercising the permission. What that permission licenses
-for an invocation whose consumer went away is `A11-C16`'s subject and `P2`'s
-rather than this row's.
+**Of the three endings `A11-P1` licenses, two are observed as endings and the third only as an
+absence, and that is a fact about the witnesses rather than a gap in them.** The iterator completing
+is exercised by `AC14`, which drives one to exhaustion and asserts the value that comes back; an
+error propagating is exercised twice over, by `AC17` from the iterator and by `AC17b` from the
+reducer — two ids for one clause, so that a ledger reading a kill can say which of the two paths it
+was on. The external cancel is not exercised at all: every witness of this row sees a drive that
+stopped with no cancel to excuse it, and `AC15` asserts the invocation's signal is _clear_ — as a
+premise, so that "still pending" cannot be a cancellation the test caused, which is the opposite of
+exercising the permission. What that permission licenses for an invocation whose consumer went away
+is `A11-C16`'s subject and `P2`'s rather than this row's.
 
-Every arm runs against **both** shipping accumulators; one accumulator is one of
-the two functions the postconditions are about, so a single-adapter port measures
-half of each. And if an implementation ships a third accumulator, that is a third
-obligation rather than a third measurement — `A11-P3` is why.
+Every arm runs against **both** shipping accumulators; one accumulator is one of the two functions
+the postconditions are about, so a single-adapter port measures half of each. And if an
+implementation ships a third accumulator, that is a third obligation rather than a third measurement
+— `A11-P3` is why.
 
-**Driving the seam directly measured two differences between the two adapters
-that a request cannot show. They are recorded here as measurements rather than as
-rows, because neither is a difference a consumer can observe on this library
-today** — `A11-C1`'s parity is over the answers the two produce, and both of
-these are on the far side of the seam, in what an accumulator hands to a
+**Driving the seam directly measured two differences between the two adapters that a request cannot
+show. They are recorded here as measurements rather than as rows, because neither is a difference a
+consumer can observe on this library today** — `A11-C1`'s parity is over the answers the two
+produce, and both of these are on the far side of the seam, in what an accumulator hands to a
 `streamFn` and what it touches on the way. Both were taken against the resolved
-`@tanstack/query-core` 5.101.4 under `tanstack-svelte-query-v6`, not the 5.90.2
-at the top of `node_modules`, and a port re-takes them rather than inheriting
-them, since they are facts about a dependency version.
+`@tanstack/query-core` 5.101.4 under `tanstack-svelte-query-v6`, not the 5.90.2 at the top of
+`node_modules`, and a port re-takes them rather than inheriting them, since they are facts about a
+dependency version.
 
-- **The context each hands to `streamFn` is a different shape.** Adapter A's has
-  six own properties — `client`, `direction`, `meta`, `pageParam`, `queryKey`,
-  `signal` — and adapter B's has four: `client`, `meta`, `queryKey`, `signal`.
-  What they agree on is everything this library reads: the same `client`, the
-  same `queryKey`, the same `meta`, and the **same object** for `signal`, reached
-  through a consume-aware getter in both. Outside an infinite query the two extra
-  fields are `undefined` and this library makes none, so nothing observes the
-  difference today; it is a real difference in the seam's surface all the same.
-  **What would make it observable** is driving this seam under an infinite query,
-  where `pageParam` and `direction` carry values and an accumulator that reads
-  either behaves differently on the two adapters.
-- **Adapter A makes a fifth call into query state.** It asks its query cache for
-  the entry and then asks that entry `isFetched()` at the query function's entry;
-  under the `append` the seam fixes, the answer selects no branch that survives
-  and the result is unused. Adapter B's own comment claims "four calls and no
-  more" — `setQueryData`, `getQueryData`, the stream function, and reading the
-  signal once — and that claim is about adapter B and is true of it. What is
-  recorded is that the pair is not symmetric here, so a reader who takes the
-  fallback's account of itself as an account of the seam has the wrong one of the
-  two.
+- **The context each hands to `streamFn` is a different shape.** Adapter A's has six own properties
+  — `client`, `direction`, `meta`, `pageParam`, `queryKey`, `signal` — and adapter B's has four:
+  `client`, `meta`, `queryKey`, `signal`. What they agree on is everything this library reads: the
+  same `client`, the same `queryKey`, the same `meta`, and the **same object** for `signal`, reached
+  through a consume-aware getter in both. Outside an infinite query the two extra fields are
+  `undefined` and this library makes none, so nothing observes the difference today; it is a real
+  difference in the seam's surface all the same. **What would make it observable** is driving this
+  seam under an infinite query, where `pageParam` and `direction` carry values and an accumulator
+  that reads either behaves differently on the two adapters.
+- **Adapter A makes a fifth call into query state.** It asks its query cache for the entry and then
+  asks that entry `isFetched()` at the query function's entry; under the `append` the seam fixes,
+  the answer selects no branch that survives and the result is unused. Adapter B's own comment
+  claims "four calls and no more" — `setQueryData`, `getQueryData`, the stream function, and reading
+  the signal once — and that claim is about adapter B and is true of it. What is recorded is that
+  the pair is not symmetric here, so a reader who takes the fallback's account of itself as an
+  account of the seam has the wrong one of the two.
 
-**`A11-P2`'s second half — that an invocation whose iterator has run out then
-resolves, rather than staying pending on a stream it has already drained — is a
-clause of the row now, and it is witnessed twice: once directly and once
-end-to-end.** It was held out of both records for a round while its mutation was
-run, on the rule that a clause a port would copy with no falsifier behind it is
-the parenthesised note the rules below forbid, one level up.
+**`A11-P2`'s second half — that an invocation whose iterator has run out then resolves, rather than
+staying pending on a stream it has already drained — is a clause of the row now, and it is witnessed
+twice: once directly and once end-to-end.** It was held out of both records for a round while its
+mutation was run, on the rule that a clause a port would copy with no falsifier behind it is the
+parenthesised note the rules below forbid, one level up.
 
-What the measurement found is why the arm is separate. An accumulator that folds
-every chunk, lets the stream end where it should and then hangs instead of
-returning leaves an answer that is complete and correct in every field: every
-`refresh()` still resolves, every event still arrives, and the whole of the
-`refresh` witness file stays green. **Whether an invocation returned is not
-readable from the value it produced.** It is readable from the handle, because
-`activity` is derived from the query library's fetch state, and a fetch that
-never finishes is a request that is done and still reports work — `P32` reads
-`expected 'live' to be 'idle'` and `P45` reads `expected 'refreshing' to be
-'idle'`, on both shipping accumulators. Those two are the end-to-end witnesses of
-this half. `AC16` is the direct one and they are not substitutes: `AC16` says
-this function resolves when the iterator it was handed runs out, and asserts the
-Given rather than assuming it — that the source _exhausted itself_ rather than
-being closed from the consumer's side, since a `break` completes an iterator to
-the letter and an arm without that distinction accepts the fold-a-prefix-and-leave
-accumulator as conforming. `P32` and `P45` say the thing `AC16` cannot: that a
-whole request whose stream A5 ended stops reporting work.
+What the measurement found is why the arm is separate. An accumulator that folds every chunk, lets
+the stream end where it should and then hangs instead of returning leaves an answer that is complete
+and correct in every field: every `refresh()` still resolves, every event still arrives, and the
+whole of the `refresh` witness file stays green. **Whether an invocation returned is not readable
+from the value it produced.** It is readable from the handle, because `activity` is derived from the
+query library's fetch state, and a fetch that never finishes is a request that is done and still
+reports work — `P32` reads `expected 'live' to be 'idle'` and `P45` reads
+`expected 'refreshing' to be 'idle'`, on both shipping accumulators. Those two are the end-to-end
+witnesses of this half. `AC16` is the direct one and they are not substitutes: `AC16` says this
+function resolves when the iterator it was handed runs out, and asserts the Given rather than
+assuming it — that the source _exhausted itself_ rather than being closed from the consumer's side,
+since a `break` completes an iterator to the letter and an arm without that distinction accepts the
+fold-a-prefix-and-leave accumulator as conforming. `P32` and `P45` say the thing `AC16` cannot: that
+a whole request whose stream A5 ended stops reporting work.
 
-So a port carries an end-to-end arm for this half as well as the direct one:
-**a request whose stream has ended, read on an axis that reports whether work is
-outstanding.** A port whose query
-library exposes no such axis — or that derives one from the value's own legs
-instead — has no witness for this half and should record it as residue rather
-than as covered. That substitution is also the falsifier for the reading above:
-make the activity axis a function of the value and both observations go quiet
-while the defect stands.
+So a port carries an end-to-end arm for this half as well as the direct one: **a request whose
+stream has ended, read on an axis that reports whether work is outstanding.** A port whose query
+library exposes no such axis — or that derives one from the value's own legs instead — has no
+witness for this half and should record it as residue rather than as covered. That substitution is
+also the falsifier for the reading above: make the activity axis a function of the value and both
+observations go quiet while the defect stands.
 
-**Which end-to-end witnesses can be said to have measured this on _both_
-implementations is not symmetric, and the asymmetry is what kept three of them off
-the row.** The most direct observation of an invocation returning is a witness
-that waits on the call rather than on an axis: `ACT-5` holds a
-`refetchQueries(...)`, sets a
-flag in its `then` and waits for the flag, so an invocation that never comes back
-kills it on the promise a caller was handed. `ACT-2` and `ACT-6` die one step
-past the answer, waiting for `activity` to reach `idle` with the wait for
-`settled` immediately above them passing — a complete answer over a fetch that
-never ends, which is this clause said on the axis rather than on the call. All
-three are killed by the adapter-A edit and by no fallback edit, and the reason is
-measured rather than suspected: every test in that file mounts the hook without
-an accumulator, so what runs is the default, which is the helper, and a
-fallback-side edit cannot reach them at all.
+**Which end-to-end witnesses can be said to have measured this on _both_ implementations is not
+symmetric, and the asymmetry is what kept three of them off the row.** The most direct observation
+of an invocation returning is a witness that waits on the call rather than on an axis: `ACT-5` holds
+a `refetchQueries(...)`, sets a flag in its `then` and waits for the flag, so an invocation that
+never comes back kills it on the promise a caller was handed. `ACT-2` and `ACT-6` die one step past
+the answer, waiting for `activity` to reach `idle` with the wait for `settled` immediately above
+them passing — a complete answer over a fetch that never ends, which is this clause said on the axis
+rather than on the call. All three are killed by the adapter-A edit and by no fallback edit, and the
+reason is measured rather than suspected: every test in that file mounts the hook without an
+accumulator, so what runs is the default, which is the helper, and a fallback-side edit cannot reach
+them at all.
 
-**They are therefore not witnesses of this row.** A row whose Given says "on
-either shipping accumulator" cannot be carried by observations that run on one of
-the two — and they would be the weaker evidence in any case, since all three die
-as a `waitFor` timing out rather than on an assertion, which a loaded machine
-produces as well. The row keeps `P32` and `P45`, which fail on assertions and say
-what they saw; the other three are recorded in the ledger entry that kills them,
+**They are therefore not witnesses of this row.** A row whose Given says "on either shipping
+accumulator" cannot be carried by observations that run on one of the two — and they would be the
+weaker evidence in any case, since all three die as a `waitFor` timing out rather than on an
+assertion, which a loaded machine produces as well. The row keeps `P32` and `P45`, which fail on
+assertions and say what they saw; the other three are recorded in the ledger entry that kills them,
 where a reader can find them.
 
-**That was a bound on the clause and is now a bound on its end-to-end arm alone,
-which is the clearest thing the direct witnesses bought.** Across whole requests
-the second half is visible on the activity axis and nowhere else, because the one
-observation that waits on the call runs on one of the two functions the row is
-about. `AC16` waits on the call on **both**, and can, because it holds the stream
-instead of a relay: what a request has to reach through a hook and a query
-observer, an arm that owns the iterator asserts directly. The bound is worth
-keeping in view anyway — a port that carries only the end-to-end arms inherits it
-whole.
+**That was a bound on the clause and is now a bound on its end-to-end arm alone, which is the
+clearest thing the direct witnesses bought.** Across whole requests the second half is visible on
+the activity axis and nowhere else, because the one observation that waits on the call runs on one
+of the two functions the row is about. `AC16` waits on the call on **both**, and can, because it
+holds the stream instead of a relay: what a request has to reach through a hook and a query
+observer, an arm that owns the iterator asserts directly. The bound is worth keeping in view anyway
+— a port that carries only the end-to-end arms inherits it whole.
 
-**`A11-P3` is not a row, and that is a decision rather than an omission.** It
-makes no observation of its own: it is a rule for reading the measurements that
-already exist. `A11-C1` is parity across the two adapters, `A11-C5` is that the
-seam is the path a request actually takes, and `A11-C6`–`A11-C16` are the
-engine's containment. What `A11-P3` says is that the first of those is a
-measurement over exactly two implementations and says nothing about a third,
-while the second and third are guaranteed by the engine for any invocation that
-returned, threw or was externally cancelled — and that reading "the suite passes
-on both accumulators" as evidence about a future accumulator is a mistake this
-document used to invite. There is no Given, no When and no Observable Then to
-write, because the claim is about what the existing rows are evidence _for_. It
-therefore joins the clauses named above as decided and not contracted, rather
-than being given a row with a witness that would be one of the rows it is about.
+**`A11-P3` is not a row, and that is a decision rather than an omission.** It makes no observation
+of its own: it is a rule for reading the measurements that already exist. `A11-C1` is parity across
+the two adapters, `A11-C5` is that the seam is the path a request actually takes, and
+`A11-C6`–`A11-C16` are the engine's containment. What `A11-P3` says is that the first of those is a
+measurement over exactly two implementations and says nothing about a third, while the second and
+third are guaranteed by the engine for any invocation that returned, threw or was externally
+cancelled — and that reading "the suite passes on both accumulators" as evidence about a future
+accumulator is a mistake this document used to invite. There is no Given, no When and no Observable
+Then to write, because the claim is about what the existing rows are evidence _for_. It therefore
+joins the clauses named above as decided and not contracted, rather than being given a row with a
+witness that would be one of the rows it is about.
 
-**The count was wrong the third time because the division was read as covering
-two questions when it answers one.** "How can the invocation leave" is exhaustive
-about the _waiter_ — whether a `refresh()` gets an answer — and says nothing
-about what the invocation left _running_. The resolving half was closed against
-the returned value alone, and an accumulator that pulls its stream once and
-returns satisfies that check while holding an open REQ: the value carries no
-stamp, so the claim was released, and nothing at all ended the producer.
-`A11-C10` is the second question asked separately, and its witness observes the
-wire rather than an internal flag, because the whole finding was that an internal
-predicate proved a narrower fact than the row claimed.
+**The count was wrong the third time because the division was read as covering two questions when it
+answers one.** "How can the invocation leave" is exhaustive about the _waiter_ — whether a
+`refresh()` gets an answer — and says nothing about what the invocation left _running_. The
+resolving half was closed against the returned value alone, and an accumulator that pulls its stream
+once and returns satisfies that check while holding an open REQ: the value carries no stamp, so the
+claim was released, and nothing at all ended the producer. `A11-C10` is the second question asked
+separately, and its witness observes the wire rather than an internal flag, because the whole
+finding was that an internal predicate proved a narrower fact than the row claimed.
 
-**And the count was wrong a fourth time, for the same reason wearing a new
-disguise: the predicate that told a contract violation from an abort was itself
-a narrower fact than it was read as.** That predicate answered "was this a
-teardown" with "did the engine's stream unwind", taken from a `finally` wrapped
-around the iteration. A stream that is torn down unwinds — and **so does one that simply
-finished**, which is the common case rather than the teardown case. The two
-correlate only for an accumulator that folds with the reducer it was handed,
-which is precisely the assumption this family exists because A11 may not make.
-So an accumulator that drove the stream to its end and returned its
-`initialValue` was routed to the abort side: measured against the tree that
-carried it, through a non-live request and a real relay, the entry stayed
-`success` over an
-empty value, the surface read `streaming([])` with `activity: idle` and the
-`loading` slot, and `refresh()` **rejected** with an `AbortError` — falsifying
-`A11-C9`'s required outcome and `A11-C11`'s required state at once, for the
-shape they are written about. `A11-C13` is that row and `AC10` is its witness.
+**And the count was wrong a fourth time, for the same reason wearing a new disguise: the predicate
+that told a contract violation from an abort was itself a narrower fact than it was read as.** That
+predicate answered "was this a teardown" with "did the engine's stream unwind", taken from a
+`finally` wrapped around the iteration. A stream that is torn down unwinds — and **so does one that
+simply finished**, which is the common case rather than the teardown case. The two correlate only
+for an accumulator that folds with the reducer it was handed, which is precisely the assumption this
+family exists because A11 may not make. So an accumulator that drove the stream to its end and
+returned its `initialValue` was routed to the abort side: measured against the tree that carried it,
+through a non-live request and a real relay, the entry stayed `success` over an empty value, the
+surface read `streaming([])` with `activity: idle` and the `loading` slot, and `refresh()`
+**rejected** with an `AbortError` — falsifying `A11-C9`'s required outcome and `A11-C11`'s required
+state at once, for the shape they are written about. `A11-C13` is that row and `AC10` is its
+witness.
 
-Nothing could see it, and that is recorded rather than glossed: all four
-witnesses then aimed at this boundary — `AC6`, `AC8`, `AC9`, which never call
-`streamFn`, and `AC7`, which pulls once and abandons the iterator — leave the
-stream un-unwound, so every one of them exercised the same arm. The two
-predicates were instrumented against each other over the whole suite before the
-swap and never disagreed anywhere.
+Nothing could see it, and that is recorded rather than glossed: all four witnesses then aimed at
+this boundary — `AC6`, `AC8`, `AC9`, which never call `streamFn`, and `AC7`, which pulls once and
+abandons the iterator — leave the stream un-unwound, so every one of them exercised the same arm.
+The two predicates were instrumented against each other over the whole suite before the swap and
+never disagreed anywhere.
 
-The discriminator is the **invocation's own `AbortController`** now — the one
-`A11-C10` introduced for the producer's lifetime, asked a second question. Every
-legitimate abort path reaches the boundary with it aborted, because query-core's
-cancellation is forwarded into it; a stream that ran to its end, or that the
-accumulator broke out of, reaches it unaborted. `A11-C14` is the attack from the
-other side, and it exists because a discriminator is only worth what both of its
-directions are worth: an accumulator whose only defect is that it dropped the
-chunks, reaching the boundary genuinely torn down, must still be read as an
-abort and not reported as a contract failure.
+The discriminator is the **invocation's own `AbortController`** now — the one `A11-C10` introduced
+for the producer's lifetime, asked a second question. Every legitimate abort path reaches the
+boundary with it aborted, because query-core's cancellation is forwarded into it; a stream that ran
+to its end, or that the accumulator broke out of, reaches it unaborted. `A11-C14` is the attack from
+the other side, and it exists because a discriminator is only worth what both of its directions are
+worth: an accumulator whose only defect is that it dropped the chunks, reaching the boundary
+genuinely torn down, must still be read as an abort and not reported as a contract failure.
 
-**A discriminator is also only worth who can write to it, and that question was
-never asked of this one until it was answered the wrong way.** The controller is
-the engine's, and the argument for saying so is an enumeration of the routes that
-can abort it, which [0002](0002-request-engine.md) now carries. One of those
-routes ran through an object the accumulator holds: query-core's signal is an
-`EventTarget`, a dispatched `abort` event fired the link's listener while
-`aborted` stayed false, and the invocation was aborted for real. **The Observable
-Then of every row that depends on this boundary was measured false in that
-state** — `A11-C9`, `A11-C11`, `A11-C13` and `A11-C15` among them: a stampless
-return was filed as an abort, and what a consumer saw was `success` over an empty
-value with the `loading` slot and `idle` beside it, no error anywhere, and a
-`refresh()` rejecting with an `AbortError`. **Those rows are not being weakened,
-because what was wrong was reachable rather than written**: they say what the
-engine owes, the engine did not owe it for one state, and the repair is on the
-link. What is recorded here is the dependency, since none of the four names it
-and all four rest on it — a port that forwards a cancellation by listening for
-the event rather than by checking the signal has these four rows failing and no
-witness pointed anywhere near the reason.
+**A discriminator is also only worth who can write to it, and that question was never asked of this
+one until it was answered the wrong way.** The controller is the engine's, and the argument for
+saying so is an enumeration of the routes that can abort it, which [0002](0002-request-engine.md)
+now carries. One of those routes ran through an object the accumulator holds: query-core's signal is
+an `EventTarget`, a dispatched `abort` event fired the link's listener while `aborted` stayed false,
+and the invocation was aborted for real. **The Observable Then of every row that depends on this
+boundary was measured false in that state** — `A11-C9`, `A11-C11`, `A11-C13` and `A11-C15` among
+them: a stampless return was filed as an abort, and what a consumer saw was `success` over an empty
+value with the `loading` slot and `idle` beside it, no error anywhere, and a `refresh()` rejecting
+with an `AbortError`. **Those rows are not being weakened, because what was wrong was reachable
+rather than written**: they say what the engine owes, the engine did not owe it for one state, and
+the repair is on the link. What is recorded here is the dependency, since none of the four names it
+and all four rest on it — a port that forwards a cancellation by listening for the event rather than
+by checking the signal has these four rows failing and no witness pointed anywhere near the reason.
 
-**And the count was wrong a fifth time, in the conjunct nobody had attacked: the
-predicate for question 2.** That one asked whether this attempt was named
-_anywhere_ on the value — `running`, `forward`, `backlog` or `failure` — on the
-reading that
-an attempt named on the value had reached it. Reaching is not ending.
-`beginAttempt` writes `running` and `forward` on the **first chunk** of an
-attempt, so an accumulator that folds one chunk with the reducer it was handed
-and returns satisfied the test with no end and no failure anywhere:
+**And the count was wrong a fifth time, in the conjunct nobody had attacked: the predicate for
+question 2.** That one asked whether this attempt was named _anywhere_ on the value — `running`,
+`forward`, `backlog` or `failure` — on the reading that an attempt named on the value had reached
+it. Reaching is not ending. `beginAttempt` writes `running` and `forward` on the **first chunk** of
+an attempt, so an accumulator that folds one chunk with the reducer it was handed and returns
+satisfied the test with no end and no failure anywhere:
 
 ```ts
 for await (const chunk of streamFn(context)) {
@@ -760,104 +634,90 @@ for await (const chunk of streamFn(context)) {
 return value;
 ```
 
-With a backward refusal as that chunk, the REQ goes out, the reducer stamps both
-legs, `break` closes the stream and the wire, and the query **succeeds** over a
-value carrying no outcome — `streaming([])` with `activity: idle` behind the
-`loading` slot, while `refresh()` rejects with an abandonment `AbortError`. The
-stopped-request spinner, for the fourth round running, reached through the one
-conjunct no entry in the ledger was aimed at. The predicate is `backlog` or
-`failure` under this attempt now — the same pair the wait reads — and `A11-C15`
-is the row. `P30` catches a stamp mutation in a different scenario and was not a
-substitute for it, which is why the two ledger entries added with this row attack
-the disjunction in both directions rather than the boundary around it.
+With a backward refusal as that chunk, the REQ goes out, the reducer stamps both legs, `break`
+closes the stream and the wire, and the query **succeeds** over a value carrying no outcome —
+`streaming([])` with `activity: idle` behind the `loading` slot, while `refresh()` rejects with an
+abandonment `AbortError`. The stopped-request spinner, for the fourth round running, reached through
+the one conjunct no entry in the ledger was aimed at. The predicate is `backlog` or `failure` under
+this attempt now — the same pair the wait reads — and `A11-C15` is the row. `P30` catches a stamp
+mutation in a different scenario and was not a substitute for it, which is why the two ledger
+entries added with this row attack the disjunction in both directions rather than the boundary
+around it.
 
-**This is the fourth position of this boundary**, and the reason for each move is
-on the record here and in 0002's A11, because a boundary that keeps moving is one
-a reader is entitled to see the history of rather than only the latest answer.
-The pattern across all four is one thing said four ways: **a predicate that was
-easier to compute than the question, adopted because it agreed with the question
-on every accumulator anybody had written down.** That is also the argument for
-stating the axis above rather than a fifth list.
+**This is the fourth position of this boundary**, and the reason for each move is on the record here
+and in 0002's A11, because a boundary that keeps moving is one a reader is entitled to see the
+history of rather than only the latest answer. The pattern across all four is one thing said four
+ways: **a predicate that was easier to compute than the question, adopted because it agreed with the
+question on every accumulator anybody had written down.** That is also the argument for stating the
+axis above rather than a fifth list.
 
-**The required observation no longer splits with the division, and that
-unification belongs to the boundary's current position rather than being a change
-of its own.** All of the rows in the **resolving** cell require that
-`refresh()` settles rather than staying pending, live and non-live, and all of
-them settle the same way: with that attempt's error outcome. `A11-C16` is not one
-of them and must not be read as one: its invocation never leaves, so nothing
-about the return decides anything, and its wait ends only because the consumer
-was destroyed — by rejecting with an abort. Where the consumer stays, nothing
-ends it at all, and that is `A11-P1`'s subject rather than this cell's. `A11-C9` used to reject, on the argument that
-nothing was attempted — but 0002 decides that entry into the query function _is_
-the attempt boundary, so an invocation that entered has run an attempt whatever
-it did next, and C11 puts an attempt that ran and went wrong on the resolving
-side. Rejecting also left the case with no consumer-visible effect at all where
-nobody was waiting, which is `A11-C11`. See 0002's A11, where the alternative —
-moving the boundary to where the stamp appears, which would take `A11-C7` and
-`A11-C8` onto the rejecting side — is recorded as considered and rejected.
+**The required observation no longer splits with the division, and that unification belongs to the
+boundary's current position rather than being a change of its own.** All of the rows in the
+**resolving** cell require that `refresh()` settles rather than staying pending, live and non-live,
+and all of them settle the same way: with that attempt's error outcome. `A11-C16` is not one of them
+and must not be read as one: its invocation never leaves, so nothing about the return decides
+anything, and its wait ends only because the consumer was destroyed — by rejecting with an abort.
+Where the consumer stays, nothing ends it at all, and that is `A11-P1`'s subject rather than this
+cell's. `A11-C9` used to reject, on the argument that nothing was attempted — but 0002 decides that
+entry into the query function _is_ the attempt boundary, so an invocation that entered has run an
+attempt whatever it did next, and C11 puts an attempt that ran and went wrong on the resolving side.
+Rejecting also left the case with no consumer-visible effect at all where nobody was waiting, which
+is `A11-C11`. See 0002's A11, where the alternative — moving the boundary to where the stamp
+appears, which would take `A11-C7` and `A11-C8` onto the rejecting side — is recorded as considered
+and rejected.
 
-Every row's witness has to be ported, and one is called out because it is the
-one a port is most likely to think it has already covered: **`A11-C5`, the seam's
-wiring**. A port that carries `A11-C1` — the parity suite, run against both
-accumulators — has carried something that a hook ignoring its accumulator passes
-in full. That was measured here, not feared: the mutation exists, and before
-`A11-C5` it killed nothing. The implementation's contract test has to inject an
-accumulator and observe that a real request went through it, or the escape route
-is unprotected in the implementation exactly as it was in the spike.
+Every row's witness has to be ported, and one is called out because it is the one a port is most
+likely to think it has already covered: **`A11-C5`, the seam's wiring**. A port that carries
+`A11-C1` — the parity suite, run against both accumulators — has carried something that a hook
+ignoring its accumulator passes in full. That was measured here, not feared: the mutation exists,
+and before `A11-C5` it killed nothing. The implementation's contract test has to inject an
+accumulator and observe that a real request went through it, or the escape route is unprotected in
+the implementation exactly as it was in the spike.
 
-**A second family carries a condition in that column for a different reason, and
-it is the larger of the two: the state is reachable, but only through an input
-the published surface does not carry.** 0004 publishes a provider that takes
-relays and children, a hook that takes a request plan, and nothing else — no
-verifier, no clock, no transport, no query client, no accumulator and no option
-of the query library. So a row whose Given is "under a verifier that takes 300ms
-an event", "on either accumulator" or "the clock is then corrected" is not
-describing something a consumer does; it is describing something the **port** has
-to be able to do to its own library from the inside. Those rows say which seam
-that is, because a port reading a bare `TBD` beside such a Given has two ways to
-go wrong and both cost the row entirely: build the arm out of relay behaviour,
-which reaches a different state, or leave the row unwitnessed on the grounds that
-no consumer can get there. Several of the seams are decided elsewhere rather than
-invented here — the verification gate the machine takes as a required argument
-(0002 A-ε, with `EventVerifier` unpublished by 0004), the clock 0004 calls
-injectable inside the library while keeping it off the props, the accumulator A11
-makes the seam and `A11-C5` measures every request through, and the transport
-question 0003 makes the source of every relay name. The rest are one-offs and say
-so in their own cells: the relay scope an engine is handed as a value (0003 B3),
-the transport the provider holds and nothing else does (C6), the engine's own
-options composition, the test-only config door on the transport factory that
-exists so that "the library's value wins" has a falsifier at all, and — for
-`B7b-C2` — no seam of ours whatever, since that arm builds the dependency itself.
+**A second family carries a condition in that column for a different reason, and it is the larger of
+the two: the state is reachable, but only through an input the published surface does not carry.**
+0004 publishes a provider that takes relays and children, a hook that takes a request plan, and
+nothing else — no verifier, no clock, no transport, no query client, no accumulator and no option of
+the query library. So a row whose Given is "under a verifier that takes 300ms an event", "on either
+accumulator" or "the clock is then corrected" is not describing something a consumer does; it is
+describing something the **port** has to be able to do to its own library from the inside. Those
+rows say which seam that is, because a port reading a bare `TBD` beside such a Given has two ways to
+go wrong and both cost the row entirely: build the arm out of relay behaviour, which reaches a
+different state, or leave the row unwitnessed on the grounds that no consumer can get there. Several
+of the seams are decided elsewhere rather than invented here — the verification gate the machine
+takes as a required argument (0002 A-ε, with `EventVerifier` unpublished by 0004), the clock 0004
+calls injectable inside the library while keeping it off the props, the accumulator A11 makes the
+seam and `A11-C5` measures every request through, and the transport question 0003 makes the source
+of every relay name. The rest are one-offs and say so in their own cells: the relay scope an engine
+is handed as a value (0003 B3), the transport the provider holds and nothing else does (C6), the
+engine's own options composition, the test-only config door on the transport factory that exists so
+that "the library's value wins" has a falsifier at all, and — for `B7b-C2` — no seam of ours
+whatever, since that arm builds the dependency itself.
 
-**Three rows read as belonging to that family and do not, and one reads as though
-it does not and does — recorded because the sweep that found them will be run
-again.** `A-δ-C3`'s Given is produced by rendering on a server and by nothing
-else — the side is _detected_, so an arm that passes `environment: 'server'` has
-measured the option instead of the decision. `B-α-C13` is offered through the
-relays prop at construction and as a later change, which is what `C16-C1` and
-`C16-C2` do publicly; what is internal there is the identity comparison in its
-Then, and its porting note already requires that. `B-α-C10`'s corpus is spellings
-a caller writes, and what it cannot assume is a **subject**: 0003 leaves this
-library's own transcription alive only as a sentinel and as a spike-only
-fallback. `A5-C5` is the one that went the other way: it reads as a client
-changed directly where a prop would have done, and the substitution was checked
-rather than assumed — a prop change moves the scope generation, so the request is
-re-keyed and asked again (`B3-C3`) instead of continuing on the target set it
-fixed, and the two arms are not the same measurement.
+**Three rows read as belonging to that family and do not, and one reads as though it does not and
+does — recorded because the sweep that found them will be run again.** `A-δ-C3`'s Given is produced
+by rendering on a server and by nothing else — the side is _detected_, so an arm that passes
+`environment: 'server'` has measured the option instead of the decision. `B-α-C13` is offered
+through the relays prop at construction and as a later change, which is what `C16-C1` and `C16-C2`
+do publicly; what is internal there is the identity comparison in its Then, and its porting note
+already requires that. `B-α-C10`'s corpus is spellings a caller writes, and what it cannot assume is
+a **subject**: 0003 leaves this library's own transcription alive only as a sentinel and as a
+spike-only fallback. `A5-C5` is the one that went the other way: it reads as a client changed
+directly where a prop would have done, and the substitution was checked rather than assumed — a prop
+change moves the scope generation, so the request is re-keyed and asked again (`B3-C3`) instead of
+continuing on the target set it fixed, and the two arms are not the same measurement.
 
 Three rules hold this together, and each exists because it was broken:
 
-- **A witness is a test that runs.** A parenthesised note describing where a
-  property lives was accepted in its place, and five contracts passed on one.
-- **A sentinel exercises the dependency and nothing of ours.** Four were
-  classified as sentinels while going through the shipping wrapper, one of them
-  through an option that exists only for the spike. They live in a directory
-  that cannot import this library, and a test enforces that.
-- **A witness establishes the contract, rather than the counterexample that
-  made it necessary.** Several rows cited a measurement of the defect — a
-  request that is _not_ re-sent, a component that _does_ hold its own mapping —
-  which would not survive being ported, because the behaviour it observes is
-  the one being removed.
+- **A witness is a test that runs.** A parenthesised note describing where a property lives was
+  accepted in its place, and five contracts passed on one.
+- **A sentinel exercises the dependency and nothing of ours.** Four were classified as sentinels
+  while going through the shipping wrapper, one of them through an option that exists only for the
+  spike. They live in a directory that cannot import this library, and a test enforces that.
+- **A witness establishes the contract, rather than the counterexample that made it necessary.**
+  Several rows cited a measurement of the defect — a request that is _not_ re-sent, a component that
+  _does_ hold its own mapping — which would not survive being ported, because the behaviour it
+  observes is the one being removed.
 
 | Contract  | Decision | Kind            | Given / When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Observable Then                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Spike witness                                                                                                                                                                                                               | Implementation test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------- | -------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1213,234 +1073,198 @@ Three rules hold this together, and each exists because it was broken:
 
 ### Consequences
 
-- Good: "which decisions are untested" is answerable, and answerable by a
-  machine rather than by reading three documents.
-- Good: a contract is written as what would be observed, so porting it does not
-  depend on the spike's fixtures or its naming.
-- Bad: the catalogue is a fourth thing to keep in step with the three records.
-  The check below is what keeps it honest rather than diligence.
+- Good: "which decisions are untested" is answerable, and answerable by a machine rather than by
+  reading three documents.
+- Good: a contract is written as what would be observed, so porting it does not depend on the
+  spike's fixtures or its naming.
+- Bad: the catalogue is a fourth thing to keep in step with the three records. The check below is
+  what keeps it honest rather than diligence.
 
 ### What accept means, and when a row's evidence expires
 
-**"No blocker was found" is not a finish line, and six rounds measured that.**
-Blockers came back 5, 3, 3, 3, 3, 2 — every one of them out of an instrument a
-previous round had called closed — while the rows themselves barely moved: an
-outside reviewer normalised this table across the submissions and found **266 of
-283 rows byte-identical to the tree seven rounds earlier**. The records were not
-converging; they were not being re-asked. A criterion written as the absence of
-an unknown defect cannot be met, so the criterion is a **protocol completed
-against a frozen candidate** instead.
+**"No blocker was found" is not a finish line, and six rounds measured that.** Blockers came back 5,
+3, 3, 3, 3, 2 — every one of them out of an instrument a previous round had called closed — while
+the rows themselves barely moved: an outside reviewer normalised this table across the submissions
+and found **266 of 283 rows byte-identical to the tree seven rounds earlier**. The records were not
+converging; they were not being re-asked. A criterion written as the absence of an unknown defect
+cannot be met, so the criterion is a **protocol completed against a frozen candidate** instead.
 
-**And "accept" is three acceptances, not one.** Ten rounds of blockers came out
-of arrangements nobody had measured _inside the spike_, while the thing accept
-actually binds — the rows that still owe an implementation test — did not move.
-A reviewer named the inversion: six hundred-odd mutations over a spike that will be deleted,
-against a production surface with no contract tests at all. So the unit is
-split, and the conditions below are **phase one**:
+**And "accept" is three acceptances, not one.** Ten rounds of blockers came out of arrangements
+nobody had measured _inside the spike_, while the thing accept actually binds — the rows that still
+owe an implementation test — did not move. A reviewer named the inversion: six hundred-odd mutations
+over a spike that will be deleted, against a production surface with no contract tests at all. So
+the unit is split, and the conditions below are **phase one**:
 
-1. **Design acceptance** — this section. The published types, the failure
-   matrix, the owner/key/state machines and the port conditions are fixed, and
-   no known normative contradiction is open. What it accepts is the _records_.
-2. **Production port** — every row's **phase-2 disposition** is resolved: no row
-   is left at `TBD`, and each carries one of the terminal forms the evidence
-   grammar below defines — a production test's id, an absence or a discharge
-   naming its decision and what would reopen it, or a reason for owing no test
-   at all. This clause used to say "a test, or a discharge", which is a binary
-   split the grammar does not have: six rows are terminal today by an
-   **absence**, which is neither. Not "N tests were written": a count is satisfied by writing the easy
-   ones. A row's spike arrangement is not inherited either — what a port owes is
-   in the Implementation column, and the arm that witnessed it here was written
-   against a seam that will not exist.
-3. **Spike deletion** — permitted when phase 2 is accepted **and** the
-   spike-artifact roster has no `unresolved` line: every artifact this branch
-   adds has either moved to production or carries a drop rationale, and each
-   one names the owner who decided. It is an **artifact** roster, not a row
-   field — the two are different relations, and saying it twice is how one of
-   them rots.
+1. **Design acceptance** — this section. The published types, the failure matrix, the
+   owner/key/state machines and the port conditions are fixed, and no known normative contradiction
+   is open. What it accepts is the _records_.
+2. **Production port** — every row's **phase-2 disposition** is resolved: no row is left at `TBD`,
+   and each carries one of the terminal forms the evidence grammar below defines — a production
+   test's id, an absence or a discharge naming its decision and what would reopen it, or a reason
+   for owing no test at all. This clause used to say "a test, or a discharge", which is a binary
+   split the grammar does not have: six rows are terminal today by an **absence**, which is neither.
+   Not "N tests were written": a count is satisfied by writing the easy ones. A row's spike
+   arrangement is not inherited either — what a port owes is in the Implementation column, and the
+   arm that witnessed it here was written against a seam that will not exist.
+3. **Spike deletion** — permitted when phase 2 is accepted **and** the spike-artifact roster has no
+   `unresolved` line: every artifact this branch adds has either moved to production or carries a
+   drop rationale, and each one names the owner who decided. It is an **artifact** roster, not a row
+   field — the two are different relations, and saying it twice is how one of them rots.
 
 #### The port route of a row, and what phase 2 owes on it
 
-**Three numbers for one population is how a bridge rots, and inferring the
-population from prose is how it rots twice.** A reviewer found 284, 286 and 288
-in this record and the submission for what phase 2 carries — copies of each
-other, taken at different rounds. The repair after that derived a disposition
-from each row's own words, and the same reviewer measured what that bought:
-`A16-C2` and `A16-C3` were counted as public tests although the published
-surface leaves a consumer no way to bring an owner input, `A11-P1` and `B3-C4`/`B3-C5` say in
-their own Given that no public request can separate what they measure, and a
-row that simply never wrote the marker was counted public by default. **A cell
-that names itself is not a classification.**
+**Three numbers for one population is how a bridge rots, and inferring the population from prose is
+how it rots twice.** A reviewer found 284, 286 and 288 in this record and the submission for what
+phase 2 carries — copies of each other, taken at different rounds. The repair after that derived a
+disposition from each row's own words, and the same reviewer measured what that bought: `A16-C2` and
+`A16-C3` were counted as public tests although the published surface leaves a consumer no way to
+bring an owner input, `A11-P1` and `B3-C4`/`B3-C5` say in their own Given that no public request can
+separate what they measure, and a row that simply never wrote the marker was counted public by
+default. **A cell that names itself is not a classification.**
 
-So a row carries two fields of its own, in the roster below, and neither is
-inferred from prose:
+So a row carries two fields of its own, in the roster below, and neither is inferred from prose:
 
-- **Port route** — one of `public`, `architecture`, `sentinel`, `internal`,
-  `no-test`, `discharged`. It answers one question: **can the Given be built
-  through what v1 publishes?** A provider, its props, the hooks and what a relay
-  puts on the wire are public. An injected clock, a hand-driven `AsyncIterable`,
-  a stand-in transport, a directly-called fold or attempt constructor, a
-  computed key, and anything bringing an owner input are not — the descriptor
-  has no transport, client, clock, verifier, accumulator or `environment`
-  field, and the provider's props are `relays` and `children`. **That is what
-  the discharges cite, not `C9`**: `C9` decides there is no low-level _entry_,
-  which is a different proposition, and an adversarial pass found four rows
-  resting on it for a claim it does not carry.
+- **Port route** — one of `public`, `architecture`, `sentinel`, `internal`, `no-test`, `discharged`.
+  It answers one question: **can the Given be built through what v1 publishes?** A provider, its
+  props, the hooks and what a relay puts on the wire are public. An injected clock, a hand-driven
+  `AsyncIterable`, a stand-in transport, a directly-called fold or attempt constructor, a computed
+  key, and anything bringing an owner input are not — the descriptor has no transport, client,
+  clock, verifier, accumulator or `environment` field, and the provider's props are `relays` and
+  `children`. **That is what the discharges cite, not `C9`**: `C9` decides there is no low-level
+  _entry_, which is a different proposition, and an adversarial pass found four rows resting on it
+  for a claim it does not carry.
 
-  **Decided per family, after an adversarial pass measured what deciding per
-  row had produced.** Twenty-four rows moved. The families and their rules:
+  **Decided per family, after an adversarial pass measured what deciding per row had produced.**
+  Twenty-four rows moved. The families and their rules:
 
-  - **The verifier.** A consumer gets the provider's real verifier, so _what it
-    answers_ is arrangeable — a genuine event and a forged one — and _how it
-    answers_ is not. Latency, throwing, never answering, recording what it was
-    handed: `internal`. Accepting and refusing: `public` (`A16-C1`).
-  - **The accumulator.** `A11` is an internal seam; a row whose Given names it,
-    including "on either accumulator", cannot be honoured through the published
-    API as written. `internal` — the alternative was to narrow the Given until
-    the route fit, which is not a repair.
-  - **The clock.** An injected clock is not published, and every clock row was
-    already `internal` except one, which an adversarial pass found.
-  - **"Derived".** The question is what the _Then_ reads: a handle's state or
-    outlet read through the hook is `public` however the arm happened to
-    compute it; a directly-called fold, key or attempt constructor is
-    `internal`. The phrase "is derived" decides nothing on its own, and it had
-    been reading both ways in neighbouring rows.
+  - **The verifier.** A consumer gets the provider's real verifier, so _what it answers_ is
+    arrangeable — a genuine event and a forged one — and _how it answers_ is not. Latency, throwing,
+    never answering, recording what it was handed: `internal`. Accepting and refusing: `public`
+    (`A16-C1`).
+  - **The accumulator.** `A11` is an internal seam; a row whose Given names it, including "on either
+    accumulator", cannot be honoured through the published API as written. `internal` — the
+    alternative was to narrow the Given until the route fit, which is not a repair.
+  - **The clock.** An injected clock is not published, and every clock row was already `internal`
+    except one, which an adversarial pass found.
+  - **"Derived".** The question is what the _Then_ reads: a handle's state or outlet read through
+    the hook is `public` however the arm happened to compute it; a directly-called fold, key or
+    attempt constructor is `internal`. The phrase "is derived" decides nothing on its own, and it
+    had been reading both ways in neighbouring rows.
 
-- **Production evidence** — `TBD`, or `test:<id>` once a production test
-  carries it, or `absent:<decision>;<how it comes back>` when the port does not
-  have the thing the row's route names — the seam for an `internal` row, the
-  resolved dependency for a `sentinel` one — or `discharged:<decision>;<how it comes
-back>`, or `no-test:<reason>`. It is the **only** field that moves during
-  phase 2 and the only status anywhere: a landing test cannot overwrite a
-  route or a port condition to record itself, and the Implementation test
-  column is instruction rather than progress.
+- **Production evidence** — `TBD`, or `test:<id>` once a production test carries it, or
+  `absent:<decision>;<how it comes back>` when the port does not have the thing the row's route
+  names — the seam for an `internal` row, the resolved dependency for a `sentinel` one — or
+  `discharged:<decision>;<how it comes back>`, or `no-test:<reason>`. It is the **only** field that
+  moves during phase 2 and the only status anywhere: a landing test cannot overwrite a route or a
+  port condition to record itself, and the Implementation test column is instruction rather than
+  progress.
 
-  **What `test:<id>` has to be, so that landing cannot be faked.** A reviewer
-  measured the first version: it resolved the id against every arm in
-  `src/tests`, so writing another row's spike witness into the cell counted as
-  landed, and one id could be written into every row that owed a test. **Seven**
-  things are required now, and `CAT33` holds each — this sentence has three
-  times said a number smaller than the list under it, so a port should count the
-  list rather than trust the word:
+  **What `test:<id>` has to be, so that landing cannot be faked.** A reviewer measured the first
+  version: it resolved the id against every arm in `src/tests`, so writing another row's spike
+  witness into the cell counted as landed, and one id could be written into every row that owed a
+  test. **Seven** things are required now, and `CAT33` holds each — this sentence has three times
+  said a number smaller than the list under it, so a port should count the list rather than trust
+  the word:
 
-  1. the id names a test **outside the spike** — under `src/tests/contracts/`,
-     the production contract root this port creates. A `spike-v6` witness is
-     not a landing;
-  2. **the test's id is a short token, not the row's name.** It is read by the
-     one shape this repository spells for an arm — letters then digits (`CT1`),
-     or a hyphenated family (`CT-1`) — so naming a landing after the row it
-     carries (`A5-C1`) makes the arm invisible to every rule here. That was a
-     silent failure and is now refused at the file. The row a test carries is
-     what its marker says, not what the test is called;
-  3. that test declares which contract rows it carries, in a marker
-     `@contracts <id> <id> …` inside the **comment block directly above its own
-     `it(` call** — a marker at the top of a file, above a `describe`, or
-     separated from the arm by a blank line belongs to no test and is ignored;
-  4. the edge is asserted in **both** directions: a test cannot be credited
-     with a row it does not name, and a row's `test:` cannot name a test that
-     does not name it back. One test may carry several rows;
+  1. the id names a test **outside the spike** — under `src/tests/contracts/`, the production
+     contract root this port creates. A `spike-v6` witness is not a landing;
+  2. **the test's id is a short token, not the row's name.** It is read by the one shape this
+     repository spells for an arm — letters then digits (`CT1`), or a hyphenated family (`CT-1`) —
+     so naming a landing after the row it carries (`A5-C1`) makes the arm invisible to every rule
+     here. That was a silent failure and is now refused at the file. The row a test carries is what
+     its marker says, not what the test is called;
+  3. that test declares which contract rows it carries, in a marker `@contracts <id> <id> …` inside
+     the **comment block directly above its own `it(` call** — a marker at the top of a file, above
+     a `describe`, or separated from the arm by a blank line belongs to no test and is ignored;
+  4. the edge is asserted in **both** directions: a test cannot be credited with a row it does not
+     name, and a row's `test:` cannot name a test that does not name it back. One test may carry
+     several rows;
   5. a row may not be carried by a test that does not exist;
-  6. the test **runs** — not inside a `skip`, `only`, `todo`, `skipIf` or
-     `runIf`, in any position in the chain — and it is not table-driven, which
-     is a shape this bridge cannot record one id per arm for and therefore
-     refuses at the file rather than silently at the row. A parametrised
-     `describe` is not that: its arms are ordinary declarations that run once
-     per case, and six of this branch's own suites are written that way;
-  7. the test **asserts** something: a matcher after an `expect(…)`, or
-     `assert`, or `expectTypeOf`. A title that contains the word does not
-     count, and neither does `expect(x)` with no matcher — both were measured
-     passing the first spelling of this rule.
+  6. the test **runs** — not inside a `skip`, `only`, `todo`, `skipIf` or `runIf`, in any position
+     in the chain — and it is not table-driven, which is a shape this bridge cannot record one id
+     per arm for and therefore refuses at the file rather than silently at the row. A parametrised
+     `describe` is not that: its arms are ordinary declarations that run once per case, and six of
+     this branch's own suites are written that way;
+  7. the test **asserts** something: a matcher after an `expect(…)`, or `assert`, or `expectTypeOf`.
+     A title that contains the word does not count, and neither does `expect(x)` with no matcher —
+     both were measured passing the first spelling of this rule.
 
-  **What these seven cannot hold, said here rather than found in phase 2.** They
-  are rules about _edges_: that a cell names a test, that the test names the row
-  back, that the test exists, runs, asserts something, and is not a spike arm
-  wearing a new directory. None of them asks whether the test **exercises** the
-  row — one arm declaring every owing row, with an assertion in it, satisfies
-  every one of them and the counts would read as a completed phase 2. An adversarial pass
-  built that state. A check cannot close it: "this test measures this Given" is
-  the judgement phase 2 is _for_, and the honest form is that the gate is
-  mechanical about the edges and a reviewer reads the tests. What the mechanism
-  does buy is that no cell can be filled by a name alone.
+  **What these seven cannot hold, said here rather than found in phase 2.** They are rules about
+  _edges_: that a cell names a test, that the test names the row back, that the test exists, runs,
+  asserts something, and is not a spike arm wearing a new directory. None of them asks whether the
+  test **exercises** the row — one arm declaring every owing row, with an assertion in it, satisfies
+  every one of them and the counts would read as a completed phase 2. An adversarial pass built that
+  state. A check cannot close it: "this test measures this Given" is the judgement phase 2 is _for_,
+  and the honest form is that the gate is mechanical about the edges and a reviewer reads the tests.
+  What the mechanism does buy is that no cell can be filled by a name alone.
 
-  The root is empty today — phase 2 has not begun — so every branch is driven
-  against a **fabricated source put through the same parser**, and a fabricated
-  roster put through the same reverse check, rather than left to be discovered
-  when the first test lands. A fabricated _map_ is what the round before this
-  used, and a reviewer measured what it bought: the parser it was standing in
-  for was the thing under test.
+  The root is empty today — phase 2 has not begun — so every branch is driven against a **fabricated
+  source put through the same parser**, and a fabricated roster put through the same reverse check,
+  rather than left to be discovered when the first test lands. A fabricated _map_ is what the round
+  before this used, and a reviewer measured what it bought: the parser it was standing in for was
+  the thing under test.
 
-  **`absent:` exists because the state machine had no terminal state for a
-  conforming port.** The route table says an `internal` row is discharged by
-  "a test against the port's own seam **or** the decision that the seam does
-  not exist there" — and the grammar accepted only the first, so a port that
-  does not keep the seam had no way to say so. A reviewer found the gap by
-  reading the two against each other.
+  **`absent:` exists because the state machine had no terminal state for a conforming port.** The
+  route table says an `internal` row is discharged by "a test against the port's own seam **or** the
+  decision that the seam does not exist there" — and the grammar accepted only the first, so a port
+  that does not keep the seam had no way to say so. A reviewer found the gap by reading the two
+  against each other.
 
-  **And it is for `internal` and `sentinel`, which is a claim about the other
-  three routes rather than an omission.** `CAT33` refuses `absent:` on any
-  other route. A `sentinel` row watches a **dependency** at a resolved version,
-  which is the one subject least under a port's control and the thing this
-  library's own roadmap moves: a port that stages the query-core or transport
-  change, or replaces the layer outright, genuinely has no seam for those rows
-  and has found no phase-1 error in doing so. That was the state the grammar
-  had no terminal form for, and an adversarial pass named it. What a port does when a `public` or `architecture`
-  row turns out to have nothing to stand on is **not** write an absence: those
-  two are decided here, in phase 1 — `public` by the surface `0004` publishes
-  and `architecture` by what the build ships — so a port that cannot reach one
-  of them has found a phase-1 error, and the move is to reopen the row's route
-  in this record and re-accept it, not to record a terminal state in phase 2. A
-  row whose route cannot be discharged is the accept unit failing, and it
-  should be loud rather than absorbed. `internal` is the one route whose seam
-  is genuinely the port's own choice, which is why it is the one that can end
-  in a decision.
+  **And it is for `internal` and `sentinel`, which is a claim about the other three routes rather
+  than an omission.** `CAT33` refuses `absent:` on any other route. A `sentinel` row watches a
+  **dependency** at a resolved version, which is the one subject least under a port's control and
+  the thing this library's own roadmap moves: a port that stages the query-core or transport change,
+  or replaces the layer outright, genuinely has no seam for those rows and has found no phase-1
+  error in doing so. That was the state the grammar had no terminal form for, and an adversarial
+  pass named it. What a port does when a `public` or `architecture` row turns out to have nothing to
+  stand on is **not** write an absence: those two are decided here, in phase 1 — `public` by the
+  surface `0004` publishes and `architecture` by what the build ships — so a port that cannot reach
+  one of them has found a phase-1 error, and the move is to reopen the row's route in this record
+  and re-accept it, not to record a terminal state in phase 2. A row whose route cannot be
+  discharged is the accept unit failing, and it should be loud rather than absorbed. `internal` is
+  the one route whose seam is genuinely the port's own choice, which is why it is the one that can
+  end in a decision.
 
-  **Where a landing test lives, said once.** `src/tests/contracts/` is the
-  production contract root, and every `test:<id>` resolves under it, including
-  a `sentinel` row's: the route table's "beside the production build" says
-  which repository the sentinel runs in, not which directory, and a port
-  reading the two could land its sentinels in a sibling directory the check
-  cannot see. Sentinels go under `src/tests/contracts/sentinels/`. `CAT33`
-  reads the root out of the same constant the parser walks and checks that this
-  record names it in both places.
+  **Where a landing test lives, said once.** `src/tests/contracts/` is the production contract root,
+  and every `test:<id>` resolves under it, including a `sentinel` row's: the route table's "beside
+  the production build" says which repository the sentinel runs in, not which directory, and a port
+  reading the two could land its sentinels in a sibling directory the check cannot see. Sentinels go
+  under `src/tests/contracts/sentinels/`. `CAT33` reads the root out of the same constant the parser
+  walks and checks that this record names it in both places.
 
-**Phase 2 is complete when no row's evidence is `TBD`** — a count of written
-tests is satisfied by writing the easy ones. **Phase 3** is a conjunction with
-that: phase 2 accepted, **and** the spike-artifact roster below closed. `CAT33`
-holds the roster's shape, its coverage of every row, its vocabulary and the
-counts **of the roster** — routes, dispositions, the phase-2 split. It does not
-hold every number on this page, and this sentence said it did: a census of the
-bolded figures in all five records moved each by one and found forty-seven of
-fifty-six with no reader at all, several of them here. The ones that count
-something in this tree are `DOC8`'s now — the classes that freeze themselves,
-the surfaces the failure matrix is total over, the published string's bound —
-and `DOC9` states which are deliberately left. `CAT34` holds the artifact
-roster.
+**Phase 2 is complete when no row's evidence is `TBD`** — a count of written tests is satisfied by
+writing the easy ones. **Phase 3** is a conjunction with that: phase 2 accepted, **and** the
+spike-artifact roster below closed. `CAT33` holds the roster's shape, its coverage of every row, its
+vocabulary and the counts **of the roster** — routes, dispositions, the phase-2 split. It does not
+hold every number on this page, and this sentence said it did: a census of the bolded figures in all
+five records moved each by one and found forty-seven of fifty-six with no reader at all, several of
+them here. The ones that count something in this tree are `DOC8`'s now — the classes that freeze
+themselves, the surfaces the failure matrix is total over, the published string's bound — and `DOC9`
+states which are deliberately left. `CAT34` holds the artifact roster.
 
-**The order phase 2 takes these in, adjudicated 2026-09-11.** A route says what
-shape of evidence a row needs; it is **not** a dependency order, and working one
-route at a time is how a port ends up with every public row and no substrate
-under them — or with every internal seam and a public surface that does not hold.
+**The order phase 2 takes these in, adjudicated 2026-09-11.** A route says what shape of evidence a
+row needs; it is **not** a dependency order, and working one route at a time is how a port ends up
+with every public row and no substrate under them — or with every internal seam and a public surface
+that does not hold.
 
-1. **Move the checking apparatus first.** `CAT33` re-homed on the production
-   side, `src/tests/contracts/` and the artifact roster built, so phase 2's own
-   disposition and self-checks read the production tree rather than this one.
-2. **Make the 24 sentinels runnable early.** They falsify assumptions about the
-   resolved dependency, the compiler and the package layout cheaply — and a
-   green sentinel is never a substitute for a public behaviour.
-3. **Drive one walking vertical slice end to end**: package export → provider
-   and context → request engine → published state and outlet → **a send through
-   `useSend` and each relay's answer** → teardown, through a single consumer
-   witness that displays, posts and reads the result, with **one representative
-   request component** in
-   it so the Svelte compilation and the component bridge are tested early.
-4. **Add slices in dependency and ownership order** — descriptor and target
-   normalization, cache identity, event ownership; then finite request, backlog,
-   failure, refresh; then provider scope, transport lifetime, diagnostics,
-   recovery, live request; then all eleven request components and the package
-   declarations.
-5. **Terminate the rows a slice covers as that slice lands**, rather than
-   leaving 334 TBD to be filled at the end: a slice turns its public and
-   architecture rows red first and implements the internal seam that satisfies
-   them in the same pass.
+1. **Move the checking apparatus first.** `CAT33` re-homed on the production side,
+   `src/tests/contracts/` and the artifact roster built, so phase 2's own disposition and
+   self-checks read the production tree rather than this one.
+2. **Make the 24 sentinels runnable early.** They falsify assumptions about the resolved dependency,
+   the compiler and the package layout cheaply — and a green sentinel is never a substitute for a
+   public behaviour.
+3. **Drive one walking vertical slice end to end**: package export → provider and context → request
+   engine → published state and outlet → **a send through `useSend` and each relay's answer** →
+   teardown, through a single consumer witness that displays, posts and reads the result, with **one
+   representative request component** in it so the Svelte compilation and the component bridge are
+   tested early.
+4. **Add slices in dependency and ownership order** — descriptor and target normalization, cache
+   identity, event ownership; then finite request, backlog, failure, refresh; then provider scope,
+   transport lifetime, diagnostics, recovery, live request; then all eleven request components and
+   the package declarations.
+5. **Terminate the rows a slice covers as that slice lands**, rather than leaving 334 TBD to be
+   filled at the end: a slice turns its public and architecture rows red first and implements the
+   internal seam that satisfies them in the same pass.
 
 | Route          | Rows    | What phase 2 owes on it                                                                                                                                            |
 | -------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1451,26 +1275,24 @@ under them — or with every internal seam and a public surface that does not ho
 | `no-test`      | **6**   | nothing; the row records a decision rather than a behaviour                                                                                                        |
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
-**341 rows require a phase-2 disposition**, which is every route except
-`no-test` and `discharged`. Of those, **0 are test-backed**, **7 are absent**,
-**0 carry another terminal form**, and **334 are TBD**.
+**341 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
+Of those, **0 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **334 are
+TBD**.
 
-**Five numbers rather than one — a total and the four it splits into — because a reviewer measured what one bought.**
-The record used to call the absences "landed", so a port that kept fewer
-seams would have reported more progress — an absence decision and a written
-contract test are both terminal and are not the same achievement. `CAT33`
-derives each of the four and checks this sentence against them, and the
-decision an `absent:` or a `discharged:` names has to be one a record actually
+**Five numbers rather than one — a total and the four it splits into — because a reviewer measured
+what one bought.** The record used to call the absences "landed", so a port that kept fewer seams
+would have reported more progress — an absence decision and a written contract test are both
+terminal and are not the same achievement. `CAT33` derives each of the four and checks this sentence
+against them, and the decision an `absent:` or a `discharged:` names has to be one a record actually
 declares.
 
 <details>
 <summary>The roster: every row, its route, and its production evidence</summary>
 
-**A fenced block rather than a table, for two reasons.** The checks that read
-this record parse contract rows by their column count, and a three-column table
-of the same ids is a second thing that looks like one; and a padded table row is
-an anchor that moves whenever a neighbour grows, which has rotted ledger entries
-twice. `id`, `route`, then the evidence, one row per line.
+**A fenced block rather than a table, for two reasons.** The checks that read this record parse
+contract rows by their column count, and a three-column table of the same ids is a second thing that
+looks like one; and a padded table row is an anchor that moves whenever a neighbour grows, which has
+rotted ledger entries twice. `id`, `route`, then the evidence, one row per line.
 
 ```text
 A1-C1        architecture  TBD
@@ -1828,67 +1650,58 @@ C-δ-C12      internal      TBD
 
 #### The spike-artifact roster, and what phase 3 waits on
 
-**A row's route is not an artifact's fate, and a reviewer separated them.** A
-public contract row can have its production test written and still leave a
-hostile harness behind that only this branch can run; `MG12a` and the ledger's
-own instruments are not contract rows at all. So "a hard-to-reproduce failure
-mechanism becomes a `spike-only` row" was wrong twice — it made a row-level
-field carry an artifact-level obligation, and it left the artifacts that are not
-rows with no obligation at all.
+**A row's route is not an artifact's fate, and a reviewer separated them.** A public contract row
+can have its production test written and still leave a hostile harness behind that only this branch
+can run; `MG12a` and the ledger's own instruments are not contract rows at all. So "a
+hard-to-reproduce failure mechanism becomes a `spike-only` row" was wrong twice — it made a
+row-level field carry an artifact-level obligation, and it left the artifacts that are not rows with
+no obligation at all.
 
-The roster below is the artifact side, at the granularity of a directory or a
-family rather than one line per arm. Each line is `path`, then one of
-`moves-to-production` / `drops-with-the-spike` / `stays-in-the-library` /
-`unresolved`, then the replacement, the drop rationale or the reason, then the
-owner who decides it. A line whose directory contains another line's may carve
-it out with `except:`, which is how a parent stops covering a child whose fate
-differs — without it, deleting the child's line left every file it decided
-covered by the parent, measured. `CAT34` holds
-the grammar, that every path this branch changes is under **exactly one** line, and that no
-line is missing its replacement or its owner — driven against fabricated lines,
-because a roster with nothing unresolved cannot exercise its own refusals.
+The roster below is the artifact side, at the granularity of a directory or a family rather than one
+line per arm. Each line is `path`, then one of `moves-to-production` / `drops-with-the-spike` /
+`stays-in-the-library` / `unresolved`, then the replacement, the drop rationale or the reason, then
+the owner who decides it. A line whose directory contains another line's may carve it out with
+`except:`, which is how a parent stops covering a child whose fate differs — without it, deleting
+the child's line left every file it decided covered by the parent, measured. `CAT34` holds the
+grammar, that every path this branch changes is under **exactly one** line, and that no line is
+missing its replacement or its owner — driven against fabricated lines, because a roster with
+nothing unresolved cannot exercise its own refusals.
 
-**Phase 3 is a conjunction**: phase 2 accepted, **and** no line here is
-`unresolved`.
+**Phase 3 is a conjunction**: phase 2 accepted, **and** no line here is `unresolved`.
 
-**The checks that hold this record have to move with it, and an adversarial
-pass found that they cannot run where phase 2 happens.** `CAT33` reads the
-port-route roster and `CAT34` reads this one; both live in the spike's own
-suite, `CAT34` derives its population from `merge-base(HEAD, main)..HEAD` of
-**this** branch, and `CAT33` requires a landing root the roster does not
-mention. A port that follows the protocol therefore turns the gate red on its
-first landed test, and after deletion this record would claim two checks that
-exist nowhere. So the protocol says which is which:
+**The checks that hold this record have to move with it, and an adversarial pass found that they
+cannot run where phase 2 happens.** `CAT33` reads the port-route roster and `CAT34` reads this one;
+both live in the spike's own suite, `CAT34` derives its population from
+`merge-base(HEAD, main)..HEAD` of **this** branch, and `CAT33` requires a landing root the roster
+does not mention. A port that follows the protocol therefore turns the gate red on its first landed
+test, and after deletion this record would claim two checks that exist nowhere. So the protocol says
+which is which:
 
-- **`CAT33` moves.** It is about `0005`, which survives, and phase 2 cannot be
-  judged without it. Re-homing it is part of phase 2's first commit, together
-  with `src/tests/contracts/` and a line in this roster for it, and it takes
-  with it whatever of `roles.ts` it reads.
-- **`CAT34` drops with the spike.** Its subject is the deletion of this branch;
-  once the branch is gone there is nothing for it to hold, and its population —
-  a diff against `main` — has no meaning in the port's history. What survives
-  it is the record of the decision, not the check.
+- **`CAT33` moves.** It is about `0005`, which survives, and phase 2 cannot be judged without it.
+  Re-homing it is part of phase 2's first commit, together with `src/tests/contracts/` and a line in
+  this roster for it, and it takes with it whatever of `roles.ts` it reads.
+- **`CAT34` drops with the spike.** Its subject is the deletion of this branch; once the branch is
+  gone there is nothing for it to hold, and its population — a diff against `main` — has no meaning
+  in the port's history. What survives it is the record of the decision, not the check.
 
-**And the roster did not say this, which is the second half of the same
-finding.** `src/tests/stores/spike-v6/` is rostered `moves-to-production` with a
-replacement that named one subclass of its arms — the ones witnessing rows
-routed `public` or `internal`. Both of these checks live in that directory and
-neither witnesses a row, and nor do about forty-five others that hold rules over
-`0005` and `0004` themselves: the contract-id and witness-column arms, the
-port-condition ratchet, the evidence-domain rule, the arm-declaration shape.
-`roles.ts` is `unresolved` and its line named only `CAT33` as a reader, which
-understates it by four catalogue arms and by `declaresTest`, the export the
-shape rule depends on. Both lines below are corrected; what a port inherits for
-the record-reading class as a whole is written into the line for that
-directory, rather than into this paragraph alone.
+**And the roster did not say this, which is the second half of the same finding.**
+`src/tests/stores/spike-v6/` is rostered `moves-to-production` with a replacement that named one
+subclass of its arms — the ones witnessing rows routed `public` or `internal`. Both of these checks
+live in that directory and neither witnesses a row, and nor do about forty-five others that hold
+rules over `0005` and `0004` themselves: the contract-id and witness-column arms, the port-condition
+ratchet, the evidence-domain rule, the arm-declaration shape. `roles.ts` is `unresolved` and its
+line named only `CAT33` as a reader, which understates it by four catalogue arms and by
+`declaresTest`, the export the shape rule depends on. Both lines below are corrected; what a port
+inherits for the record-reading class as a whole is written into the line for that directory, rather
+than into this paragraph alone.
 
-**The population is the branch's own diff**, not the test files under `src`, and its size is derived rather than written here — the copy in an earlier round was one short of the tree it named: a
-reviewer enumerated `merge-base(HEAD, main)..HEAD` against the 148 paths the
-roster covered then, with `docs/decisions/**`, the CI workflows,
-the manifest and the build configuration outside it — and showed that deleting
-the `tools/` line changed nothing the check could see. Every changed path is
-under exactly one most-specific line now, and `CAT34` derives that from git
-rather than from a walk.
+**The population is the branch's own diff**, not the test files under `src`, and its size is derived
+rather than written here — the copy in an earlier round was one short of the tree it named: a
+reviewer enumerated `merge-base(HEAD, main)..HEAD` against the 148 paths the roster covered then,
+with `docs/decisions/**`, the CI workflows, the manifest and the build configuration outside it —
+and showed that deleting the `tools/` line changed nothing the check could see. Every changed path
+is under exactly one most-specific line now, and `CAT34` derives that from git rather than from a
+walk.
 
 ```roster
 src/lib/stores/spike-v6/         moves-to-production  replacement: the production implementation this design is ported into; the spike copy is deleted with the branch  owner: port
@@ -1916,37 +1729,32 @@ src/tests/setup.ts               moves-to-production  replacement: the suite set
 src/tests/suite-cost.json        unresolved           why: the cost table, tied to the harness lines above  owner: port
 ```
 
-**Three rules the checks over these records hold, written here because the
-file that holds them drops with the spike.** `src/tests/docs/` is rostered
-`drops-with-the-spike` on the grounds that it reads the submission documents,
-and that is true of two of its five arms. The other three read the decision
-records, which survive, so what they hold becomes the port's:
+**Three rules the checks over these records hold, written here because the file that holds them
+drops with the spike.** `src/tests/docs/` is rostered `drops-with-the-spike` on the grounds that it
+reads the submission documents, and that is true of two of its five arms. The other three read the
+decision records, which survive, so what they hold becomes the port's:
 
-- **a record may not cite an arm the port cannot reach.** An id named in
-  `0001`-`0004` has to be a contract witness, or an arm that survives the
-  spike, or carry a written reason why the sentence still stands once the arm
-  is gone. The exemptions are a table in `DOC4`, each with its reason and each
-  checked to be still cited, still declared and still without a row. **The count
-  is deliberately not restated here**, because the round that wrote this
-  sentence said six when the table already held several times that — and the
-  table does not travel: a port inheriting the rule starts from an empty
-  exemption list and re-justifies each citation it keeps;
-- **a concept two records describe is described the same way in both.** The two
-  spellings drifting apart is how a reader ends up implementing the older one;
-- **and no shipped record carries a sentence marked unwritten.** `DOC2` walks
-  the whole of `docs/`, which includes these records, and it was left out of
-  this list when the list was written — the count said three arms read the
-  submissions and two read the records, and it is two and three.
+- **a record may not cite an arm the port cannot reach.** An id named in `0001`-`0004` has to be a
+  contract witness, or an arm that survives the spike, or carry a written reason why the sentence
+  still stands once the arm is gone. The exemptions are a table in `DOC4`, each with its reason and
+  each checked to be still cited, still declared and still without a row. **The count is
+  deliberately not restated here**, because the round that wrote this sentence said six when the
+  table already held several times that — and the table does not travel: a port inheriting the rule
+  starts from an empty exemption list and re-justifies each citation it keeps;
+- **a concept two records describe is described the same way in both.** The two spellings drifting
+  apart is how a reader ends up implementing the older one;
+- **and no shipped record carries a sentence marked unwritten.** `DOC2` walks the whole of `docs/`,
+  which includes these records, and it was left out of this list when the list was written — the
+  count said three arms read the submissions and two read the records, and it is two and three.
 
-All three are enforced here by `DOC2`, `DOC4` and `DOC5`; a port that keeps the
-records and drops that directory keeps the obligations and loses the checks,
-which is a decision it should make rather than discover.
+All three are enforced here by `DOC2`, `DOC4` and `DOC5`; a port that keeps the records and drops
+that directory keeps the obligations and loses the checks, which is a decision it should make rather
+than discover.
 
-**These are obligations without a row, and that needs saying out loud.** The
-port-condition roster below is defined over contract rows — `CAT22` holds it as
-an equality against the rows' own Implementation cells — so an obligation that
-is not about a row cannot be written into it, and five of them have arrived
-since. They are listed here instead, in the same shape a port condition has:
+**These are obligations without a row, and that needs saying out loud.** The port-condition roster
+below is defined over contract rows — `CAT22` holds it as an equality against the rows' own
+Implementation cells — so an obligation that is not about a row cannot be written into it, and five
+of them have arrived since. They are listed here instead, in the same shape a port condition has:
 
 | Obligation                                                                                                                                                                                                                                      | Owner | Discharged by                                                                                                       | Re-opened by                                       |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -1956,57 +1764,50 @@ since. They are listed here instead, in the same shape a port condition has:
 | the two published-surface figures in `0004` are re-derived                                                                                                                                                                                      | port  | a check beside the port's own surface declaration, or deleting the figures                                          | a name added to or removed from the published API  |
 | the rules the catalogue's own arms hold over the surviving records — every row names a decision that exists, no witness column points at nothing, the port-condition roster has not lost a row, the evidence-domain table is complete both ways | port  | re-homing those arms with the records they read, or a written decision that the port keeps the records without them | a record edited in a port that dropped them        |
 
-The first three are what `src/tests/docs/` holds today, the fourth is `SUR15`'s
-and the fifth is the catalogue's own arms'; all five die with this branch, which
-is why they are written where a port reads them rather than left in the files
-that go. **The fifth was a deferral inside a resolved fate** — the roster line
-for the spike suite said those arms are re-homed "or dropped by a decision that
-says which", which is what `unresolved` is for, in a line the phase-3 gate reads
-as decided.
+The first three are what `src/tests/docs/` holds today, the fourth is `SUR15`'s and the fifth is the
+catalogue's own arms'; all five die with this branch, which is why they are written where a port
+reads them rather than left in the files that go. **The fifth was a deferral inside a resolved
+fate** — the roster line for the spike suite said those arms are re-homed "or dropped by a decision
+that says which", which is what `unresolved` is for, in a line the phase-3 gate reads as decided.
 
-**Eight lines are `unresolved` today, and that is the phase-3 gate doing its
-job**: the mutation harness, the catalogue's own instruments and the manifest
-and workflow entries entangled with them are the part of this branch whose fate
-nobody has decided, and the roster says so rather than leaving them out.
+**Eight lines are `unresolved` today, and that is the phase-3 gate doing its job**: the mutation
+harness, the catalogue's own instruments and the manifest and workflow entries entangled with them
+are the part of this branch whose fate nobody has decided, and the roster says so rather than
+leaving them out.
 
-**Why that does not block phase 1, stated rather than assumed.** Phase 1
-accepts the records — the published types, the failure matrix, the owner, key
-and state machines, the port conditions, and that no known normative
-contradiction is open. Nothing in any of those depends on whether a production
-repository keeps a mutation ledger: the ledger is how _this_ branch measured its
-own claims, and a port that reproduces none of it still inherits every row and
-every port condition. What an unresolved line does block is **deletion** —
-phase 3 — because deleting a harness nobody decided to replace is how a
-repository loses a check without a decision. If a reviewer holds that phase 1
-must also fix the harness's fate, that is a ruling this seat will take; what it
-cannot do is leave the question unwritten, which is what the roster changed.
+**Why that does not block phase 1, stated rather than assumed.** Phase 1 accepts the records — the
+published types, the failure matrix, the owner, key and state machines, the port conditions, and
+that no known normative contradiction is open. Nothing in any of those depends on whether a
+production repository keeps a mutation ledger: the ledger is how _this_ branch measured its own
+claims, and a port that reproduces none of it still inherits every row and every port condition.
+What an unresolved line does block is **deletion** — phase 3 — because deleting a harness nobody
+decided to replace is how a repository loses a check without a decision. If a reviewer holds that
+phase 1 must also fix the harness's fate, that is a ruling this seat will take; what it cannot do is
+leave the question unwritten, which is what the roster changed.
 
-**What the spike is still measured for, after phase one.** Four things, and a
-fifth is not on the list:
+**What the spike is still measured for, after phase one.** Four things, and a fifth is not on the
+list:
 
 - a counterexample that could overturn a design decision;
 - behaviour of the framework or the dependency that nobody is sure of;
 - one representative witness that a port condition **can be written at all**;
-- a failure mechanism that production tests would find hard to reproduce — and
-  its deletion condition is in the **artifact** roster, not in a row: the file
-  that holds the mechanism carries a fate, a replacement or a drop rationale
-  and an owner, and phase 3 waits until no line there is `unresolved`. **The
-  row-level `spike-only` model this used to describe is withdrawn**, for the
-  reason the artifact section gives: a row and an artifact are different
-  things, and a public contract row can be ported while the harness that
-  exercised it stays behind.
+- a failure mechanism that production tests would find hard to reproduce — and its deletion
+  condition is in the **artifact** roster, not in a row: the file that holds the mechanism carries a
+  fate, a replacement or a drop rationale and an owner, and phase 3 waits until no line there is
+  `unresolved`. **The row-level `spike-only` model this used to describe is withdrawn**, for the
+  reason the artifact section gives: a row and an artifact are different things, and a public
+  contract row can be ported while the harness that exercised it stays behind.
 
-Adding coverage because a row looks thin is not on that list. **A known defect in
-the spike that neither travels to the port nor overturns a design conclusion
-does not have to be repaired here**: the counterexample moves to a contract row
-and a port test obligation, which is where it survives this branch anyway.
+Adding coverage because a row looks thin is not on that list. **A known defect in the spike that
+neither travels to the port nor overturns a design conclusion does not have to be repaired here**:
+the counterexample moves to a contract row and a port test obligation, which is where it survives
+this branch anyway.
 
-**Accept requires all of these, against one frozen tree — and a **full** ledger
-walk over that tree, exact-green, before any of them is read.** The walk is a
-prerequisite rather than a clause inside the adversarial pass: a pass reads a
-tree somebody has already measured, and burying the measurement inside the pass
-makes "the pass ran" and "the ledger agreed" one sentence when they are two
-facts with different owners.
+**Accept requires all of these, against one frozen tree — and a **full** ledger walk over that tree,
+exact-green, before any of them is read.** The walk is a prerequisite rather than a clause inside
+the adversarial pass: a pass reads a tree somebody has already measured, and burying the measurement
+inside the pass makes "the pass ran" and "the ledger agreed" one sentence when they are two facts
+with different owners.
 
     frozen candidate → full walk, exact green → adversarial pass → every finding disposed
 
@@ -2014,229 +1815,208 @@ facts with different owners.
 
 1. no known public counterexample and no normative contradiction is open;
 2. every contract row carries an **evidence domain** (below);
-3. every row whose evidence depended on an instrument since found defective has
-   been re-verified — the impact set, not the whole table;
-4. every executable row has a live witness, or a written reason it cannot have
-   one;
-5. every instrument a record names as holding a rule is on the roster below,
-   **discharged** — by a ledger entry that kills it, or by a falsification
-   performed by hand and written down: what was edited, and which arm failed;
-6. the adversarial pass **defined below** has been run against that candidate
-   and every finding it produced has a disposition;
+3. every row whose evidence depended on an instrument since found defective has been re-verified —
+   the impact set, not the whole table;
+4. every executable row has a live witness, or a written reason it cannot have one;
+5. every instrument a record names as holding a rule is on the roster below, **discharged** — by a
+   ledger entry that kills it, or by a falsification performed by hand and written down: what was
+   edited, and which arm failed;
+6. the adversarial pass **defined below** has been run against that candidate and every finding it
+   produced has a disposition;
 7. every residue carries an owner and the condition that re-opens it;
 8. no blocker is open.
 
-**A full walk and a fast walk are different evidence, and the protocol says
-which one a submission is measured by.** The ledger is walked two ways:
+**A full walk and a fast walk are different evidence, and the protocol says which one a submission
+is measured by.** The ledger is walked two ways:
 
-- `npm run walk` — every entry against its whole scope. Measured at 607 entries: **31.2 minutes**, on the ten-core machine this branch was written on. The ledger has grown since and the figure has not been re-taken; what the walk costs _structurally_ is `MU9`'s budget, which is re-derived on every run, and this number is here only to say the order of magnitude. It is the only mode that can see a kill set **grow**, which
-  is where two of this round's defects came from — a capture condition that had
-  become constant, and an arm weakened by its own repair.
-- `npm run walk:fast` — every entry against **the set it names for fast runs**, run as one population rather than arm by arm.
-  Measured at the same 607 entries: **12.2 minutes**, same machine and same caveat. It cannot see growth.
+- `npm run walk` — every entry against its whole scope. Measured at 607 entries: **31.2 minutes**,
+  on the ten-core machine this branch was written on. The ledger has grown since and the figure has
+  not been re-taken; what the walk costs _structurally_ is `MU9`'s budget, which is re-derived on
+  every run, and this number is here only to say the order of magnitude. It is the only mode that
+  can see a kill set **grow**, which is where two of this round's defects came from — a capture
+  condition that had become constant, and an arm weakened by its own repair.
+- `npm run walk:fast` — every entry against **the set it names for fast runs**, run as one
+  population rather than arm by arm. Measured at the same 607 entries: **12.2 minutes**, same
+  machine and same caveat. It cannot see growth.
 
-**The two are different evidence and the ledger says which is which.** An arm
-can die for a reason outside its own body: `a-provider-holder-that-is-one-cell-
-for-the-process` kills `LC19` and `LC8`, and `LC8` only because the cell that
-edit introduces outlives the arm that wrote it — state another arm in the file
-left behind. That arm is not the entry's load-bearing falsifier, so the entry
-names `fastRequired: ['LC19']` and a fast run is measured against that.
-**A `✗` in fast mode is a finding about the fast contract**, not a note saying
-"re-run this properly". `MU12` holds the contract: a fast falsifier is one of
-the entry's own kills, and there is at least one.
+**The two are different evidence and the ledger says which is which.** An arm can die for a reason
+outside its own body: `a-provider-holder-that-is-one-cell- for-the-process` kills `LC19` and `LC8`,
+and `LC8` only because the cell that edit introduces outlives the arm that wrote it — state another
+arm in the file left behind. That arm is not the entry's load-bearing falsifier, so the entry names
+`fastRequired: ['LC19']` and a fast run is measured against that. **A `✗` in fast mode is a finding
+about the fast contract**, not a note saying "re-run this properly". `MU12` holds the contract: a
+fast falsifier is one of the entry's own kills, and there is at least one.
 
-**A submission's figures come from a full walk**, and that walk is an accept
-prerequisite in its own right rather than a line inside the adversarial pass —
-see the protocol above. The fast one is for the work in between, and the runner
-prints which mode produced a line so the two cannot be confused in a record.
+**A submission's figures come from a full walk**, and that walk is an accept prerequisite in its own
+right rather than a line inside the adversarial pass — see the protocol above. The fast one is for
+the work in between, and the runner prints which mode produced a line so the two cannot be confused
+in a record.
 
-**And the number `MU9` budgets against has a cheap way to be refreshed now.**
-`npm run costs` runs the baseline alone — every scoped suite once, unmutated,
-serially, which is what makes the times comparable — and writes the table:
-one baseline pass rather than a full walk — the cost table it writes is also what that pass costs, so the number lives in `src/tests/suite-cost.json` and not in this sentence. A suite that got _slower_ ends that run
-non-zero, because a slower suite makes the recorded table an under-statement and
-`MU9`'s ceiling generous by however much nobody measured. It was a warning at
-the end of a half-hour run for several rounds, which is a line nobody reads.
+**And the number `MU9` budgets against has a cheap way to be refreshed now.** `npm run costs` runs
+the baseline alone — every scoped suite once, unmutated, serially, which is what makes the times
+comparable — and writes the table: one baseline pass rather than a full walk — the cost table it
+writes is also what that pass costs, so the number lives in `src/tests/suite-cost.json` and not in
+this sentence. A suite that got _slower_ ends that run non-zero, because a slower suite makes the
+recorded table an under-statement and `MU9`'s ceiling generous by however much nobody measured. It
+was a warning at the end of a half-hour run for several rounds, which is a line nobody reads.
 
-**Condition 6 was a name and not a procedure, and the round that measured that
-is the one that also found its scope was wrong.** It said "the adversarial pass
-fixed for that candidate has been run and closed", which fixes nothing: a pass
-with no scope can be satisfied by reading the diff, and a pass with no
-termination rule ends when the reviewer stops. The submission's own targeting
-section is useful and is not a protocol — it is the author's guess at where the
-holes are, which is the one thing an adversarial pass exists to distrust.
+**Condition 6 was a name and not a procedure, and the round that measured that is the one that also
+found its scope was wrong.** It said "the adversarial pass fixed for that candidate has been run and
+closed", which fixes nothing: a pass with no scope can be satisfied by reading the diff, and a pass
+with no termination rule ends when the reviewer stops. The submission's own targeting section is
+useful and is not a protocol — it is the author's guess at where the holes are, which is the one
+thing an adversarial pass exists to distrust.
 
 **The pass, fixed before the candidate is frozen:**
 
-- **Scope.** Every normative row and its witnesses; the public declarations and
-  what they drag in; the **owner graph** — which values a request takes and from
-  whom; the mutation ledger's controls; and the port conditions. Not the diff:
-  the diff is what the author was looking at.
-- **Procedure.** Read each row from the record alone and check that its witness
-  can tell the row's two answers apart. Construct hostile counterexamples for
-  the claims the records lean on hardest rather than for the ones the diff
-  touched. Audit what the harness assumes about the framework, the dependency
-  and the runtime, and ask which rows would be re-opened if the assumption were
-  false.
-- **Termination.** Not "no findings". Every finding carries a disposition:
-  **fixed**, **explicitly rejected** with a reason, or **accepted as residue**
-  with an owner and a re-open condition. A pass ends when the list is empty of
-  undisposed items, and a pass that produced nothing is a pass to distrust
-  rather than a pass that passed.
-- **Record.** The review artifact and the commit it was taken against, both
-  named. `docs/redesign/feedbacks/` is where the ones so far live — **a branch-local directory that does not survive this branch**, which is why the rule is "name the artifact and the commit" rather than "point at the folder": a port inherits the naming rule, not the path.
+- **Scope.** Every normative row and its witnesses; the public declarations and what they drag in;
+  the **owner graph** — which values a request takes and from whom; the mutation ledger's controls;
+  and the port conditions. Not the diff: the diff is what the author was looking at.
+- **Procedure.** Read each row from the record alone and check that its witness can tell the row's
+  two answers apart. Construct hostile counterexamples for the claims the records lean on hardest
+  rather than for the ones the diff touched. Audit what the harness assumes about the framework, the
+  dependency and the runtime, and ask which rows would be re-opened if the assumption were false.
+- **Termination.** Not "no findings". Every finding carries a disposition: **fixed**, **explicitly
+  rejected** with a reason, or **accepted as residue** with an owner and a re-open condition. A pass
+  ends when the list is empty of undisposed items, and a pass that produced nothing is a pass to
+  distrust rather than a pass that passed.
+- **Record.** The review artifact and the commit it was taken against, both named.
+  `docs/redesign/feedbacks/` is where the ones so far live — **a branch-local directory that does
+  not survive this branch**, which is why the rule is "name the artifact and the commit" rather than
+  "point at the folder": a port inherits the naming rule, not the path.
 
-A new blocker re-opens **its impact set** and nothing else. Rows unrelated to it
-are not re-derived, which is what makes the protocol finishable.
+A new blocker re-opens **its impact set** and nothing else. Rows unrelated to it are not re-derived,
+which is what makes the protocol finishable.
 
-**The evidence domain says what a row's witness needs to be true.** It is
-recorded per row rather than inferred from the witness's name, because inferring
-it from what the arms already look like cannot find a row that was classified
-wrongly:
+**The evidence domain says what a row's witness needs to be true.** It is recorded per row rather
+than inferred from the witness's name, because inferring it from what the arms already look like
+cannot find a row that was classified wrongly:
 
 - `svelte` — needs a real framework context or lifecycle. The suite replaces
-  `getContext`/`setContext` process-wide, so a row here whose witnesses all live
-  in files that do not opt out of that stand-in **has no evidence for the half
-  that matters**, and `CAT31` is the check that says so — **over the rows that
-  declare `svelte-context` or `svelte-call-site`, which is 7 of the 39 in this
-  domain, not over the domain**. The other 31 are witnessed under the stand-in
-  and the check is green on them by construction: what the stand-in takes away is
-  those two facilities, and a row that does not declare them is not claiming
-  either. This sentence said "a row here", which reads as the domain, and the row
-  this round added is one of the 31. `CAT27`
-  held the same rule over the rows citing an `LC` arm and was deleted: every
-  `LC` arm lives in the file that opts out, so its rule was satisfied by where
-  those arms happen to live and could not fail.
+  `getContext`/`setContext` process-wide, so a row here whose witnesses all live in files that do
+  not opt out of that stand-in **has no evidence for the half that matters**, and `CAT31` is the
+  check that says so — **over the rows that declare `svelte-context` or `svelte-call-site`, which is
+  7 of the 39 in this domain, not over the domain**. The other 31 are witnessed under the stand-in
+  and the check is green on them by construction: what the stand-in takes away is those two
+  facilities, and a row that does not declare them is not claiming either. This sentence said "a row
+  here", which reads as the domain, and the row this round added is one of the 31. `CAT27` held the
+  same rule over the rows citing an `LC` arm and was deleted: every `LC` arm lives in the file that
+  opts out, so its rule was satisfied by where those arms happen to live and could not fail.
 - `engine` — pure request engine; the stand-in changes nothing about it.
 - `transport` — needs the resolved dependency's own behaviour on a socket.
 - `surface` — static: exported names, emitted declarations, module graph.
-- `rationale` — the row exists to record a decision: a sentinel, a non-goal, or
-  a reason.
+- `rationale` — the row exists to record a decision: a sentinel, a non-goal, or a reason.
 
-**The domain says which harness a row's evidence is exposed to; the needs say
-what it touches, and they are not the same question.** An adversarial pass
-cross-tabbed the two and read the gap as a contradiction: 24 of the 30
-`rationale` rows and 5 of the 18 `surface` ones declare a facility, having been
-filed under words that read as "not executable". They are executable — a
-sentinel _runs_, against the dependency rather than against this library, which
-is the whole point of the classification — and the definitions above said
-"static" and "not executable" where they meant _what the row is evidence about_.
-Nothing checks the two columns against each other, and nothing should: a
+**The domain says which harness a row's evidence is exposed to; the needs say what it touches, and
+they are not the same question.** An adversarial pass cross-tabbed the two and read the gap as a
+contradiction: 24 of the 30 `rationale` rows and 5 of the 18 `surface` ones declare a facility,
+having been filed under words that read as "not executable". They are executable — a sentinel
+_runs_, against the dependency rather than against this library, which is the whole point of the
+classification — and the definitions above said "static" and "not executable" where they meant _what
+the row is evidence about_. Nothing checks the two columns against each other, and nothing should: a
 sentinel that needs `wire` is the ordinary case, not a defect.
 
-**Evidence expires along the chain it was taken through**: a row rests on a
-witness, a witness on a harness, a harness on what it assumes about the
-framework, the dependency and the runtime. When one of those is found defective,
-every row above it is re-opened — unless a second, independent witness already
-carries the same claim. That rule is what this round's `getAllContexts` finding
-made necessary: the question it answered could not be asked under the stand-in at
-all, so no row witnessed under the stand-in had ever been asked it.
+**Evidence expires along the chain it was taken through**: a row rests on a witness, a witness on a
+harness, a harness on what it assumes about the framework, the dependency and the runtime. When one
+of those is found defective, every row above it is re-opened — unless a second, independent witness
+already carries the same claim. That rule is what this round's `getAllContexts` finding made
+necessary: the question it answered could not be asked under the stand-in at all, so no row
+witnessed under the stand-in had ever been asked it.
 
-**Every row carries a domain and a set of evidence needs, in the table below** — `CAT31` holds the table's completeness in both directions, so the population is the contract table itself rather than a count written here. It said `288` for three rounds while the table had 300 rows, which is the rot the paragraph below names, sitting forty lines above it.
-The domain is the row's subject, decided by reading its own `Given / When` — a
-classification derived from the arms it is meant to judge cannot find a row
-classified wrongly. The needs are what the row's evidence **stands on**, and
-they are a set because a witness usually stands on more than one thing.
+**Every row carries a domain and a set of evidence needs, in the table below** — `CAT31` holds the
+table's completeness in both directions, so the population is the contract table itself rather than
+a count written here. It said `288` for three rounds while the table had 300 rows, which is the rot
+the paragraph below names, sitting forty lines above it. The domain is the row's subject, decided by
+reading its own `Given / When` — a classification derived from the arms it is meant to judge cannot
+find a row classified wrongly. The needs are what the row's evidence **stands on**, and they are a
+set because a witness usually stands on more than one thing.
 
-**One word per row was wrong, and a reviewer measured both ways it was wrong.**
-It could be dodged: moving `A12-C3` from `call-site` to `effects` took the row
-out of the impact population and every check stayed green. And it could not
-express the actual dependencies — `A5-C21` is about the transport _and_ rests on
-consumer teardown, `C6-C8` is about the server renderer _and_ on no socket being
-opened, `A11-C16` on the query core's cancellation as much as on the engine. A
-defect in a transport harness would have left those rows outside its impact set
-while they were standing on it.
+**One word per row was wrong, and a reviewer measured both ways it was wrong.** It could be dodged:
+moving `A12-C3` from `call-site` to `effects` took the row out of the impact population and every
+check stayed green. And it could not express the actual dependencies — `A5-C21` is about the
+transport _and_ rests on consumer teardown, `C6-C8` is about the server renderer _and_ on no socket
+being opened, `A11-C16` on the query core's cancellation as much as on the engine. A defect in a
+transport harness would have left those rows outside its impact set while they were standing on it.
 
-**Half of each set is computed rather than declared, which is what stops the
-declaration from being one reader's word.** `src/tests/helpers/evidence-facilities.ts`
-reads each arm's body for literal markers — `new WS(`, `createQuery`,
-`useFakeTimers`, `render(`, `mount(` — and `CAT31` requires
-`declared ⊇ computed`. A row may declare something no arm exercises, which is a
-hole rather than an error; it may not omit something its own witnesses are
-standing on. The three words that claim _nothing_ is reached — `engine-only`,
-`static`, `none` — are checked the other way round: they are only allowed where
-the arms reach nothing at all, so they cannot be hidden behind.
+**Half of each set is computed rather than declared, which is what stops the declaration from being
+one reader's word.** `src/tests/helpers/evidence-facilities.ts` reads each arm's body for literal
+markers — `new WS(`, `createQuery`, `useFakeTimers`, `render(`, `mount(` — and `CAT31` requires
+`declared ⊇ computed`. A row may declare something no arm exercises, which is a hole rather than an
+error; it may not omit something its own witnesses are standing on. The three words that claim
+_nothing_ is reached — `engine-only`, `static`, `none` — are checked the other way round: they are
+only allowed where the arms reach nothing at all, so they cannot be hidden behind.
 
-The vocabulary is the facilities an arm can stand on, and the split inside the
-framework's own is the one the suite's stand-in makes:
+The vocabulary is the facilities an arm can stand on, and the split inside the framework's own is
+the one the suite's stand-in makes:
 
-- `svelte-context` — context resolved **per subtree**: which provider a hook is
-  handed. `vi.mock('svelte')` replaces `getContext`/`setContext`/`hasContext`
-  with one `Map` for the process, so this is the question it cannot ask.
-- `svelte-call-site` — where a hook may be built. The stand-in never refuses a
-  read, so "may this be called here?" has no answer under it.
-- `svelte-context-presence`, `svelte-effects`, `svelte-render` — a key being
-  absent, `$effect.root`, and the framework's own renderer. All three are real
-  under the stand-in, and naming them is a claim per row rather than a silence.
-- `wire`, `query-core`, `clock` — a socket and the resolved transport over it,
-  the resolved query core's observer and cache, and the clock the library is
-  handed.
-- `engine-only`, `static`, `none` — nothing beyond the code under test;
-  declarations and the module graph; and not executable at all.
+- `svelte-context` — context resolved **per subtree**: which provider a hook is handed.
+  `vi.mock('svelte')` replaces `getContext`/`setContext`/`hasContext` with one `Map` for the
+  process, so this is the question it cannot ask.
+- `svelte-call-site` — where a hook may be built. The stand-in never refuses a read, so "may this be
+  called here?" has no answer under it.
+- `svelte-context-presence`, `svelte-effects`, `svelte-render` — a key being absent, `$effect.root`,
+  and the framework's own renderer. All three are real under the stand-in, and naming them is a
+  claim per row rather than a silence.
+- `wire`, `query-core`, `clock` — a socket and the resolved transport over it, the resolved query
+  core's observer and cache, and the clock the library is handed.
+- `engine-only`, `static`, `none` — nothing beyond the code under test; declarations and the module
+  graph; and not executable at all.
 
-**The five domains fall out as `engine` 169, `transport` 78, `svelte` 45,
-`rationale` 30 and `surface` 27** — restated here, and **read back out of this
-sentence** by `CAT31` and compared to the table below, because a figure nobody
-re-derives is a figure that rots and this record has had two of those. The line
-used to say they were "counted by `CAT31` … rather than restated here", which is
-half true and reads as the wrong half: they _are_ restated, and what makes a
-restated figure safe is not where it came from but that something reads it.
+**The five domains fall out as `engine` 169, `transport` 78, `svelte` 45, `rationale` 30 and
+`surface` 27** — restated here, and **read back out of this sentence** by `CAT31` and compared to
+the table below, because a figure nobody re-derives is a figure that rots and this record has had
+two of those. The line used to say they were "counted by `CAT31` … rather than restated here", which
+is half true and reads as the wrong half: they _are_ restated, and what makes a restated figure safe
+is not where it came from but that something reads it.
 
-**Evidence expires along the chain it was taken through**: a row rests on a
-witness, a witness on a harness, a harness on what it assumes about the
-framework, the dependency and the runtime. When one of those is found defective,
-every row whose needs include it is re-opened — unless a second, independent
-witness already carries the same claim. The needs column is what makes that a
-set operation rather than a reading.
+**Evidence expires along the chain it was taken through**: a row rests on a witness, a witness on a
+harness, a harness on what it assumes about the framework, the dependency and the runtime. When one
+of those is found defective, every row whose needs include it is re-opened — unless a second,
+independent witness already carries the same claim. The needs column is what makes that a set
+operation rather than a reading.
 
-**For this round's finding — the context stand-in — the invalidated facilities
-are `svelte-context` and `svelte-call-site`.** The rows needing `svelte-context`
-are `A15-C3` and `C6-C1` and the rows needing `svelte-call-site` are `A12-C3`,
-`A12-C4`, `A12-C5`, `A12-C6` and `A12-C7`. Those seven are the impact set accept
-condition 3 names, and each is named in its own roster because naming one of them is exactly
-how a row left the population unnoticed.
+**For this round's finding — the context stand-in — the invalidated facilities are `svelte-context`
+and `svelte-call-site`.** The rows needing `svelte-context` are `A15-C3` and `C6-C1` and the rows
+needing `svelte-call-site` are `A12-C3`, `A12-C4`, `A12-C5`, `A12-C6` and `A12-C7`. Those seven are
+the impact set accept condition 3 names, and each is named in its own roster because naming one of
+them is exactly how a row left the population unnoticed.
 
-**All seven carry a witness where the framework is real**, and the two halves were
-written at different times, which is worth saying rather than collapsing into
-"re-verified this round": `A15-C3` got `WR30` and `C6-C1` got `LC19` in answer to
-the finding, while the five `A12` rows have had theirs since `lifecycle.test.ts`
-was written. What this round did for those five is ask the question of them;
-their evidence did not move. **And `C6-C1`'s witness had to be rebuilt before
-that sentence was true**: the arm it named passed with the framework's context
-replaced altogether, which is recorded in the row.
+**All seven carry a witness where the framework is real**, and the two halves were written at
+different times, which is worth saying rather than collapsing into "re-verified this round":
+`A15-C3` got `WR30` and `C6-C1` got `LC19` in answer to the finding, while the five `A12` rows have
+had theirs since `lifecycle.test.ts` was written. What this round did for those five is ask the
+question of them; their evidence did not move. **And `C6-C1`'s witness had to be rebuilt before that
+sentence was true**: the arm it named passed with the framework's context replaced altogether, which
+is recorded in the row.
 
-`CAT31` holds the table's completeness both ways, the two vocabularies,
-`declared ⊇ computed`, the reverse rule for the three "nothing reached" words,
-both rosters against the prose above, the counts, and that a row needing what the
-stand-in takes away is witnessed where the framework is real — with the converse
-edge, so a row cannot leave the population by being renamed, and with controls on
-both empty lists.
+`CAT31` holds the table's completeness both ways, the two vocabularies, `declared ⊇ computed`, the
+reverse rule for the three "nothing reached" words, both rosters against the prose above, the
+counts, and that a row needing what the stand-in takes away is witnessed where the framework is real
+— with the converse edge, so a row cannot leave the population by being renamed, and with controls
+on both empty lists.
 
-**One edge stays unmechanised, and it is where to shoot.** A row filed
-`engine-only` whose arms genuinely reach nothing detectable reads exactly like a
-row whose facilities the markers failed to see; the markers are literal, and an
-arm that reaches a facility through a helper they do not name is invisible to
-them. The computed set is a lower bound, so this direction relaxes an obligation
-rather than inventing one — but it means the sets are complete only up to what
-the markers detect. **Owner: this seat; re-opened by a row whose `Given / When`
-is edited, by a new test helper that reaches a facility indirectly, and by any
-cell a reviewer disputes.**
+**One edge stays unmechanised, and it is where to shoot.** A row filed `engine-only` whose arms
+genuinely reach nothing detectable reads exactly like a row whose facilities the markers failed to
+see; the markers are literal, and an arm that reaches a facility through a helper they do not name
+is invisible to them. The computed set is a lower bound, so this direction relaxes an obligation
+rather than inventing one — but it means the sets are complete only up to what the markers detect.
+**Owner: this seat; re-opened by a row whose `Given / When` is edited, by a new test helper that
+reaches a facility indirectly, and by any cell a reviewer disputes.**
 
 #### What the measuring instruments owe
 
-**A defect that stops the measurement is an accept blocker, and it is a
-different kind from a defect in the library.** Three full walks stalled this
-round on one fault in the runner, one of them for nineteen hours, and none of it
-was a fact about `nosvelte` — it was the evidence becoming unavailable. A
-reviewer ruled the class in two:
+**A defect that stops the measurement is an accept blocker, and it is a different kind from a defect
+in the library.** Three full walks stalled this round on one fault in the runner, one of them for
+nineteen hours, and none of it was a fact about `nosvelte` — it was the evidence becoming
+unavailable. A reviewer ruled the class in two:
 
-- **acceptance integrity** — a false green, a target that was never reached, a
-  partial run reported as a whole one. The evidence is _wrong_.
-- **evidence availability** — a run that cannot finish. The evidence is
-  _missing_. It is closed when the same frozen candidate completes a full walk.
+- **acceptance integrity** — a false green, a target that was never reached, a partial run reported
+  as a whole one. The evidence is _wrong_.
+- **evidence availability** — a run that cannot finish. The evidence is _missing_. It is closed when
+  the same frozen candidate completes a full walk.
 
-**And an instrument owes four things rather than a history of its failures.** A
-list of past stalls is a story; these are checkable:
+**And an instrument owes four things rather than a history of its failures.** A list of past stalls
+is a story; these are checkable:
 
 | What                  | The runner's                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -2245,119 +2025,101 @@ list of past stalls is a story; these are checkable:
 | Termination bound     | the next `git worktree add` completes within 30s of a run killed **during its baseline** — which is where `MG12b` kills, and the only point it measures — and a serial run stops between entries rather than during one, bounded by the arm beside this one in the guard suite                                                                                                                   |
 | Cleanup postcondition | a run killed at that point leaves the repository able to take a worktree, and its own worktree is the throwaway one `MG1`'s decoy is about. **The universal form — nothing of a killed run holds a repository lock — is withdrawn**: one kill point is not every kill point, and the arm's own administrative entries needed a `finally` before they stopped accumulating in `git worktree list` |
 
-**The second class, found by reading this walk's exit code rather than its
-summary.** The stalls above are availability: a run that does not finish. These
-three are integrity — a run that finishes and answers wrongly — and each ends
-the run rather than warning inside it.
+**The second class, found by reading this walk's exit code rather than its summary.** The stalls
+above are availability: a run that does not finish. These three are integrity — a run that finishes
+and answers wrongly — and each ends the run rather than warning inside it.
 
-- **A busy machine read as a finding.** Arms that spawn the runner hold it to a
-  real-time deadline, so a loaded machine fails them with nothing mutated;
-  two consecutive walks each reported one such arm as a widened kill set.
-  The second pass now re-reads the entry's own scope unmutated when it
-  disagrees, and where the arms that joined are exactly the ones failing there,
-  it reports a red baseline. The entry is counted `unscorable` and the run still
-  ends non-zero: nothing about the ledger was established for it. `SP6` and
-  `SP7` hold both edges — one green extra arm keeps the whole finding, and a
-  kill set that _shrank_ is never excused, because no load makes a test pass —
+- **A busy machine read as a finding.** Arms that spawn the runner hold it to a real-time deadline,
+  so a loaded machine fails them with nothing mutated; two consecutive walks each reported one such
+  arm as a widened kill set. The second pass now re-reads the entry's own scope unmutated when it
+  disagrees, and where the arms that joined are exactly the ones failing there, it reports a red
+  baseline. The entry is counted `unscorable` and the run still ends non-zero: nothing about the
+  ledger was established for it. `SP6` and `SP7` hold both edges — one green extra arm keeps the
+  whole finding, and a kill set that _shrank_ is never excused, because no load makes a test pass —
   and `MG13` holds that the runner still hands the pass a baseline reader.
-- **A cost table called stale on jitter.** The drift check compared a ratio
-  alone, so a cheap suite moving by a second was 1.4× and ended the run; three
-  serial baselines of one tree inside an hour named three disjoint pairs. It now
-  needs the ratio and two seconds, the floor above the largest jitter measured
-  rather than at it. `DR1` and `DR2` hold it, and what it gives up is stated
-  where it is paid: growth under two seconds on a cheap suite is invisible until
-  the table is re-measured.
-- **A filtered baseline compared with the whole file.** The fast mode narrows
-  the unmutated check to the arms the entries name, so the dearest suite in the
-  cost table came back at about an eighth of its recorded seconds and every
-  filtered suite was reported as several times cheaper. The
-  direction was harmless; a filtered suite that came back slower would have
-  ended the run for a comparison that was never valid. `DR3` holds it.
+- **A cost table called stale on jitter.** The drift check compared a ratio alone, so a cheap suite
+  moving by a second was 1.4× and ended the run; three serial baselines of one tree inside an hour
+  named three disjoint pairs. It now needs the ratio and two seconds, the floor above the largest
+  jitter measured rather than at it. `DR1` and `DR2` hold it, and what it gives up is stated where
+  it is paid: growth under two seconds on a cheap suite is invisible until the table is re-measured.
+- **A filtered baseline compared with the whole file.** The fast mode narrows the unmutated check to
+  the arms the entries name, so the dearest suite in the cost table came back at about an eighth of
+  its recorded seconds and every filtered suite was reported as several times cheaper. The direction
+  was harmless; a filtered suite that came back slower would have ended the run for a comparison
+  that was never valid. `DR3` holds it.
 
-A port inherits these as one rule: **an instrument that cannot tell the machine
-from the subject has to say so and stop, not pick.**
+A port inherits these as one rule: **an instrument that cannot tell the machine from the subject has
+to say so and stop, not pick.**
 
-The stalls themselves are recorded where a reader looks for history — the
-submission and the working method — rather than here.
+The stalls themselves are recorded where a reader looks for history — the submission and the working
+method — rather than here.
 
 #### The instruments the records lean on
 
-**Condition 5 said "every load-bearing instrument has a positive and a negative
-control, or a poison witness", and an outside reviewer measured that it was not
-true.** The evidence offered for it was "a ledger of several hundred entries plus a
-non-vacuity assertion in each arm", which is a count and a habit rather than a population:
-of the 130 arms this suite classifies as instruments, **44 are named by a record
-as what holds a rule** and **39 of those have a ledger entry aimed at them**. The
-condition now says what the roster below actually carries, which is the state of
-each one rather than a claim about all of them.
+**Condition 5 said "every load-bearing instrument has a positive and a negative control, or a poison
+witness", and an outside reviewer measured that it was not true.** The evidence offered for it was
+"a ledger of several hundred entries plus a non-vacuity assertion in each arm", which is a count and
+a habit rather than a population: of the 130 arms this suite classifies as instruments, **44 are
+named by a record as what holds a rule** and **39 of those have a ledger entry aimed at them**. The
+condition now says what the roster below actually carries, which is the state of each one rather
+than a claim about all of them.
 
-**A bare `—` is not a discharge, and neither is the word "shadowed".** This
-condition has had three wrong answers. The first said every load-bearing
-instrument had a control, which was false. The second counted the ones without a
-control as a residue — honest about the gap, and an outside reviewer named what
-it still was not: recording that something is unchecked does not check it, and
-the accept claims already rested on those instruments. The third called two of
-them "shadowed by a sibling", which the same reviewer refused: a sibling
-catching the edit first says where the instrument sits, not that the instrument
-can tell anything apart.
+**A bare `—` is not a discharge, and neither is the word "shadowed".** This condition has had three
+wrong answers. The first said every load-bearing instrument had a control, which was false. The
+second counted the ones without a control as a residue — honest about the gap, and an outside
+reviewer named what it still was not: recording that something is unchecked does not check it, and
+the accept claims already rested on those instruments. The third called two of them "shadowed by a
+sibling", which the same reviewer refused: a sibling catching the edit first says where the
+instrument sits, not that the instrument can tell anything apart.
 
-**So the answer is entries.** Of the 130 arms this suite classifies as
-instruments, **44 are named by a record as what holds a rule** and **39 of those
-have a ledger entry aimed at them** — eleven of them added while answering this,
-including the two that had been called shadowed. `CAT12` turned out to be
-reachable on the second attempt: coverage there is satisfied by _any_ entry that
-kills the id, so the falsifier is a row pointing only at an arm the ledger
-records a reason for. `CAT27` turned out to be unfalsifiable rather than
-shadowed — every `LC` arm lives in the file that opts out, so its rule was
-satisfied by where those arms happen to live — and it was deleted into `CAT31`,
-which holds the stronger rule over what a row _declares it needs_.
+**So the answer is entries.** Of the 130 arms this suite classifies as instruments, **44 are named
+by a record as what holds a rule** and **39 of those have a ledger entry aimed at them** — eleven of
+them added while answering this, including the two that had been called shadowed. `CAT12` turned out
+to be reachable on the second attempt: coverage there is satisfied by _any_ entry that kills the id,
+so the falsifier is a row pointing only at an arm the ledger records a reason for. `CAT27` turned
+out to be unfalsifiable rather than shadowed — every `LC` arm lives in the file that opts out, so
+its rule was satisfied by where those arms happen to live — and it was deleted into `CAT31`, which
+holds the stronger rule over what a row _declares it needs_.
 
 Five of the 44 are in that state — no entry, and a hand falsification instead.
 
-**Five instruments carry a hand falsification instead, and each says why.**
-`SEN0` holds the sentinel directory's independence, and `MU8` forbids any entry
-from editing that directory — which is what makes the independence a fact rather
-than a convention. `MG12a` holds the runner's structural prohibition on a piped apply and `MG12b`
-the repository's availability after a kill during the baseline; an entry for
-either would cost the guard suite's whole run on every walk, for instruments
-whose failure mode is that walks do not finish. `CAT34` is the fourth, and its
-reason is a different one: an entry could reach it, but what it holds are
-refusals the roster does not currently trigger, so the arm drives them against
-fabricated lines and the hand falsification recorded for it is of the roster's
-grammar. **The cost figures this paragraph and `MG12a`'s roster row used to
-quote disagreed — 233s and 251s, taken in different rounds — and neither is
-needed to make the point: `src/tests/suite-cost.json` is where a suite's cost
-is recorded, measured rather than remembered.** `DOC9` is the fifth: what it
-holds is the boundary of `DOC8`'s census table, which is a literal in the check's
-own file, so the falsification is an edit to that file — an entry would mutate the
-instrument rather than anything it watches — and it expires when that boundary is
-derived rather than asserted. All five rows carry the
-same six fields: the commit it was taken at, the edit, the command, the arm that
-went red, that the unmodified baseline was green, and when it stops counting.
-`CAT32` checks they are there. **They are recorded manual measurements, not
+**Five instruments carry a hand falsification instead, and each says why.** `SEN0` holds the
+sentinel directory's independence, and `MU8` forbids any entry from editing that directory — which
+is what makes the independence a fact rather than a convention. `MG12a` holds the runner's
+structural prohibition on a piped apply and `MG12b` the repository's availability after a kill
+during the baseline; an entry for either would cost the guard suite's whole run on every walk, for
+instruments whose failure mode is that walks do not finish. `CAT34` is the fourth, and its reason is
+a different one: an entry could reach it, but what it holds are refusals the roster does not
+currently trigger, so the arm drives them against fabricated lines and the hand falsification
+recorded for it is of the roster's grammar. **The cost figures this paragraph and `MG12a`'s roster
+row used to quote disagreed — 233s and 251s, taken in different rounds — and neither is needed to
+make the point: `src/tests/suite-cost.json` is where a suite's cost is recorded, measured rather
+than remembered.** `DOC9` is the fifth: what it holds is the boundary of `DOC8`'s census table,
+which is a literal in the check's own file, so the falsification is an edit to that file — an entry
+would mutate the instrument rather than anything it watches — and it expires when that boundary is
+derived rather than asserted. All five rows carry the same six fields: the commit it was taken at,
+the edit, the command, the arm that went red, that the unmodified baseline was green, and when it
+stops counting. `CAT32` checks they are there. **They are recorded manual measurements, not
 machine-checked ones**, and the roster says so in those words.
 
-**Two instruments here watch the other instruments' eyesight, which is a
-different failure from a check being wrong.** `CAT36` holds that the shape of an
-arm declaration is written in one place: it had been transcribed by hand in six
-others, and each copy was blind to a different part of the population — eight of
-773 arms on the tree where it was measured, three of them merely one `describe`
-deeper than a copy expected. A check reading a smaller suite than it thinks
-reports a clean answer about a question it did not ask, and the four silences
-that produced were all different: a coverage claim read as undeclared, a row's
-evidence computed as resting on nothing, a duplicate id unreported, and a
-reviewer's packet quietly missing a body. `MU14` is the same shape one level
-down — every arm a ledger entry claims to kill has to be one the entry's own
-scope declares and runs, which nothing asked before, so a rotted name or an id
-belonging to another suite read as coverage until a full walk reached it.
+**Two instruments here watch the other instruments' eyesight, which is a different failure from a
+check being wrong.** `CAT36` holds that the shape of an arm declaration is written in one place: it
+had been transcribed by hand in six others, and each copy was blind to a different part of the
+population — eight of 773 arms on the tree where it was measured, three of them merely one
+`describe` deeper than a copy expected. A check reading a smaller suite than it thinks reports a
+clean answer about a question it did not ask, and the four silences that produced were all
+different: a coverage claim read as undeclared, a row's evidence computed as resting on nothing, a
+duplicate id unreported, and a reviewer's packet quietly missing a body. `MU14` is the same shape
+one level down — every arm a ledger entry claims to kill has to be one the entry's own scope
+declares and runs, which nothing asked before, so a rotted name or an id belonging to another suite
+read as coverage until a full walk reached it.
 
-**And a manual falsification says what it reached.** The one recorded for the
-runner restores the piped apply and watches `MG12a` go red, which is a
-measurement of the structural half only — the behavioural half is green under
-the poison too, because the kill lands after the patch is applied. That is why
-the two are separate arms with separate claims rather than one arm with two
-expectations: an arm whose halves are discharged by different evidence reports
-the strength of its stronger half.
+**And a manual falsification says what it reached.** The one recorded for the runner restores the
+piped apply and watches `MG12a` go red, which is a measurement of the structural half only — the
+behavioural half is green under the poison too, because the kill lands after the patch is applied.
+That is why the two are separate arms with separate claims rather than one arm with two
+expectations: an arm whose halves are discharged by different evidence reports the strength of its
+stronger half.
 
 | Instrument | What it holds                                                                                                                   | Negative control                                                                                                                                                                                                                                                                         | Falsified by hand                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2769,841 +2531,695 @@ A check reads this file and the three records, and fails if:
 - a `behavior` or `architecture` row has no spike witness;
 - a witness names a test that does not exist in the spike;
 - a witness contains no assertion at all;
-- a `behavior` row is carried only by witnesses that read the implementation's
-  own source;
-- an executable row has no mutation measured against one of its witnesses —
-  neither one that makes it fail, nor one aimed at it and recorded as provably
-  unable to;
-- a mutation declares a contract row that does not exist, or declares one none
-  of whose witnesses it kills; or a row named as needing a mutation aimed at it
-  has none;
-- a witness this table leans on is aimed at by no entry at all and no reason is
-  recorded for that — and the reasons are checked for being there, which four
-  lists of them were not;
-- an identifier a row names in its Implementation column resolves to nothing in
-  the library's code, its tests, or the decisions — read with comments stripped,
-  since a symbol deleted from `src/lib` stayed "declared" while one docblock
-  still mentioned it;
-- a row of this table has a different number of cells than the header declares,
-  counted a second way that shares no assumption with the first — a row that
-  breaks the shape both counters expect disappears from both of them;
-- an entry names no scoped suite, which would run every suite and skip the
-  unmutated baseline; or the ledger's computed cost exceeds the budget this
-  repository has agreed to;
-- a contract row carries no evidence domain, or one outside the fixed set, or a
-  `svelte` row says it needs something outside the fixed set of framework
-  facilities;
-- a row needing the framework's own context or call site has no witness in a
-  file that opts out of the context stand-in — or, the other edge, a row already
-  witnessed in one of those files is filed as needing nothing from the
-  framework;
-- the counts and the `context-scope` rows this record prints disagree with the
-  table it prints them about.
+- a `behavior` row is carried only by witnesses that read the implementation's own source;
+- an executable row has no mutation measured against one of its witnesses — neither one that makes
+  it fail, nor one aimed at it and recorded as provably unable to;
+- a mutation declares a contract row that does not exist, or declares one none of whose witnesses it
+  kills; or a row named as needing a mutation aimed at it has none;
+- a witness this table leans on is aimed at by no entry at all and no reason is recorded for that —
+  and the reasons are checked for being there, which four lists of them were not;
+- an identifier a row names in its Implementation column resolves to nothing in the library's code,
+  its tests, or the decisions — read with comments stripped, since a symbol deleted from `src/lib`
+  stayed "declared" while one docblock still mentioned it;
+- a row of this table has a different number of cells than the header declares, counted a second way
+  that shares no assumption with the first — a row that breaks the shape both counters expect
+  disappears from both of them;
+- an entry names no scoped suite, which would run every suite and skip the unmutated baseline; or
+  the ledger's computed cost exceeds the budget this repository has agreed to;
+- a contract row carries no evidence domain, or one outside the fixed set, or a `svelte` row says it
+  needs something outside the fixed set of framework facilities;
+- a row needing the framework's own context or call site has no witness in a file that opts out of
+  the context stand-in — or, the other edge, a row already witnessed in one of those files is filed
+  as needing nothing from the framework;
+- the counts and the `context-scope` rows this record prints disagree with the table it prints them
+  about.
 
-Every one of those asks whether something exists or whether a witness _failed_.
-None of them asks which of that witness's assertions failed, so a declared
-mutation can satisfy the last bullet while the clause it was declared against
-keeps no falsifier at all. That is the seventh limit below, and it is the one
-that has already been paid for once.
+Every one of those asks whether something exists or whether a witness _failed_. None of them asks
+which of that witness's assertions failed, so a declared mutation can satisfy the last bullet while
+the clause it was declared against keeps no falsifier at all. That is the seventh limit below, and
+it is the one that has already been paid for once.
 
-**Two exemptions run underneath the seventh bullet and neither was written
-down.** The check reads the witness column against the ledger's kill sets, and a
-reader doing the same arithmetic by hand finds a large residue that is mostly not
-a gap. Re-derived rather than quoted — the two inputs are this table's witness
-column and the `killed` arrays in the ledger:
+**Two exemptions run underneath the seventh bullet and neither was written down.** The check reads
+the witness column against the ledger's kill sets, and a reader doing the same arithmetic by hand
+finds a large residue that is mostly not a gap. Re-derived rather than quoted — the two inputs are
+this table's witness column and the `killed` arrays in the ledger:
 
-- **Sentinels cannot appear in a kill set at all, and the reason this used to
-  give was not true.** It said every mutation is applied under `src/lib/stores/spike-v6/` — the spike tree, which does not outlive phase 3; six entries reach outside it — to
-  `src/lib/components`, to `0004` twice, to `package.json` twice, and to one
-  fixture. It also rested on `SEN0`, which forbade the _spelling_ `$lib` in that
-  directory rather than a path to the library: the sentinel that exercises
-  rx-nostr imported the shared relay harness, and the harness imports a library
-  constant as a value, so the sentinel's module graph ran library code while
-  `SEN0` stayed green. What holds the exemption up now is a pair that is checked
-  rather than a sentence: `SEN0` walks the import graph transitively — relative
-  paths, dynamic `import`, `require` and `vi.mock` included, from the sentinel
-  files **and from the setup file vitest injects into every one of their graphs
-  and none of their sources** — refusing this repository's built output as well
-  as its sources, since `dist/` is the same library; and `MU8` asserts that no
-  entry edits anything under the sentinel directory. **And one entry runs a
-  sentinel under a mutation and records that it kills nothing**
-  (`the-library-timer-moves-under-the-sentinels`), because `MU8`'s other edge —
-  "if an entry ever did kill one, the property is false" — could not fail while
-  no entry's scope named a sentinel file at all. **What the pair does
-  not cover, stated rather than checked**: an entry editing `package.json` or a
-  record. `SEN10` reads manifests, though the ones under `node_modules` rather
-  than the root, and no sentinel reads `docs/`. `CAT12` skips sentinels by _kind_
-  rather than by name, and the ledger states the same thing at its head.
-- **`CAT12` is asked of `behavior` and `architecture` rows only**, so a
-  `non-goal`, `rationale` or `sentinel` row with no targeted witness is not a
-  finding either. Of the rows whose every witness is untargeted, all but three
-  are `sentinel`; the three are `B-ζ-N1` (`non-goal`), `C7-C1` (`rationale`), and
-  `B-α-C4`, whose `SC9` is recorded `unreachable` — aimed at and measured. **So
-  no executable row is untargeted**, which is what the bullet above already
-  promised and what the raw arithmetic hides.
+- **Sentinels cannot appear in a kill set at all, and the reason this used to give was not true.**
+  It said every mutation is applied under `src/lib/stores/spike-v6/` — the spike tree, which does
+  not outlive phase 3; six entries reach outside it — to `src/lib/components`, to `0004` twice, to
+  `package.json` twice, and to one fixture. It also rested on `SEN0`, which forbade the _spelling_
+  `$lib` in that directory rather than a path to the library: the sentinel that exercises rx-nostr
+  imported the shared relay harness, and the harness imports a library constant as a value, so the
+  sentinel's module graph ran library code while `SEN0` stayed green. What holds the exemption up
+  now is a pair that is checked rather than a sentence: `SEN0` walks the import graph transitively —
+  relative paths, dynamic `import`, `require` and `vi.mock` included, from the sentinel files **and
+  from the setup file vitest injects into every one of their graphs and none of their sources** —
+  refusing this repository's built output as well as its sources, since `dist/` is the same library;
+  and `MU8` asserts that no entry edits anything under the sentinel directory. **And one entry runs
+  a sentinel under a mutation and records that it kills nothing**
+  (`the-library-timer-moves-under-the-sentinels`), because `MU8`'s other edge — "if an entry ever
+  did kill one, the property is false" — could not fail while no entry's scope named a sentinel file
+  at all. **What the pair does not cover, stated rather than checked**: an entry editing
+  `package.json` or a record. `SEN10` reads manifests, though the ones under `node_modules` rather
+  than the root, and no sentinel reads `docs/`. `CAT12` skips sentinels by _kind_ rather than by
+  name, and the ledger states the same thing at its head.
+- **`CAT12` is asked of `behavior` and `architecture` rows only**, so a `non-goal`, `rationale` or
+  `sentinel` row with no targeted witness is not a finding either. Of the rows whose every witness
+  is untargeted, all but three are `sentinel`; the three are `B-ζ-N1` (`non-goal`), `C7-C1`
+  (`rationale`), and `B-α-C4`, whose `SC9` is recorded `unreachable` — aimed at and measured. **So
+  no executable row is untargeted**, which is what the bullet above already promised and what the
+  raw arithmetic hides.
 
-**What is left after both exemptions is a residue of witnesses rather than of
-rows, and it is real.** These non-`SEN` ids appear in this table's witness column
-and in no kill set: `CAP1`, `CAP2`, `CF2`, `CH1`, `CH2`, `CH6`, `CX10`, `CX12`,
-`EV1`, `EV3`, `LK3`, `LK6`, `NZ6`, `NZ9`, `PG1`, `PG2`, `SC9`, `SUR7`, `SUR8`,
-`SUR9`, `WR3`, `WR4` and `WR16`. **It was wrong in both directions when it was
-last read** — `LK5` had been aimed at since the entry that renamed a published
-member, and `WR16` had never been — which is what a snapshot does beside a
-derivation, and why `MU8` now derives the same set from the same two places and
-fails when the list beside it disagrees. Each sits on a row that another witness carries,
-so nothing fails; what it means is that **the row's green comes from its
-neighbour**, and where the untargeted witness is the one stating a clause of its
-own, that clause has no falsifier. Two were checked this round and both were
-exactly that: `WR3` is a source grep one level of indirection defeats, and
-`NZ6`'s only runtime assertion is satisfied by a constant function. The rest are
-unchecked. **The list is a snapshot and the derivation is not** — take the
-witness column, take the ledger's `killed` arrays, subtract, drop the `SEN*` —
-which is the only form of it that cannot go stale, and is how this one was
-produced.
+**What is left after both exemptions is a residue of witnesses rather than of rows, and it is
+real.** These non-`SEN` ids appear in this table's witness column and in no kill set: `CAP1`,
+`CAP2`, `CF2`, `CH1`, `CH2`, `CH6`, `CX10`, `CX12`, `EV1`, `EV3`, `LK3`, `LK6`, `NZ6`, `NZ9`, `PG1`,
+`PG2`, `SC9`, `SUR7`, `SUR8`, `SUR9`, `WR3`, `WR4` and `WR16`. **It was wrong in both directions
+when it was last read** — `LK5` had been aimed at since the entry that renamed a published member,
+and `WR16` had never been — which is what a snapshot does beside a derivation, and why `MU8` now
+derives the same set from the same two places and fails when the list beside it disagrees. Each sits
+on a row that another witness carries, so nothing fails; what it means is that **the row's green
+comes from its neighbour**, and where the untargeted witness is the one stating a clause of its own,
+that clause has no falsifier. Two were checked this round and both were exactly that: `WR3` is a
+source grep one level of indirection defeats, and `NZ6`'s only runtime assertion is satisfied by a
+constant function. The rest are unchecked. **The list is a snapshot and the derivation is not** —
+take the witness column, take the ledger's `killed` arrays, subtract, drop the `SEN*` — which is the
+only form of it that cannot go stale, and is how this one was produced.
 
-The two mutation requirements are what the rest rest on. Reading a contract beside its witness
-does not converge: three passes compared three different things — the witness's
-title, then its assertions, then its setup — and each found a different class of
-mismatch rather than the residue of the one before, so _how many more passes_
-has no answer. Breaking the decision's implementation and requiring the witness
-to fail does converge, because most of the ways a witness can fail to establish
-its contract all survive the break: a setup that is not the Given, an action
-that is not the When, an assertion about a proxy for the Then, an assertion that
-cannot fail, a test that has frozen the defect it was meant to forbid, and a
-test that passes for the dependency's reasons rather than ours. Every executable
-row is reached by a mutation. Both numbers move as rows and mutations are added,
-so they are asserted by the check rather than written here — the last count
-written down went stale within a day of being written.
+The two mutation requirements are what the rest rest on. Reading a contract beside its witness does
+not converge: three passes compared three different things — the witness's title, then its
+assertions, then its setup — and each found a different class of mismatch rather than the residue of
+the one before, so _how many more passes_ has no answer. Breaking the decision's implementation and
+requiring the witness to fail does converge, because most of the ways a witness can fail to
+establish its contract all survive the break: a setup that is not the Given, an action that is not
+the When, an assertion about a proxy for the Then, an assertion that cannot fail, a test that has
+frozen the defect it was meant to forbid, and a test that passes for the dependency's reasons rather
+than ours. Every executable row is reached by a mutation. Both numbers move as rows and mutations
+are added, so they are asserted by the check rather than written here — the last count written down
+went stale within a day of being written.
 
-The limits below are stated because they bound what that is worth. They are not
-counted here, for the reason given one paragraph up: the count that stood here
-went stale in the round that added the next limit, and its replacement went
-stale the same way in the round after — which is why the correction was to
-delete the number rather than to raise it again.
+The limits below are stated because they bound what that is worth. They are not counted here, for
+the reason given one paragraph up: the count that stood here went stale in the round that added the
+next limit, and its replacement went stale the same way in the round after — which is why the
+correction was to delete the number rather than to raise it again.
 
-For an `architecture` row the claim is about the shape of the source and the
-check reads the source, so a mutation confirms the check is looking at the right
-text — not that the text means what the row says it means. Those rows still rest
-on reading.
+For an `architecture` row the claim is about the shape of the source and the check reads the source,
+so a mutation confirms the check is looking at the right text — not that the text means what the row
+says it means. Those rows still rest on reading.
 
-And the joint between a decision and its contract is not mechanizable at all: no
-check can say whether a row states what its decision decided. That one was read
-by hand, row by row.
+And the joint between a decision and its contract is not mechanizable at all: no check can say
+whether a row states what its decision decided. That one was read by hand, row by row.
 
-The third is that **a kill set is a fact about the tree it was measured on, and
-nothing warns you when it stops being one.** A single change to the engine
-silently staled five entries in one round — their recorded witnesses were still
-named, still plausible, and no longer what the mutation reached — and they stayed
-that way until the next full run. So a ledger figure is a claim about the tree it
-was taken on and about no other; only the one quoted beside the code being
-submitted says anything about that code. The ledger cannot raise this itself,
-because a set that has gone stale looks exactly like a set that is right.
+The third is that **a kill set is a fact about the tree it was measured on, and nothing warns you
+when it stops being one.** A single change to the engine silently staled five entries in one round —
+their recorded witnesses were still named, still plausible, and no longer what the mutation reached
+— and they stayed that way until the next full run. So a ledger figure is a claim about the tree it
+was taken on and about no other; only the one quoted beside the code being submitted says anything
+about that code. The ledger cannot raise this itself, because a set that has gone stale looks
+exactly like a set that is right.
 
-**And it is three numbers rather than a fraction, because "as recorded" was two
-results added together.** The runner printed `N/N as recorded`, and an entry
-agrees with its record in two quite different ways: its witnesses died as
-recorded, or it killed nothing **and the ledger says it kills nothing**. Both
-landed in the numerator, so `224/224` was quotable as coverage while two of the
-entries inside it were the very ones a reviewer named as having no witness at
-all. The form is now `K killed as recorded / U undetected as recorded / D
-disagreed — N entries`, with the third term printed even when it is zero, since a
-missing term is exactly how the old shape came to be read as one number. **A
-submission that quotes the ledger quotes all three**; `U` is the count of
-properties nothing is watching, and it belongs beside `K` rather than inside it.
+**And it is three numbers rather than a fraction, because "as recorded" was two results added
+together.** The runner printed `N/N as recorded`, and an entry agrees with its record in two quite
+different ways: its witnesses died as recorded, or it killed nothing **and the ledger says it kills
+nothing**. Both landed in the numerator, so `224/224` was quotable as coverage while two of the
+entries inside it were the very ones a reviewer named as having no witness at all. The form is now
+`K killed as recorded / U undetected as recorded / D disagreed — N entries`, with the third term
+printed even when it is zero, since a missing term is exactly how the old shape came to be read as
+one number. **A submission that quotes the ledger quotes all three**; `U` is the count of properties
+nothing is watching, and it belongs beside `K` rather than inside it.
 
-The fourth bounds what a passing entry says. A `✓` means the recorded witnesses
-failed; it does not mean they failed for the reason the entry names. A mutation
-that breaks the property it aims at _and_ something else on the same witnesses
-reads the same as one that breaks only the first, and the difference is visible
-only in the failure messages, which a run does not compare. Two shapes of this
-have already been found and closed — a mutation that broke two things which
-cancelled, and two whose replacement did not compile at all, one of them printing
-`✓` across nine recorded runs while measuring nothing. The check that closed the
-second (every replacement must bind, at the edit site) is now part of the suite;
-the first has no mechanical check and is why an entry whose kill set changes
-shape is read rather than reconciled.
+The fourth bounds what a passing entry says. A `✓` means the recorded witnesses failed; it does not
+mean they failed for the reason the entry names. A mutation that breaks the property it aims at
+_and_ something else on the same witnesses reads the same as one that breaks only the first, and the
+difference is visible only in the failure messages, which a run does not compare. Two shapes of this
+have already been found and closed — a mutation that broke two things which cancelled, and two whose
+replacement did not compile at all, one of them printing `✓` across nine recorded runs while
+measuring nothing. The check that closed the second (every replacement must bind, at the edit site)
+is now part of the suite; the first has no mechanical check and is why an entry whose kill set
+changes shape is read rather than reconciled.
 
-The fifth is that **the runner can stop without saying so.** Observed once: every
-entry reported its verdict and then a worker never exited, so the summary line
-was never printed and the process had to be killed. There is no worker-liveness
-timeout, so in CI that shape hangs rather than fails, and a job that hangs is
-read as slow rather than as broken. The run was re-done rather than quoted, on
-the rule the rest of this section rests on — a run that does not print its
-verdict is not a measurement, and a figure counted by hand off a partial log is
-not the tool's answer.
+The fifth is that **the runner can stop without saying so.** Observed once: every entry reported its
+verdict and then a worker never exited, so the summary line was never printed and the process had to
+be killed. There is no worker-liveness timeout, so in CI that shape hangs rather than fails, and a
+job that hangs is read as slow rather than as broken. The run was re-done rather than quoted, on the
+rule the rest of this section rests on — a run that does not print its verdict is not a measurement,
+and a figure counted by hand off a partial log is not the tool's answer.
 
-The sixth is the fourth one's dual: it bounds what a satisfied _check_ says
-rather than what a passing entry says. `CAT12` asks whether _some_ mutation was
-measured against _some_ witness of a row — killing it, or aimed at it and
-recorded as provably unable to kill it. It never asks whether any mutation was
-aimed at what that row claims. A row can therefore be green on the strength
-of mutations that reach its witnesses for reasons of their own — the fourth limit
-says a `✓` does not name why its witnesses failed, and this one says a satisfied
-requirement does not name what was attacked.
+The sixth is the fourth one's dual: it bounds what a satisfied _check_ says rather than what a
+passing entry says. `CAT12` asks whether _some_ mutation was measured against _some_ witness of a
+row — killing it, or aimed at it and recorded as provably unable to kill it. It never asks whether
+any mutation was aimed at what that row claims. A row can therefore be green on the strength of
+mutations that reach its witnesses for reasons of their own — the fourth limit says a `✓` does not
+name why its witnesses failed, and this one says a satisfied requirement does not name what was
+attacked.
 
-**It happened on the two postcondition rows, and the shape is worth writing down
-even though the rows have since been given witnesses of their own.** For several
-rounds `A11-P1` and `A11-P2` were carried by `P1` and `P25` and by nothing else.
-Every mutation that reached that pair before the aimed ones were written reached
-it through `P25`: an attempt id that is not the one the caller claimed, a settle
-marker pushed ahead of its refusal, a wire subscription id repeated between
-attempts, a live refresh that does nothing, and more of the same kind. Not one of
-them stops an accumulator driving its stream. So the drive clause stood green
-with no mutation aimed at it, and nothing in the check could have said so. Both
-rows now name direct witnesses as well — arms whose whole subject is the clause,
-so a mutation reaching one is much likelier to be about what the row claims — and
-that narrows this limit without closing it: "much likelier" is not a check, and
-the joint below is still asked only of the edges an entry declares.
+**It happened on the two postcondition rows, and the shape is worth writing down even though the
+rows have since been given witnesses of their own.** For several rounds `A11-P1` and `A11-P2` were
+carried by `P1` and `P25` and by nothing else. Every mutation that reached that pair before the
+aimed ones were written reached it through `P25`: an attempt id that is not the one the caller
+claimed, a settle marker pushed ahead of its refusal, a wire subscription id repeated between
+attempts, a live refresh that does nothing, and more of the same kind. Not one of them stops an
+accumulator driving its stream. So the drive clause stood green with no mutation aimed at it, and
+nothing in the check could have said so. Both rows now name direct witnesses as well — arms whose
+whole subject is the clause, so a mutation reaching one is much likelier to be about what the row
+claims — and that narrows this limit without closing it: "much likelier" is not a check, and the
+joint below is still asked only of the edges an entry declares.
 
-**Part of that is mechanised now and part of it is not, which is the limit rather
-than the repair.** A ledger entry may declare the contract rows it attacks, and
-`CAT15` holds each declared row to existing and to losing at least one of its own
-witnesses to that entry, and holds the rows listed below as needing an aimed
-mutation to having one. So the `contract × witness × mutation` joint is checked
-**for declared rows and for those rows only**; every other row stays at the older
-level, where "some mutation killed some witness" is the whole of the question.
-The declaration is the author's word as well: an entry that names the wrong row
-is caught only when it kills none of that row's witnesses, and one that kills
-them for an unrelated reason is the fourth limit over again, one level up.
+**Part of that is mechanised now and part of it is not, which is the limit rather than the repair.**
+A ledger entry may declare the contract rows it attacks, and `CAT15` holds each declared row to
+existing and to losing at least one of its own witnesses to that entry, and holds the rows listed
+below as needing an aimed mutation to having one. So the `contract × witness × mutation` joint is
+checked **for declared rows and for those rows only**; every other row stays at the older level,
+where "some mutation killed some witness" is the whole of the question. The declaration is the
+author's word as well: an entry that names the wrong row is caught only when it kills none of that
+row's witnesses, and one that kills them for an unrelated reason is the fourth limit over again, one
+level up.
 
-**The list of such rows lives here rather than in the check, and the direction it
-moved is the repair.** It was an array inside `CAT15`, and this record
-deliberately did not copy it, on the rule that a second copy rots. That rule was
-right and the side was wrong. Two things decided the move. The obligation is a
-property of a **contract row**, so it belongs beside the rows; and the spike does
-not survive this branch while these records do, so an obligation recorded only in
-a spike test file is one the port does not inherit — it would arrive at the
-production tree as a list nobody could re-derive. Moved, there is still one copy:
-`CAT15` reads this list, and a row named here that no ledger entry declares fails
-the suite.
+**The list of such rows lives here rather than in the check, and the direction it moved is the
+repair.** It was an array inside `CAT15`, and this record deliberately did not copy it, on the rule
+that a second copy rots. That rule was right and the side was wrong. Two things decided the move.
+The obligation is a property of a **contract row**, so it belongs beside the rows; and the spike
+does not survive this branch while these records do, so an obligation recorded only in a spike test
+file is one the port does not inherit — it would arrive at the production tree as a list nobody
+could re-derive. Moved, there is still one copy: `CAT15` reads this list, and a row named here that
+no ledger entry declares fails the suite.
 
 #### Rows whose port column carries a condition
 
-**A ratchet, and the rule is now a derivation rather than a whitelist.** Every
-row whose Implementation column carries anything beyond a bare `TBD` — a seam a
-port has to hold, an arm it owes, a reason it will not be able to state the row
-at all — **is** a port condition, and the list below is that set written out. It
-is not a judgement about which conditions matter; it is the same predicate the
-table already answers, recorded so that a condition **disappearing** is
-detectable.
+**A ratchet, and the rule is now a derivation rather than a whitelist.** Every row whose
+Implementation column carries anything beyond a bare `TBD` — a seam a port has to hold, an arm it
+owes, a reason it will not be able to state the row at all — **is** a port condition, and the list
+below is that set written out. It is not a judgement about which conditions matter; it is the same
+predicate the table already answers, recorded so that a condition **disappearing** is detectable.
 
-**It was a whitelist of 95 for several rounds, and a reviewer named what that
-bought.** Of the rows carrying a condition, 52 were not on it — a row could lose
-its condition with nothing failing — and the number was stale twice, because a
-hand-kept list is a fourth table to synchronise. So `CAT22` compares the derived
-set with this one for **equality** now: a row that gains a condition and is not
-added fails here, and a row that loses one fails here. Adding a condition costs a
-line; that is the friction the ratchet is, and it is the same friction the
-mutation ledger's declared edges carry.
+**It was a whitelist of 95 for several rounds, and a reviewer named what that bought.** Of the rows
+carrying a condition, 52 were not on it — a row could lose its condition with nothing failing — and
+the number was stale twice, because a hand-kept list is a fourth table to synchronise. So `CAT22`
+compares the derived set with this one for **equality** now: a row that gains a condition and is not
+added fails here, and a row that loses one fails here. Adding a condition costs a line; that is the
+friction the ratchet is, and it is the same friction the mutation ledger's declared edges carry.
 
-**There is no exclusion today, and one would need a reason and an owner.** A row
-that a port genuinely does not inherit — because the condition is about this
-spike's own scaffolding rather than about the design — belongs in the exclusion
-map in `CAT22` with both, not in a shorter list here.
+**There is no exclusion today, and one would need a reason and an owner.** A row that a port
+genuinely does not inherit — because the condition is about this spike's own scaffolding rather than
+about the design — belongs in the exclusion map in `CAT22` with both, not in a shorter list here.
 
-`A1-C1`, `A4b-C1`, `A4b-S1`, `A5-C1`, `A5-C5`, `A5-C6`, `A5-C17`, `A5-C18`, `A5-C19`,
-`A5-C8`, `A5-C15`, `A5-C20`, `A5-C21`, `A5-C22`, `A5-C25`, `A5-C26`, `A5-C23`, `A5-C24`, `A5-C21`, `A6-C1`, `A6-C5`, `A6-C6`, `A6-C7`, `A11-C1`, `A11-C5`, `A11-C3`, `A11-C6`, `A11-C7`, `A11-C8`,
-`A11-C9`, `A11-C10`, `A11-C11`, `A11-C12`, `A11-C13`, `A11-C14`, `A11-C15`,
-`A11-C16`, `A11-C17`, `A11-P1`, `A11-P2`, `A11-P4`, `A12-C1`, `A12-C2`,
-`A12-C3`,
-`A12-C4`, `A12-C5`, `A12-C6`, `A12-C7`, `A13-C1`, `A13-C2`, `A13-C3`, `A13-C4`, `A13-C5`, `A14-C1`, `A15-C3`,
-`A-γ-C2`, `A-γ-C5`, `A-γ-C6`, `A-γ-C4`, `A-ε-C5`, `A-ε-C6`, `A-ε-C7`, `A-ε-C8`, `A-ε-C9`,
-`A-ε-C10`, `A-ε-C11`, `A-ε-C12`, `A-ε-C13`, `A-ε-C14`, `A-ε-C15`, `A-ε-C16`,
-`A-ζ-C1`, `A-δ-C1`, `A-δ-C2`, `A-δ-C3`, `B3-C4`, `B3-C5`, `B5-C1`, `B-θ-C1`,
-`B-θ-C2`, `B6-C4`, `B7b-C1`, `B7b-C2`, `B7b-C3`, `B7b-C4`, `B7b-C5`, `B10-C1`,
-`B10-C3`, `B10-C4`, `B10-C5`, `B10-C6`, `B-η-C1`, `B-η-C2`, `B-η-C3`,
-`B-η-C4`, `B-η-C5`, `B-η-C6`, `B-α-C8`, `B-α-C9`, `B-α-C10`, `B-α-C11`,
-`B-α-C12`, `B-α-C13`, `B-α-C14`, `B-α-C15`, `B-α-C16`, `B-α-C17`, `B-α-C18`,
-`B-α-C19`, `B-α-C20`, `B-α-C21`, `B-α-C22`, `B-α-C4`, `C4b-C1`, `C5-C1`, `C5-C2`,
-`C5-C3`, `C5-C4`, `C8-C2`, `C9-C1`, `C11-C5`, `C11-C6`, `C11-C8`, `C11-C13`,
-`C11-C15`, `C11-C18`,
-`C11-C16`, `C11-C17`, `C12-C3`, `C12-C4`, `C12-C5`, `C12-C6`, `C12-C7`, `C13-C1`,
-`C13-C4`, `C13-C5`, `C13-C6`, `C13-C7`, `C13-C2`, `C15-C1`, `C15-C2`,
-`C15-C3`, `C15-C4`, `C15-C5`, `B4-C3`, `B4-C5`, `B4-C7`, `B4-C8`, `B4-C9`, `B5-C3`,
-`B5-C6`, `C6-C1`, `C6-C9`, `C6-C7b`, `C6-C7`, `C6-C8`, `C6-A1`, `C16-C1`, `C16-C2`,
-`C16-C3`, `C16-C4`, `C16-C5`, `C16-A1`, `C-δ-C2`, `C-δ-C3`, `C-δ-C4`,
-`C-δ-C5`, `C-δ-C6`, `C-δ-C7`, `C-δ-C8`, `C-δ-C9`, `C-δ-C10`, `C-δ-C11`, `C-δ-C12`, `C-δ-C13`, `A16-C1`, `A16-C2`, `A16-C3`, `A16-C4`, `A16-C5`, `A16-C6`, `A16-C7`
+`A1-C1`, `A4b-C1`, `A4b-S1`, `A5-C1`, `A5-C5`, `A5-C6`, `A5-C17`, `A5-C18`, `A5-C19`, `A5-C8`,
+`A5-C15`, `A5-C20`, `A5-C21`, `A5-C22`, `A5-C25`, `A5-C26`, `A5-C23`, `A5-C24`, `A5-C21`, `A6-C1`,
+`A6-C5`, `A6-C6`, `A6-C7`, `A11-C1`, `A11-C5`, `A11-C3`, `A11-C6`, `A11-C7`, `A11-C8`, `A11-C9`,
+`A11-C10`, `A11-C11`, `A11-C12`, `A11-C13`, `A11-C14`, `A11-C15`, `A11-C16`, `A11-C17`, `A11-P1`,
+`A11-P2`, `A11-P4`, `A12-C1`, `A12-C2`, `A12-C3`, `A12-C4`, `A12-C5`, `A12-C6`, `A12-C7`, `A13-C1`,
+`A13-C2`, `A13-C3`, `A13-C4`, `A13-C5`, `A14-C1`, `A15-C3`, `A-γ-C2`, `A-γ-C5`, `A-γ-C6`, `A-γ-C4`,
+`A-ε-C5`, `A-ε-C6`, `A-ε-C7`, `A-ε-C8`, `A-ε-C9`, `A-ε-C10`, `A-ε-C11`, `A-ε-C12`, `A-ε-C13`,
+`A-ε-C14`, `A-ε-C15`, `A-ε-C16`, `A-ζ-C1`, `A-δ-C1`, `A-δ-C2`, `A-δ-C3`, `B3-C4`, `B3-C5`, `B5-C1`,
+`B-θ-C1`, `B-θ-C2`, `B6-C4`, `B7b-C1`, `B7b-C2`, `B7b-C3`, `B7b-C4`, `B7b-C5`, `B10-C1`, `B10-C3`,
+`B10-C4`, `B10-C5`, `B10-C6`, `B-η-C1`, `B-η-C2`, `B-η-C3`, `B-η-C4`, `B-η-C5`, `B-η-C6`, `B-α-C8`,
+`B-α-C9`, `B-α-C10`, `B-α-C11`, `B-α-C12`, `B-α-C13`, `B-α-C14`, `B-α-C15`, `B-α-C16`, `B-α-C17`,
+`B-α-C18`, `B-α-C19`, `B-α-C20`, `B-α-C21`, `B-α-C22`, `B-α-C4`, `C4b-C1`, `C5-C1`, `C5-C2`,
+`C5-C3`, `C5-C4`, `C8-C2`, `C9-C1`, `C11-C5`, `C11-C6`, `C11-C8`, `C11-C13`, `C11-C15`, `C11-C18`,
+`C11-C16`, `C11-C17`, `C12-C3`, `C12-C4`, `C12-C5`, `C12-C6`, `C12-C7`, `C13-C1`, `C13-C4`,
+`C13-C5`, `C13-C6`, `C13-C7`, `C13-C2`, `C15-C1`, `C15-C2`, `C15-C3`, `C15-C4`, `C15-C5`, `B4-C3`,
+`B4-C5`, `B4-C7`, `B4-C8`, `B4-C9`, `B5-C3`, `B5-C6`, `C6-C1`, `C6-C9`, `C6-C7b`, `C6-C7`, `C6-C8`,
+`C6-A1`, `C16-C1`, `C16-C2`, `C16-C3`, `C16-C4`, `C16-C5`, `C16-A1`, `C-δ-C2`, `C-δ-C3`, `C-δ-C4`,
+`C-δ-C5`, `C-δ-C6`, `C-δ-C7`, `C-δ-C8`, `C-δ-C9`, `C-δ-C10`, `C-δ-C11`, `C-δ-C12`, `C-δ-C13`,
+`A16-C1`, `A16-C2`, `A16-C3`, `A16-C4`, `A16-C5`, `A16-C6`, `A16-C7`
 
 #### Rows that must be aimed at by a mutation
 
-**41 rows require an aimed mutation**, and the number is here so that the check
-reading this section can tell "found them all" from "found the first few". Its
-region used to end at the first line starting with `#`, which an ordinary fenced
-block containing a shell comment truncates: 4 of these 41 were being read, and
-every assertion below stayed green. Silent partial truncation reads exactly like
-success, so the count is stated and compared.
+**41 rows require an aimed mutation**, and the number is here so that the check reading this section
+can tell "found them all" from "found the first few". Its region used to end at the first line
+starting with `#`, which an ordinary fenced block containing a shell comment truncates: 4 of these
+41 were being read, and every assertion below stayed green. Silent partial truncation reads exactly
+like success, so the count is stated and compared.
 
-- `A11-P1` — the first accumulator postcondition. Carried by `P1` and `P25` for
-  several rounds while every mutation reaching that pair reached it for some
-  other row's reason; strengthening the row moved no kill set.
+- `A11-P1` — the first accumulator postcondition. Carried by `P1` and `P25` for several rounds while
+  every mutation reaching that pair reached it for some other row's reason; strengthening the row
+  moved no kill set.
 - `A11-P2` — the second, and the same history.
-- `A11-C10` — the revocation half is a property of the invocation's **end**,
-  which no signature can state. `SM8` witnessed the guard for as long as the
-  line existed and no mutation had ever taken the line away: witnessed and
-  falsified are different states.
-- `A11-C17` — a property of what **crosses** the seam, whose type is a general
-  `AsyncIterable`, so an implementation that mints a producer per acquisition
-  conforms to it exactly.
-- `C11-C6` — a live `refresh()` that does not wait on the forward leg. Carried
-  for several rounds by two witnesses read together, and nothing had ever broken
-  it _on this row's account_: each of the pair died for other rows' reasons, and
-  the composition between them was an argument rather than a measurement. A
-  review then built the implementation that passes both and is wrong — an
-  adapter batching its cache writes behind a feed that never goes quiet — which
-  is the same shape as the two rows above it and was observed here.
-- `A-ε-C7`, `A-ε-C8` — the per-leg gate. A single shared gate satisfies every
-  signature involved, so nothing but a mutation can say the legs are separate.
-- `A-ε-C9` — the cut discards rather than delivering late. The pre-repair
-  behaviour type-checks.
-- `A-ε-C11` — a synchronous throw normalised onto the rejection path. The
-  parameter's type admits the throw, which is why the type cannot hold this up.
-- `A-ε-C12` — the gate stays shut after its boundary. An implementation that
-  re-opens it satisfies every type here.
-- `A-ε-C14` — the two request-owned causes held at once. The type holds up
-  nothing of it: an implementation that publishes one of the pair and drops the
-  other returns the same `IncompleteCause[]`, and the row's whole claim is which
-  members are in that array. Two entries declare it, one per `add`, and neither
-  reaches every arm: measured, the timer's entry fails three of the witness's
-  four and `no-eose` survives it, because there an undetermined target supplies
-  the same word. That gap is the edge the declaration exists to record, and the
-  thing the ratchet keeps from being deleted in passing.
-- `A5-C18` — a determined relay stays determined. **The type holds up none of
-  it**: every determined state is a well-typed phase and a table that takes the
-  last write returns a well-typed `BacklogEnd`, so which write the table kept is
-  not a question any signature here asks. It is on the list on both criteria and
-  the second one twice. `AE21`'s `eose-then-a-dead-socket` arm witnessed the guard
-  for as long as the line existed and no mutation had ever taken the line away,
-  which is `A11-C10`'s history exactly. **Then the falsifier that was written for
-  it turned out to measure the line rather than the rule**: it deletes the guard
-  whole, and a port that keeps the state it expected while overwriting the other
-  passed every behaviour and type test in the tree — found by a reviewer, not
-  here. Two entries carry the row now, one per failure, and the sentence that
-  used to stand here — that nothing but a mutation could say which write the
-  table kept — was already false of its own round, since the pair of arms that
-  arrived with the row says it for the `complete` half.
-- `B-α-C10`, `B-α-C11` and `B-α-C12` — the relay's spelling. **Neither the type nor the
-  dependency holds either up**: both sides of every comparison involved are
-  `string`, the index is a `Record<string, …>`, and the transport is the source
-  of the disagreement rather than a guard against it. **The observed failure is
-  that both were false in the tree** — a relay written with an escape in its
-  query, or on the scope-less path with nothing but a trailing slash, had its
-  `EOSE` land under a key the request did not hold, and the request reported
-  having timed out on a relay that had answered. It stood for the length of the
-  branch behind an argument that a divergence would be loud; it is not loud, it
-  is indistinguishable at the outcome from a relay that said nothing, which is
-  what the controls in `B-α-C11` exist to separate. `B-α-C12` is on the list for
-  the same reasons and one of its own: its first witness was written with a
-  single trailing slash, which the transport settles in one pass, so it passed
-  against the defect it exists to catch and was found by running the mutation
-  before recording it rather than after.
-- `B-α-C15` and `B-α-C17` — where the name comes from, and what is allowed to
-  ask for one. **Neither the type nor the dependency holds either up**: every
-  string is a `string`, and the transport is the thing being asked rather than a
-  guard. **Both observed failures are this arc's own.** `B-α-C15`'s is that two
-  successive repairs used this library's own copy as the oracle — first as the
-  answer, then as the question — and the check built for the second computed its
-  expected value the same way, so it could not fail for it. `B-α-C17`'s is
-  sharper: with no entrance check a transport asked to name something that is not
-  a URL answers with the empty string, so several malformed lists became **one**
-  scope with one identity, which is this decision's own falsifier reached with
-  the transport behaving correctly. **`B-α-C16` is on the list too and its case
-  is the weakest of the three** — a well-behaved transport cannot make the set
-  answer differ from the sum of its parts, so its arms are injected seams, and
-  what it earns its place with is that two ledger entries lost the witness that
-  separated them when the refusal moved.
-- `B-α-C13` and `B-α-C14` — the two refusals. **Neither the type nor the
-  dependency holds either up**: every string involved is a `string`, and the
-  transport is what makes the refusals necessary rather than what performs them.
-  **`B-α-C14`'s observed failure is that it stood as prose for a round** — the
-  obligation was written into a decision and a port could have implemented every
-  other row while skipping the comparison, which is what a reviewer said and what
-  made it a blocker. `B-α-C13`'s is that the round before it took the second
-  application of the normalization as a _result_ instead of a check, and the
-  check that should have caught the difference compared against a value computed
-  the same way.
-- `C6-C7` — releasing what the boundary built to ask a question. **The type holds
-  none of it** and the leak is invisible to every outcome: measured, a client
-  given relays and not released holds a timer for the life of the page, while one
-  merely constructed holds nothing, so the cost is per published generation and
-  nothing observable changes. The row exists because the first version of the
-  refusal path leaked exactly that.
-- `A5-C19` — an undetermined target says `timeout` on its own. **The type holds
-  up none of it**: an implementation that reads only its own timer returns a
-  well-typed answer, and the one it returns for a backlog nobody answered is
-  `complete`. **The observed failure is that the line had no falsifier at all,
-  and no entry to notice** — every other trace in the suite reaches the outcome
-  through the timer or through both sources at once, so the line could be deleted
-  with the whole suite staying green. `A-ε-C14` is the row that had claimed
-  otherwise, and this row is where that claim went once it was measured: the two
-  arms there falsify the timer's source and not this one, because every trace
-  they build ends its wait on the timer.
-- `A5-C20` — the forward table's half of the same absorption. **The type holds up
-  none of it** and neither does the dependency: a table that takes the last write
-  is well-typed, and the transport is what supplies the reconnection this row
-  needs rather than what prevents it. **The observed failure is that the guard
-  had no row, no witness and no entry at all** while the record had asserted the
-  property in prose for the whole arc — the entry written for it came back
-  `killed: []` over every socket-opening file in the directory, against a
-  positive control two lines away in the same function that killed four. What
-  nothing drove was the one trace that separates the two implementations, and
-  with retries off every other trace writes `terminal` over `terminal`, where
+- `A11-C10` — the revocation half is a property of the invocation's **end**, which no signature can
+  state. `SM8` witnessed the guard for as long as the line existed and no mutation had ever taken
+  the line away: witnessed and falsified are different states.
+- `A11-C17` — a property of what **crosses** the seam, whose type is a general `AsyncIterable`, so
+  an implementation that mints a producer per acquisition conforms to it exactly.
+- `C11-C6` — a live `refresh()` that does not wait on the forward leg. Carried for several rounds by
+  two witnesses read together, and nothing had ever broken it _on this row's account_: each of the
+  pair died for other rows' reasons, and the composition between them was an argument rather than a
+  measurement. A review then built the implementation that passes both and is wrong — an adapter
+  batching its cache writes behind a feed that never goes quiet — which is the same shape as the two
+  rows above it and was observed here.
+- `A-ε-C7`, `A-ε-C8` — the per-leg gate. A single shared gate satisfies every signature involved, so
+  nothing but a mutation can say the legs are separate.
+- `A-ε-C9` — the cut discards rather than delivering late. The pre-repair behaviour type-checks.
+- `A-ε-C11` — a synchronous throw normalised onto the rejection path. The parameter's type admits
+  the throw, which is why the type cannot hold this up.
+- `A-ε-C12` — the gate stays shut after its boundary. An implementation that re-opens it satisfies
+  every type here.
+- `A-ε-C14` — the two request-owned causes held at once. The type holds up nothing of it: an
+  implementation that publishes one of the pair and drops the other returns the same
+  `IncompleteCause[]`, and the row's whole claim is which members are in that array. Two entries
+  declare it, one per `add`, and neither reaches every arm: measured, the timer's entry fails three
+  of the witness's four and `no-eose` survives it, because there an undetermined target supplies the
+  same word. That gap is the edge the declaration exists to record, and the thing the ratchet keeps
+  from being deleted in passing.
+- `A5-C18` — a determined relay stays determined. **The type holds up none of it**: every determined
+  state is a well-typed phase and a table that takes the last write returns a well-typed
+  `BacklogEnd`, so which write the table kept is not a question any signature here asks. It is on
+  the list on both criteria and the second one twice. `AE21`'s `eose-then-a-dead-socket` arm
+  witnessed the guard for as long as the line existed and no mutation had ever taken the line away,
+  which is `A11-C10`'s history exactly. **Then the falsifier that was written for it turned out to
+  measure the line rather than the rule**: it deletes the guard whole, and a port that keeps the
+  state it expected while overwriting the other passed every behaviour and type test in the tree —
+  found by a reviewer, not here. Two entries carry the row now, one per failure, and the sentence
+  that used to stand here — that nothing but a mutation could say which write the table kept — was
+  already false of its own round, since the pair of arms that arrived with the row says it for the
+  `complete` half.
+- `B-α-C10`, `B-α-C11` and `B-α-C12` — the relay's spelling. **Neither the type nor the dependency
+  holds either up**: both sides of every comparison involved are `string`, the index is a
+  `Record<string, …>`, and the transport is the source of the disagreement rather than a guard
+  against it. **The observed failure is that both were false in the tree** — a relay written with an
+  escape in its query, or on the scope-less path with nothing but a trailing slash, had its `EOSE`
+  land under a key the request did not hold, and the request reported having timed out on a relay
+  that had answered. It stood for the length of the branch behind an argument that a divergence
+  would be loud; it is not loud, it is indistinguishable at the outcome from a relay that said
+  nothing, which is what the controls in `B-α-C11` exist to separate. `B-α-C12` is on the list for
+  the same reasons and one of its own: its first witness was written with a single trailing slash,
+  which the transport settles in one pass, so it passed against the defect it exists to catch and
+  was found by running the mutation before recording it rather than after.
+- `B-α-C15` and `B-α-C17` — where the name comes from, and what is allowed to ask for one. **Neither
+  the type nor the dependency holds either up**: every string is a `string`, and the transport is
+  the thing being asked rather than a guard. **Both observed failures are this arc's own.**
+  `B-α-C15`'s is that two successive repairs used this library's own copy as the oracle — first as
+  the answer, then as the question — and the check built for the second computed its expected value
+  the same way, so it could not fail for it. `B-α-C17`'s is sharper: with no entrance check a
+  transport asked to name something that is not a URL answers with the empty string, so several
+  malformed lists became **one** scope with one identity, which is this decision's own falsifier
+  reached with the transport behaving correctly. **`B-α-C16` is on the list too and its case is the
+  weakest of the three** — a well-behaved transport cannot make the set answer differ from the sum
+  of its parts, so its arms are injected seams, and what it earns its place with is that two ledger
+  entries lost the witness that separated them when the refusal moved.
+- `B-α-C13` and `B-α-C14` — the two refusals. **Neither the type nor the dependency holds either
+  up**: every string involved is a `string`, and the transport is what makes the refusals necessary
+  rather than what performs them. **`B-α-C14`'s observed failure is that it stood as prose for a
+  round** — the obligation was written into a decision and a port could have implemented every other
+  row while skipping the comparison, which is what a reviewer said and what made it a blocker.
+  `B-α-C13`'s is that the round before it took the second application of the normalization as a
+  _result_ instead of a check, and the check that should have caught the difference compared against
+  a value computed the same way.
+- `C6-C7` — releasing what the boundary built to ask a question. **The type holds none of it** and
+  the leak is invisible to every outcome: measured, a client given relays and not released holds a
+  timer for the life of the page, while one merely constructed holds nothing, so the cost is per
+  published generation and nothing observable changes. The row exists because the first version of
+  the refusal path leaked exactly that.
+- `A5-C19` — an undetermined target says `timeout` on its own. **The type holds up none of it**: an
+  implementation that reads only its own timer returns a well-typed answer, and the one it returns
+  for a backlog nobody answered is `complete`. **The observed failure is that the line had no
+  falsifier at all, and no entry to notice** — every other trace in the suite reaches the outcome
+  through the timer or through both sources at once, so the line could be deleted with the whole
+  suite staying green. `A-ε-C14` is the row that had claimed otherwise, and this row is where that
+  claim went once it was measured: the two arms there falsify the timer's source and not this one,
+  because every trace they build ends its wait on the timer.
+- `A5-C20` — the forward table's half of the same absorption. **The type holds up none of it** and
+  neither does the dependency: a table that takes the last write is well-typed, and the transport is
+  what supplies the reconnection this row needs rather than what prevents it. **The observed failure
+  is that the guard had no row, no witness and no entry at all** while the record had asserted the
+  property in prose for the whole arc — the entry written for it came back `killed: []` over every
+  socket-opening file in the directory, against a positive control two lines away in the same
+  function that killed four. What nothing drove was the one trace that separates the two
+  implementations, and with retries off every other trace writes `terminal` over `terminal`, where
   keeping the first answer and taking the last one agree.
-- `A-ζ-C1` — the drain cutoff's far end: the bound is computed from a sample the
-  floor caps rather than from whatever the clock last reported, and every version
-  of that one `Math.min` type-checks. Here on the ratchet rather than on its own
-  incident — it arrives already declared and already measured, and what the list
-  adds is that it cannot quietly stop being either. It sat under `A-γ` until the
-  drain budget was given a decision of its own; the obligation did not move, only
-  the decision it hangs from. **The old id is written on a continuation line and
-  not on the entry's first line on purpose** — the extraction reads ids off the
-  line that opens an entry, so a superseded id put there would be demanded of the
-  catalogue as a row.
-- `A-ε-C5`, `A-ε-C10`, `A-ε-C13`, `B-η-C5`, `B-η-C6` — same class, and on the
-  list for the ratchet reason below rather than because each has its own
-  incident.
-- `C-δ-C5`, `C-δ-C6` and `C-δ-C7` — the notice record's lifetime, in its three
-  directions: what an accepted list may not discard, what a refused one may not,
-  and what one provider may not show of another's. **Neither the type nor the
-  dependency holds any of the three up**: `lastNotice` is `string | undefined`
-  whatever is in it, so a record emptied on the accept path, emptied on the
-  refusal path, or shared between providers hands back the same well-typed map,
-  and the transport supplies the packets rather than deciding how long one is
-  kept. **The observed failure is that each was witnessed and none was
-  falsified**, and it happened twice — the ledger entries carry the measurement
-  that emptying the record inside `accept()` and inside `refuse()` each left the
-  whole suite green, and the cross-provider repair was measured by hand into a
-  comment with no entry behind it, so it was true on the day and unrepeatable
-  afterwards. **The mechanism is the same one in all three and it is what these
-  rows are worth stating for**: the events these rows are about — a refusal, an
-  update that moves no accepted name, a second provider that has done nothing —
-  publish no new map, so an arm that reads the map straight after one reads a
-  snapshot the event could not have written to, and the row is satisfied
-  vacuously. Measured again here on the row text rather than on the arms: arms
-  written from `C-δ-C6` and from `C-δ-C5`'s re-spelling clause using nothing but
-  the words in those cells passed under both pruning edits, which is why both
-  cells now state the recompute as part of the claim.
-- `C-δ-C9` and `A12-C5` — what a result held across a teardown answers, in the
-  two directions this library decided differently. **No type holds either**: an
-  emptied map and a stale one are both `RelayDiagnostics`, and a handle that has
-  stopped receiving is the same shape as one that never had anything. **The
-  observed failure is on the record for both** — `0004` said teardown "discards
-  everything" while only the subscription ended, and then said a handle
-  "freezes" when its projection follows a clock that is still running.
-- `A5-S4`, `B5-C2`, `B6-C4` and `C-δ-C4` — four more of the same, found by
-  asking of every repaired row's neighbours what the repaired ones had been
-  guilty of. Each Given named the wrong thing rather than too little: "one
-  client" where the mechanism needs one relay, "in any order" where nothing
-  ties, "the same, read as a whole" resolvable only by position, and "one of
-  them destroyed" where only the first hook discriminates. **The closing
-  sentence here said each now has an entry whose kill lands on the row's claim,
-  and for two of the four that was written rather than measured.** Arms built
-  from the repaired cells and run under the declaring entries say otherwise.
-  `B6-C4`'s passes: the Given named the arrangement and still left out the
-  `expiration`, the single slot and the competitor's rank, and dropping any one
-  of the three from the fixture makes it pass again. `C-δ-C4`'s "the ones that
-  remain keep being updated" passes too, and so does the same arm destroying the
-  second hook rather than the first — the entry's kill is on the panel mounted
-  afterwards, so the clause the repair added discriminates nothing on the
-  ledger. Both cells now carry what was measured; the first-hook clause stays as
-  an obligation prose carries and the ledger does not. **A round later the same
-  question was asked of the two repairs and both were still short**, which is
-  why this bullet is not closed. `C-δ-C4`'s remaining conjunct — "any mounted
-  later keeps being updated" — passes under the declaring entry as well when the
-  arm mounts the later reader and _then_ sends it something: a per-reader
-  record is updated by everything after it exists, and what the witness
-  discriminates is backfill at mount. The Then now says handed rather than
-  updated. `B6-C4`'s Given is repaired and its **Then** is not falsifiable in
-  the other direction: the witness asserts that six orders agree, which a bound
-  keeping nothing satisfies, and that was measured too. Both are the same shape
-  as the bullet below — a cell repaired against one entry and never run against
-  the implementation it does not exclude.
-- `A-δ-C1`, `B5-C3`, `B10-C1` and `C13-C2` — four rows that had a witness and no
-  entry naming them, so `CAT15`'s joint ran past them. **The observed failure is
-  the same in all four and it is a failure of the cells rather than of the
-  code**: an arm written from the row text alone passes under the edit the row
-  exists to forbid, because the Given omits a step the real witness performs —
-  a fired deadline, a second packet for the same event, a forward leg that
-  ended, an eviction. Each now carries the step and an entry that kills its
-  witness on the row's claim rather than on a premise — **which holds for
-  `B10-C1` and is half of the story for `C13-C2`**, both re-measured rather than
-  re-read. `E12` dies on the forward-only case the Given grew — in `identity.test.ts`, on
-  the failure the row quotes. **The other two
-  halves were closed in the round after, and both had been argued rather than
-  run.** `B5-C3`'s declaring entry kills `E3` at the identical-object fold in
-  `identity.test.ts` — the assertions before the another-relay line the Given is
-  written around — so a kill list of one id could not say whether that Given
-  was defended or merely skipped. `an-equal-event-from-another-relay-replaces-the-entry`
-  fails on that line alone. `EX2c` had two entries landing on different halves
-  and a third clause — that the evicted event does not come back — recorded as
-  having no entry and admitting none, on the ground that the eviction is
-  destructive so anything leaving the older event recoverable also leaves it
-  stored and breaks the Given. **That ground read "was evicted" as a claim about
-  storage, and the witness reads the published list**: bound the view instead of
-  the store and the eviction step stays green while the conjunct dies with
-  `expected [ 'ex2c-old' ] to deeply equal []`. The design was already written
-  out in the same cell as something the clause "separates"; what was missing was
-  running it against this witness rather than against a fixture of its own.
-  `retention-bounds-the-view-instead-of-the-store` is the entry. **They are here rather
-  than only repaired** because a declaration is what stops the next round
-  deleting one in passing, and the vacuity was found twice before it was found
-  as a class.
+- `A-ζ-C1` — the drain cutoff's far end: the bound is computed from a sample the floor caps rather
+  than from whatever the clock last reported, and every version of that one `Math.min` type-checks.
+  Here on the ratchet rather than on its own incident — it arrives already declared and already
+  measured, and what the list adds is that it cannot quietly stop being either. It sat under `A-γ`
+  until the drain budget was given a decision of its own; the obligation did not move, only the
+  decision it hangs from. **The old id is written on a continuation line and not on the entry's
+  first line on purpose** — the extraction reads ids off the line that opens an entry, so a
+  superseded id put there would be demanded of the catalogue as a row.
+- `A-ε-C5`, `A-ε-C10`, `A-ε-C13`, `B-η-C5`, `B-η-C6` — same class, and on the list for the ratchet
+  reason below rather than because each has its own incident.
+- `C-δ-C5`, `C-δ-C6` and `C-δ-C7` — the notice record's lifetime, in its three directions: what an
+  accepted list may not discard, what a refused one may not, and what one provider may not show of
+  another's. **Neither the type nor the dependency holds any of the three up**: `lastNotice` is
+  `string | undefined` whatever is in it, so a record emptied on the accept path, emptied on the
+  refusal path, or shared between providers hands back the same well-typed map, and the transport
+  supplies the packets rather than deciding how long one is kept. **The observed failure is that
+  each was witnessed and none was falsified**, and it happened twice — the ledger entries carry the
+  measurement that emptying the record inside `accept()` and inside `refuse()` each left the whole
+  suite green, and the cross-provider repair was measured by hand into a comment with no entry
+  behind it, so it was true on the day and unrepeatable afterwards. **The mechanism is the same one
+  in all three and it is what these rows are worth stating for**: the events these rows are about —
+  a refusal, an update that moves no accepted name, a second provider that has done nothing —
+  publish no new map, so an arm that reads the map straight after one reads a snapshot the event
+  could not have written to, and the row is satisfied vacuously. Measured again here on the row text
+  rather than on the arms: arms written from `C-δ-C6` and from `C-δ-C5`'s re-spelling clause using
+  nothing but the words in those cells passed under both pruning edits, which is why both cells now
+  state the recompute as part of the claim.
+- `C-δ-C9` and `A12-C5` — what a result held across a teardown answers, in the two directions this
+  library decided differently. **No type holds either**: an emptied map and a stale one are both
+  `RelayDiagnostics`, and a handle that has stopped receiving is the same shape as one that never
+  had anything. **The observed failure is on the record for both** — `0004` said teardown "discards
+  everything" while only the subscription ended, and then said a handle "freezes" when its
+  projection follows a clock that is still running.
+- `A5-S4`, `B5-C2`, `B6-C4` and `C-δ-C4` — four more of the same, found by asking of every repaired
+  row's neighbours what the repaired ones had been guilty of. Each Given named the wrong thing
+  rather than too little: "one client" where the mechanism needs one relay, "in any order" where
+  nothing ties, "the same, read as a whole" resolvable only by position, and "one of them destroyed"
+  where only the first hook discriminates. **The closing sentence here said each now has an entry
+  whose kill lands on the row's claim, and for two of the four that was written rather than
+  measured.** Arms built from the repaired cells and run under the declaring entries say otherwise.
+  `B6-C4`'s passes: the Given named the arrangement and still left out the `expiration`, the single
+  slot and the competitor's rank, and dropping any one of the three from the fixture makes it pass
+  again. `C-δ-C4`'s "the ones that remain keep being updated" passes too, and so does the same arm
+  destroying the second hook rather than the first — the entry's kill is on the panel mounted
+  afterwards, so the clause the repair added discriminates nothing on the ledger. Both cells now
+  carry what was measured; the first-hook clause stays as an obligation prose carries and the ledger
+  does not. **A round later the same question was asked of the two repairs and both were still
+  short**, which is why this bullet is not closed. `C-δ-C4`'s remaining conjunct — "any mounted
+  later keeps being updated" — passes under the declaring entry as well when the arm mounts the
+  later reader and _then_ sends it something: a per-reader record is updated by everything after it
+  exists, and what the witness discriminates is backfill at mount. The Then now says handed rather
+  than updated. `B6-C4`'s Given is repaired and its **Then** is not falsifiable in the other
+  direction: the witness asserts that six orders agree, which a bound keeping nothing satisfies, and
+  that was measured too. Both are the same shape as the bullet below — a cell repaired against one
+  entry and never run against the implementation it does not exclude.
+- `A-δ-C1`, `B5-C3`, `B10-C1` and `C13-C2` — four rows that had a witness and no entry naming them,
+  so `CAT15`'s joint ran past them. **The observed failure is the same in all four and it is a
+  failure of the cells rather than of the code**: an arm written from the row text alone passes
+  under the edit the row exists to forbid, because the Given omits a step the real witness performs
+  — a fired deadline, a second packet for the same event, a forward leg that ended, an eviction.
+  Each now carries the step and an entry that kills its witness on the row's claim rather than on a
+  premise — **which holds for `B10-C1` and is half of the story for `C13-C2`**, both re-measured
+  rather than re-read. `E12` dies on the forward-only case the Given grew — in `identity.test.ts`,
+  on the failure the row quotes. **The other two halves were closed in the round after, and both had
+  been argued rather than run.** `B5-C3`'s declaring entry kills `E3` at the identical-object fold
+  in `identity.test.ts` — the assertions before the another-relay line the Given is written around —
+  so a kill list of one id could not say whether that Given was defended or merely skipped.
+  `an-equal-event-from-another-relay-replaces-the-entry` fails on that line alone. `EX2c` had two
+  entries landing on different halves and a third clause — that the evicted event does not come back
+  — recorded as having no entry and admitting none, on the ground that the eviction is destructive
+  so anything leaving the older event recoverable also leaves it stored and breaks the Given. **That
+  ground read "was evicted" as a claim about storage, and the witness reads the published list**:
+  bound the view instead of the store and the eviction step stays green while the conjunct dies with
+  `expected [ 'ex2c-old' ] to deeply equal []`. The design was already written out in the same cell
+  as something the clause "separates"; what was missing was running it against this witness rather
+  than against a fixture of its own. `retention-bounds-the-view-instead-of-the-store` is the entry.
+  **They are here rather than only repaired** because a declaration is what stops the next round
+  deleting one in passing, and the vacuity was found twice before it was found as a class.
 
 #### What puts a row on that list, and what the list cannot do
 
-This heading is where `CAT15` stops reading, and it exists for that rather than
-for presentation. The check reads every list entry between the list's heading and
-this one as an obligation, so the discussion has to sit below this line — under
-the same heading, a bulleted aside written here would become a contract row. A
-delimiter a check depends on is worth being able to see.
+This heading is where `CAT15` stops reading, and it exists for that rather than for presentation.
+The check reads every list entry between the list's heading and this one as an obligation, so the
+discussion has to sit below this line — under the same heading, a bulleted aside written here would
+become a contract row. A delimiter a check depends on is worth being able to see.
 
-**Two criteria, and the second is the newer.** `A11-P1`, `A11-P2`, `A11-C10`,
-`A11-C17` and `C11-C6` are here on the pair of properties `CAT15` was built
-around: neither the type nor a dependency holds the row up, and the failure this
-check exists for was _observed_ on that row in a recorded round. They are named
-rather than counted off the top of the list, because a count and a position both
-move when a row is inserted and neither says which rows it meant. The rest are
-here on a ratchet: **a declared
-edge, once measured, does not silently disappear.** Every row above is one some
-ledger entry declares today, and without this list a declaration can be deleted
-and nothing notices — which is exactly what was measured. Removing every
-declaration site covering `A-ε-C7`, `A-ε-C8`, `A-ε-C9`, `A-ε-C11` and `A-ε-C12`
-left the catalogue fully green. **The count that stood here was wrong and is
-gone rather than corrected**: it said four sites for five rows, and the rule that
-produces the figure — `contracts` arrays in the ledger naming any of the five —
-gives six. A paragraph arguing that rows must be named rather than counted is a
-poor place to keep a number, and the measurement does not need one. The ratchet costs nothing today, since every
-row named is already declared, and what it buys is that dropping a declaration
-now has to be argued here rather than done in passing.
+**Two criteria, and the second is the newer.** `A11-P1`, `A11-P2`, `A11-C10`, `A11-C17` and `C11-C6`
+are here on the pair of properties `CAT15` was built around: neither the type nor a dependency holds
+the row up, and the failure this check exists for was _observed_ on that row in a recorded round.
+They are named rather than counted off the top of the list, because a count and a position both move
+when a row is inserted and neither says which rows it meant. The rest are here on a ratchet: **a
+declared edge, once measured, does not silently disappear.** Every row above is one some ledger
+entry declares today, and without this list a declaration can be deleted and nothing notices — which
+is exactly what was measured. Removing every declaration site covering `A-ε-C7`, `A-ε-C8`, `A-ε-C9`,
+`A-ε-C11` and `A-ε-C12` left the catalogue fully green. **The count that stood here was wrong and is
+gone rather than corrected**: it said four sites for five rows, and the rule that produces the
+figure — `contracts` arrays in the ledger naming any of the five — gives six. A paragraph arguing
+that rows must be named rather than counted is a poor place to keep a number, and the measurement
+does not need one. The ratchet costs nothing today, since every row named is already declared, and
+what it buys is that dropping a declaration now has to be argued here rather than done in passing.
 
-**What this still does not do, and it is the honest half.** Nothing grows this
-list automatically. `CAT15` can check that a _declared_ edge is real and that a
-_listed_ row is declared; it cannot notice a row that should have been listed and
-was not, because "this mutation breaks that contract" is the judgement the
-declaration exists to record and no check can make it. Making it automatic was
-measured rather than assumed: requiring an aimed mutation for every `behavior`
-and `architecture` row fails every one of them that no ledger entry already
-declares — the great majority, each needing a hand-written and hand-measured
-entry of its own — and the two narrower automatic rules tried instead, "rows
-sharing a witness id with another row" and "rows with exactly one witness", leave
-the same share of their own smaller populations failing. That last is the result
-rather than a detail: narrowing which rows carry the obligation does not make the
-obligation affordable, which is what those two were tried for. So the affordable
-mechanism is a list somebody extends, and the improvement available was to move
-it where the rows are and to check it in both directions rather than to pretend
-it derives itself.
+**What this still does not do, and it is the honest half.** Nothing grows this list automatically.
+`CAT15` can check that a _declared_ edge is real and that a _listed_ row is declared; it cannot
+notice a row that should have been listed and was not, because "this mutation breaks that contract"
+is the judgement the declaration exists to record and no check can make it. Making it automatic was
+measured rather than assumed: requiring an aimed mutation for every `behavior` and `architecture`
+row fails every one of them that no ledger entry already declares — the great majority, each needing
+a hand-written and hand-measured entry of its own — and the two narrower automatic rules tried
+instead, "rows sharing a witness id with another row" and "rows with exactly one witness", leave the
+same share of their own smaller populations failing. That last is the result rather than a detail:
+narrowing which rows carry the obligation does not make the obligation affordable, which is what
+those two were tried for. So the affordable mechanism is a list somebody extends, and the
+improvement available was to move it where the rows are and to check it in both directions rather
+than to pretend it derives itself.
 
-**Three figures stood in that sentence and they are gone rather than corrected,
-which is a decision and not an omission.** Each was a count of this table taken
-against the ledger's declarations, and re-deriving them found all three wrong —
-every one of them off by the rows and the declarations added since. That is not
-carelessness that a correction fixes: a numerator and a denominator both move
-whenever a row is added below or an entry declares one, nothing joins the
-sentence to either input, and a corrected figure is right until the next row.
-Counts recorded elsewhere on this branch went stale the same way in this same
-round, which is what settled it. What the argument needs is the shape of the
-result, and the shape does not move: the rules were run, nearly every row fails
-each of them, and the three fail alike. Anyone who wants the figures can take
-them from the two inputs `CAT15` already reads — the `behavior` and
-`architecture` rows of this table, and the union of the ledger's `contracts`
-declarations — which is a derivation that cannot go stale because it is not
+**Three figures stood in that sentence and they are gone rather than corrected, which is a decision
+and not an omission.** Each was a count of this table taken against the ledger's declarations, and
+re-deriving them found all three wrong — every one of them off by the rows and the declarations
+added since. That is not carelessness that a correction fixes: a numerator and a denominator both
+move whenever a row is added below or an entry declares one, nothing joins the sentence to either
+input, and a corrected figure is right until the next row. Counts recorded elsewhere on this branch
+went stale the same way in this same round, which is what settled it. What the argument needs is the
+shape of the result, and the shape does not move: the rules were run, nearly every row fails each of
+them, and the three fail alike. Anyone who wants the figures can take them from the two inputs
+`CAT15` already reads — the `behavior` and `architecture` rows of this table, and the union of the
+ledger's `contracts` declarations — which is a derivation that cannot go stale because it is not
 stored.
 
-The seventh is the sixth one at a finer grain, and it is the one the joint above
-does _not_ close: **`CAT15` asks whether a declared mutation killed one of the
-row's witnesses. It never asks whether that witness died on the claim it is
-named for.** A row states several clauses and a witness carries several
-assertions — a Given it asserts rather than assumes, a precondition or two, and
-then the thing it exists to say — so "a witness of this row failed" and "this
-clause of the row was broken" are different facts, and the check reads the first
-while the reader takes the second. It is the fourth limit one level below the
-sixth: there, a `✓` does not name why a witness failed; here, a satisfied
-requirement does not name _which of a witness's assertions_ failed, which is
-where a clause and its evidence actually meet.
+The seventh is the sixth one at a finer grain, and it is the one the joint above does _not_ close:
+**`CAT15` asks whether a declared mutation killed one of the row's witnesses. It never asks whether
+that witness died on the claim it is named for.** A row states several clauses and a witness carries
+several assertions — a Given it asserts rather than assumes, a precondition or two, and then the
+thing it exists to say — so "a witness of this row failed" and "this clause of the row was broken"
+are different facts, and the check reads the first while the reader takes the second. It is the
+fourth limit one level below the sixth: there, a `✓` does not name why a witness failed; here, a
+satisfied requirement does not name _which of a witness's assertions_ failed, which is where a
+clause and its evidence actually meet.
 
-**It happened this round, on the clause that was added last.** `A11-P1` gained
-"the accumulator asks for its stream exactly once" and `AC18` joined the row as
-its witness. Four ledger entries already killed `AC18`, one per adapter in two
-pairs: an accumulator that stops pulling and leaves its iterator suspended, and
-one that does not return from a stream that ended. Measured one at a time, all
-four killed it at `expect(settlement.kind).toBe('resolved')` — `expected
-'pending' to be 'resolved'` — which is `AC18`'s precondition, a count of streams
-meaning nothing until the invocation has finished. `AC18`'s own assertion,
-`expect(streamCalls()).toBe(1)`, **passed under all four**. Two of them declare
-`A11-P1` and kill `AC14` on its own claim, so `CAT15` had its edge and stayed
-green throughout, while the clause the row had just gained held no falsifier at
-all. What closed it was two
-entries written for it, one per adapter, each opening a second stream and folding
-both; both kill `AC18` at `expect(streamCalls()).toBe(1)` with `expected 2 to be
-1`, the first assertion in that test, so nothing below it is what killed it.
+**It happened this round, on the clause that was added last.** `A11-P1` gained "the accumulator asks
+for its stream exactly once" and `AC18` joined the row as its witness. Four ledger entries already
+killed `AC18`, one per adapter in two pairs: an accumulator that stops pulling and leaves its
+iterator suspended, and one that does not return from a stream that ended. Measured one at a time,
+all four killed it at `expect(settlement.kind).toBe('resolved')` —
+`expected 'pending' to be 'resolved'` — which is `AC18`'s precondition, a count of streams meaning
+nothing until the invocation has finished. `AC18`'s own assertion, `expect(streamCalls()).toBe(1)`,
+**passed under all four**. Two of them declare `A11-P1` and kill `AC14` on its own claim, so `CAT15`
+had its edge and stayed green throughout, while the clause the row had just gained held no falsifier
+at all. What closed it was two entries written for it, one per adapter, each opening a second stream
+and folding both; both kill `AC18` at `expect(streamCalls()).toBe(1)` with `expected 2 to be 1`, the
+first assertion in that test, so nothing below it is what killed it.
 
-**It happened again as soon as the row gained its second grain, and that is what
-says this limit is structural rather than a slip.** `AC19` joined `A11-P1`
-counting acquisitions rather than calls, and the entries that already reached
-`AC18` reach `AC19` the same way: they die on its preconditions — the invocation
-had not finished — while its own assertion, `expect(driver.iteratorsTaken).toBe(1)`,
-passes under them. The same shape returned intact: a satisfied requirement, a
-green row, and a newly added clause with nothing aimed at it until aimed entries
-were written. Which entries those are is the ledger's to say and is not copied
-here, since a count restated in prose is the next thing to go stale.
+**It happened again as soon as the row gained its second grain, and that is what says this limit is
+structural rather than a slip.** `AC19` joined `A11-P1` counting acquisitions rather than calls, and
+the entries that already reached `AC18` reach `AC19` the same way: they die on its preconditions —
+the invocation had not finished — while its own assertion, `expect(driver.iteratorsTaken).toBe(1)`,
+passes under them. The same shape returned intact: a satisfied requirement, a green row, and a newly
+added clause with nothing aimed at it until aimed entries were written. Which entries those are is
+the ledger's to say and is not copied here, since a count restated in prose is the next thing to go
+stale.
 
-**Not mechanised, and the naive way of doing it costs more than it looks.** The
-obvious repair is to have an entry record the assertion each kill died on, and
-then check that assertion against the clause. Two things make that a worse trade
-than the kill sets it would extend. It is the fifth limit at assertion grain, and
-strictly worse there: a kill set changes only when a test starts or stops
-failing, while a recorded assertion goes stale whenever a witness is _edited_ —
-an assertion added above the recorded one, two reordered, one `toEqual` split in
-two — none of which changes what the mutation does or what the test claims.
-`P25` was strengthened in one round with no kill set moving; the same edit would
-have invalidated assertion records across every entry that reaches it. And what
-a runner reports is the _first_ assertion that fired, not every one that would
-have, so the recorded fact would be an ordering — the thing this document already
-refuses as attribution one level up, now load-bearing for a check. Making it
-converge would mean witnesses that evaluate all their assertions, which is a
-change to every test rather than to the ledger.
+**Not mechanised, and the naive way of doing it costs more than it looks.** The obvious repair is to
+have an entry record the assertion each kill died on, and then check that assertion against the
+clause. Two things make that a worse trade than the kill sets it would extend. It is the fifth limit
+at assertion grain, and strictly worse there: a kill set changes only when a test starts or stops
+failing, while a recorded assertion goes stale whenever a witness is _edited_ — an assertion added
+above the recorded one, two reordered, one `toEqual` split in two — none of which changes what the
+mutation does or what the test claims. `P25` was strengthened in one round with no kill set moving;
+the same edit would have invalidated assertion records across every entry that reaches it. And what
+a runner reports is the _first_ assertion that fired, not every one that would have, so the recorded
+fact would be an ordering — the thing this document already refuses as attribution one level up, now
+load-bearing for a check. Making it converge would mean witnesses that evaluate all their
+assertions, which is a change to every test rather than to the ledger.
 
-**So the repair that is actually available is carving witnesses, not recording
-assertions**, and it is what `AC14`–`AC19` already do to one another: ids whose
-subjects are different, so a kill lands on the one whose subject it broke.
-Where a witness genuinely needs a precondition — `AC18` needs the invocation to
-have finished before a count is worth reading — the residue stays, and it stays
-as this limit. **What would show the estimate above is wrong** is a run whose
-assertion records survive a round of test edits unchanged; on this tree they
-would not have.
+**So the repair that is actually available is carving witnesses, not recording assertions**, and it
+is what `AC14`–`AC19` already do to one another: ids whose subjects are different, so a kill lands
+on the one whose subject it broke. Where a witness genuinely needs a precondition — `AC18` needs the
+invocation to have finished before a count is worth reading — the residue stays, and it stays as
+this limit. **What would show the estimate above is wrong** is a run whose assertion records survive
+a round of test edits unchanged; on this tree they would not have.
 
-**The carve was made again this round, and what it corrected is the reason to
-distrust an entry's prose here rather than only its kill set.**
-`new-attempt-inherits-the-previous-forward-leg` recorded that `E19` died on its
-own subject and therefore belonged to it. Measured, it dies at the line
-publishing a forward refusal under the _first_ attempt, before any changeover has
-happened: with no forward record opened, `addRefusal` drops that refusal on its
-attempt guard and the withdrawal the row is about is never reached — the premise,
-in exactly the way that same entry already recorded for `E17b` and for `E18`'s
-forward arm. `attempt-changeover-keeps-the-previous-refusals` is the carved
-entry, inheriting the refusals while opening the records properly, and `E19` dies
-there on the withdrawal instead. Nothing could have raised the first reading:
-`CAT15` sees an id in a kill set and the prose said the rest.
+**The carve was made again this round, and what it corrected is the reason to distrust an entry's
+prose here rather than only its kill set.** `new-attempt-inherits-the-previous-forward-leg` recorded
+that `E19` died on its own subject and therefore belonged to it. Measured, it dies at the line
+publishing a forward refusal under the _first_ attempt, before any changeover has happened: with no
+forward record opened, `addRefusal` drops that refusal on its attempt guard and the withdrawal the
+row is about is never reached — the premise, in exactly the way that same entry already recorded for
+`E17b` and for `E18`'s forward arm. `attempt-changeover-keeps-the-previous-refusals` is the carved
+entry, inheriting the refusals while opening the records properly, and `E19` dies there on the
+withdrawal instead. Nothing could have raised the first reading: `CAT15` sees an id in a kill set
+and the prose said the rest.
 
-**What made this visible was a reading and not a check**, which is the part worth
-keeping: three separate hands reported closed — the row, the witness and the
-ledger entries — and the gap between them was found by re-reading the three
-together before submitting. Nothing in the suite was capable of raising it, and
-nothing in the suite is capable of raising the next one.
+**What made this visible was a reading and not a check**, which is the part worth keeping: three
+separate hands reported closed — the row, the witness and the ledger entries — and the gap between
+them was found by re-reading the three together before submitting. Nothing in the suite was capable
+of raising it, and nothing in the suite is capable of raising the next one.
 
-The eighth is the one the seven above assumed away: **a row's Observable Then can
-state the opposite of what its witness asserts, and every check here still
-passes.** `CAT4` asks that the witness exists, `CAT10` that it contains an
-assertion, `CAT12` and `CAT15` that a mutation reaches it — and a witness
-asserting the _negation_ of its row satisfies all four, because it is a real test
-with real assertions that a real mutation kills. Nothing reads the Then column for what
-it _says_: `CAT16` opens it for the row ids cited inside it, and `CAT38` for one
-word — whether the cell defers work to phase 2, which is a fact about the row's
-shape rather than about its claim. Neither compares the sentence with the arm. This is not the seventh limit at another grain: there, a witness dies
-and the check cannot say which of its assertions did; here, the witness and the
-row disagree outright and no run of anything raises it.
+The eighth is the one the seven above assumed away: **a row's Observable Then can state the opposite
+of what its witness asserts, and every check here still passes.** `CAT4` asks that the witness
+exists, `CAT10` that it contains an assertion, `CAT12` and `CAT15` that a mutation reaches it — and
+a witness asserting the _negation_ of its row satisfies all four, because it is a real test with
+real assertions that a real mutation kills. Nothing reads the Then column for what it _says_:
+`CAT16` opens it for the row ids cited inside it, and `CAT38` for one word — whether the cell defers
+work to phase 2, which is a fact about the row's shape rather than about its claim. Neither compares
+the sentence with the arm. This is not the seventh limit at another grain: there, a witness dies and
+the check cannot say which of its assertions did; here, the witness and the row disagree outright
+and no run of anything raises it.
 
-**It is not hypothetical, and this round is where it was paid for.** Expiry left
-the retention ranking, the tests that had encoded the old preference were
-inverted, and four rows were left asserting the design that had just been
-removed — `B6-C3`, `B6-C2` (which is `B-θ-C2` now, having been re-pointed to the
-decision that actually states its subject), `B7b-C4`, and `B7b-C5`, which
-survived the first
-three being repaired because it was not one of the rows the change had touched.
-A sweep of every row against its witnesses then found five more of a different
-vintage, drifted rather than inverted: `A-γ-C1` still said a timed-out
-request `settles` when the fifth state exists precisely so that it does not,
-`B1-C1` still carried the unqualified form of B1 that 0003 had already withdrawn
-in this same round, `C11-C5` gave the rejecting branch the reason that belongs to
-the resolving one, and `A5-C6` and `C12-C1` were wrong in the Given rather than
-the Then — which is worth naming separately, because every instrument here points
-at Thens.
+**It is not hypothetical, and this round is where it was paid for.** Expiry left the retention
+ranking, the tests that had encoded the old preference were inverted, and four rows were left
+asserting the design that had just been removed — `B6-C3`, `B6-C2` (which is `B-θ-C2` now, having
+been re-pointed to the decision that actually states its subject), `B7b-C4`, and `B7b-C5`, which
+survived the first three being repaired because it was not one of the rows the change had touched. A
+sweep of every row against its witnesses then found five more of a different vintage, drifted rather
+than inverted: `A-γ-C1` still said a timed-out request `settles` when the fifth state exists
+precisely so that it does not, `B1-C1` still carried the unqualified form of B1 that 0003 had
+already withdrawn in this same round, `C11-C5` gave the rejecting branch the reason that belongs to
+the resolving one, and `A5-C6` and `C12-C1` were wrong in the Given rather than the Then — which is
+worth naming separately, because every instrument here points at Thens.
 
-**It kept happening, and the round that moved the list above into this file is
-the clearest case.** The instances named so far are rows against witnesses. The
-same defect one level over — a sentence about the code, and the code — ran
-through that one round in every form it takes, and nothing raised any of it:
+**It kept happening, and the round that moved the list above into this file is the clearest case.**
+The instances named so far are rows against witnesses. The same defect one level over — a sentence
+about the code, and the code — ran through that one round in every form it takes, and nothing raised
+any of it:
 
-- `machine.ts` documented the per-leg latency estimate by quoting the outcome a
-  shared one produces as `incomplete(['timeout'])`, while the witness of that
-  outcome asserts `verification-timeout`. The old word stood for the same
-  outcome in that witness's own comment — above the assertion denying it — in a
-  second comment inside the same witness, and in two ledger entries. The split
-  that separated A-γ's settle timer from the request's verifier is what made all
-  of them false at once: **a vocabulary change is not a rename**, because every
-  sentence quoting the old word became a false statement about the new one, and
-  no type and no run reads prose.
-- A comment beside `CAT15` named `WEAKENED`, the array this list replaced, and
-  the test's own title still called them "the weakened rows": a deleted
-  identifier surviving in the two places nothing compiles.
-- Counts in that same file had drifted in the ledger's `killed: []` entries, in
-  its `contracts` declarations, in the rows this section requires an aimed
-  mutation for, and in both halves of `CAT13`'s comparison of the file rule
-  against the helper rule. Another count in the same file and the same shape was
-  still correct, and **nothing distinguishes it from the others** — which is the
-  argument for restating each as the claim its figure stood in for, rather than
-  for correcting figures and leaving the next reader the same problem.
-- The figures this section carried for what an automatic obligation would cost
-  were wrong too, and are gone rather than corrected, for the reason above.
-- `CAT15`'s parser for the list above stopped at the first line it could not
-  place and dropped every obligation below it, so a paragraph written between two
-  entries silenced all but the first with every check in this catalogue green.
+- `machine.ts` documented the per-leg latency estimate by quoting the outcome a shared one produces
+  as `incomplete(['timeout'])`, while the witness of that outcome asserts `verification-timeout`.
+  The old word stood for the same outcome in that witness's own comment — above the assertion
+  denying it — in a second comment inside the same witness, and in two ledger entries. The split
+  that separated A-γ's settle timer from the request's verifier is what made all of them false at
+  once: **a vocabulary change is not a rename**, because every sentence quoting the old word became
+  a false statement about the new one, and no type and no run reads prose.
+- A comment beside `CAT15` named `WEAKENED`, the array this list replaced, and the test's own title
+  still called them "the weakened rows": a deleted identifier surviving in the two places nothing
+  compiles.
+- Counts in that same file had drifted in the ledger's `killed: []` entries, in its `contracts`
+  declarations, in the rows this section requires an aimed mutation for, and in both halves of
+  `CAT13`'s comparison of the file rule against the helper rule. Another count in the same file and
+  the same shape was still correct, and **nothing distinguishes it from the others** — which is the
+  argument for restating each as the claim its figure stood in for, rather than for correcting
+  figures and leaving the next reader the same problem.
+- The figures this section carried for what an automatic obligation would cost were wrong too, and
+  are gone rather than corrected, for the reason above.
+- `CAT15`'s parser for the list above stopped at the first line it could not place and dropped every
+  obligation below it, so a paragraph written between two entries silenced all but the first with
+  every check in this catalogue green.
 
-**So this limit is not about Then columns.** It is about there being **no join
-between a recorded claim and its subject**, and a Then beside a witness is the
-instance the catalogue happened to meet first. Where a join can be built it has
-been: `CAT16` for cited ids, `LK13` for type members, and the parser guard for
-the list this section owns. Where it cannot, the obligation is the review step
-already stated below — **a recorded claim is re-read against its subject before
-the round closes** — and the claims that quote a value, a name or a number are
-where that reading starts, because they are the ones that can be checked in a
-minute and the ones that rot fastest.
+**So this limit is not about Then columns.** It is about there being **no join between a recorded
+claim and its subject**, and a Then beside a witness is the instance the catalogue happened to meet
+first. Where a join can be built it has been: `CAT16` for cited ids, `LK13` for type members, and
+the parser guard for the list this section owns. Where it cannot, the obligation is the review step
+already stated below — **a recorded claim is re-read against its subject before the round closes** —
+and the claims that quote a value, a name or a number are where that reading starts, because they
+are the ones that can be checked in a minute and the ones that rot fastest.
 
-**That the join cannot be mechanised is an argument, and it used to be dressed
-as a measurement.** The obvious candidate is a quantity join: a Then that says
-"exactly one" should have a witness asserting `1`. Three figures stood here — so
-many rows carrying a number, so many with a matching literal, so many false
-positives — attributed to a run of something. **No such tool is in the tree**,
-neither clause is an executable rule (what counts as "a Then that carries a
-number", or as "a matching numeric literal in a witness assertion"?), and the
-figures were the whole of the evidence for the paragraph's thesis. They are
-gone, by the rule this file applies to every other unruled figure.
+**That the join cannot be mechanised is an argument, and it used to be dressed as a measurement.**
+The obvious candidate is a quantity join: a Then that says "exactly one" should have a witness
+asserting `1`. Three figures stood here — so many rows carrying a number, so many with a matching
+literal, so many false positives — attributed to a run of something. **No such tool is in the
+tree**, neither clause is an executable rule (what counts as "a Then that carries a number", or as
+"a matching numeric literal in a witness assertion"?), and the figures were the whole of the
+evidence for the paragraph's thesis. They are gone, by the rule this file applies to every other
+unruled figure.
 
-What is left is the reason, which does not need a count: the two sides of that
-join are written in different vocabularies on purpose. A Then says "exactly one
-REQ", and its witness counts wire frames, or asserts a subscription id appears
-once, or asserts a second one is absent — three shapes, none of them a literal
-`1` next to the word the row used. A join over spellings of a quantity reports
-disagreement wherever the arm is well written, which is the opposite of what a
-check is for. What does discriminate is not a check but a **reading of the round's
-own diff**: for each row, whether the code of a witness changed while the Then
-did not. Run against the state before the four repairs it names exactly four
-rows, and all four are defects. It cannot become a check, because it needs a
-baseline that the commit destroys — the day after the round it reports nothing.
-So the standing obligation is a review step and not a green suite: **when a
-change inverts a test, the rows that name it are read before the round closes**,
-and `CAT16` is only the piece of that a machine could be given.
+What is left is the reason, which does not need a count: the two sides of that join are written in
+different vocabularies on purpose. A Then says "exactly one REQ", and its witness counts wire
+frames, or asserts a subscription id appears once, or asserts a second one is absent — three shapes,
+none of them a literal `1` next to the word the row used. A join over spellings of a quantity
+reports disagreement wherever the arm is well written, which is the opposite of what a check is for.
+What does discriminate is not a check but a **reading of the round's own diff**: for each row,
+whether the code of a witness changed while the Then did not. Run against the state before the four
+repairs it names exactly four rows, and all four are defects. It cannot become a check, because it
+needs a baseline that the commit destroys — the day after the round it reports nothing. So the
+standing obligation is a review step and not a green suite: **when a change inverts a test, the rows
+that name it are read before the round closes**, and `CAT16` is only the piece of that a machine
+could be given.
 
-**A rule this catalogue earned about its own paperwork, kept here because the
-paperwork is disposable and the rule is not.** Any document that enumerates what
-this catalogue holds and does not hold — a summary, a review pack, a list of
-what is owed — is a **second derivation** of the catalogue and is free to
-disagree with it. That is the objection this record raises against two
-derivations of one fact everywhere else it appears, turned on the record's own
-accounting, and the disagreement needs no time at all to open: a limit added to
-this file _after_ such a summary's body was written, in the same commit, is
-enough to leave the summary describing the file as it was rather than as it is.
-It has happened, in exactly that shape — a limit reported as still owed while it
-was already written above. **So a derived summary is checked against the original
-at the moment it is submitted, not at the moment it is written**, and where the
-two disagree the correction belongs in this file, because this is the copy that
-is kept.
+**A rule this catalogue earned about its own paperwork, kept here because the paperwork is
+disposable and the rule is not.** Any document that enumerates what this catalogue holds and does
+not hold — a summary, a review pack, a list of what is owed — is a **second derivation** of the
+catalogue and is free to disagree with it. That is the objection this record raises against two
+derivations of one fact everywhere else it appears, turned on the record's own accounting, and the
+disagreement needs no time at all to open: a limit added to this file _after_ such a summary's body
+was written, in the same commit, is enough to leave the summary describing the file as it was rather
+than as it is. It has happened, in exactly that shape — a limit reported as still owed while it was
+already written above. **So a derived summary is checked against the original at the moment it is
+submitted, not at the moment it is written**, and where the two disagree the correction belongs in
+this file, because this is the copy that is kept.
 
-**It has now happened twice, and the second one widens the rule in two ways
-rather than repeating it.** The first ran in the direction of understating the
-records — something reported as owed that was already done. The second ran the
-other way and in a different file: a submission reported two round labels as
-still standing in one of the decision records when both had already been taken
-out of it. So the rule is not only about summaries of _this_ catalogue but about
-any second derivation of any of these records, and it is not only about
-omissions — **a derived document can be stale about a repair as easily as about a
-gap, and the repair is the harder direction to notice**, because a claim that
-work remains invites checking and a claim that something was left alone does not.
-The remedy is unchanged and is the reason this is written here rather than
-there: the submission is frozen once it is made, so the correction goes in the
-record that is kept.
+**It has now happened twice, and the second one widens the rule in two ways rather than repeating
+it.** The first ran in the direction of understating the records — something reported as owed that
+was already done. The second ran the other way and in a different file: a submission reported two
+round labels as still standing in one of the decision records when both had already been taken out
+of it. So the rule is not only about summaries of _this_ catalogue but about any second derivation
+of any of these records, and it is not only about omissions — **a derived document can be stale
+about a repair as easily as about a gap, and the repair is the harder direction to notice**, because
+a claim that work remains invites checking and a claim that something was left alone does not. The
+remedy is unchanged and is the reason this is written here rather than there: the submission is
+frozen once it is made, so the correction goes in the record that is kept.
 
-**A ninth limit, and the check this round added against it: nothing here asks
-whether a value the provider constructs reaches anything at all.** Every
-instrument above joins a decision to a witness. None of them joins a field to a
-reader, and that is a gap a fixture cannot cover, because **a field whose only
-reader is the caller's own argument list is indistinguishable from a wired one to
-a suite that always passes the argument**. Two instances reached the end of this
-round together. `createNostrContext` put `verifyEvent` on the context while
-nothing carried it anywhere, so 0004's "the library supplies the verifier" was
-false and unobservable at once; and `detectEnvironment()` existed while the
-engine's `environment` came from its own options, so A12's "the server does not
-subscribe" held for a caller who passed `environment: 'server'` and for nobody
-else. Both were found by reading. `PROV1` is the part that notices the third:
-every field of `NostrContext` is read through the context by some library module,
-or it is named in that test's `UNREACHED` list with the reason it is not — and
-**that list is the residue itself**, not a suppression, since a field that gains
-a reader while still listed fails exactly as loudly as one that loses its last
-reader without being listed. It is the output side of the provider; `WR7` and
-`WR13` read the same file and ask what a caller can pass _in_, and `WR*`'s unit is
-a decision's symbol, all of which are wired here — `createExpiryClock` is called,
-from this very module. What is unreached is the clock the provider then hands to
-nobody. Today the list is `client`, `clock`, `attempts` and `setRelays`.
+**A ninth limit, and the check this round added against it: nothing here asks whether a value the
+provider constructs reaches anything at all.** Every instrument above joins a decision to a witness.
+None of them joins a field to a reader, and that is a gap a fixture cannot cover, because **a field
+whose only reader is the caller's own argument list is indistinguishable from a wired one to a suite
+that always passes the argument**. Two instances reached the end of this round together.
+`createNostrContext` put `verifyEvent` on the context while nothing carried it anywhere, so 0004's
+"the library supplies the verifier" was false and unobservable at once; and `detectEnvironment()`
+existed while the engine's `environment` came from its own options, so A12's "the server does not
+subscribe" held for a caller who passed `environment: 'server'` and for nobody else. Both were found
+by reading. `PROV1` is the part that notices the third: every field of `NostrContext` is read
+through the context by some library module, or it is named in that test's `UNREACHED` list with the
+reason it is not — and **that list is the residue itself**, not a suppression, since a field that
+gains a reader while still listed fails exactly as loudly as one that loses its last reader without
+being listed. It is the output side of the provider; `WR7` and `WR13` read the same file and ask
+what a caller can pass _in_, and `WR*`'s unit is a decision's symbol, all of which are wired here —
+`createExpiryClock` is called, from this very module. What is unreached is the clock the provider
+then hands to nobody. Today the list is `client`, `clock`, `attempts` and `setRelays`.
 
-**It is classified in `roles.ts` rather than given a row here, and the rejected
-side is worth one line each.** Kept as a classification because its subject is
-the residue list rather than any one decision — a field nobody reads produces
-nothing to observe, which is `AE10`'s reason and the same shape. Rejected as a
-catalogue row because such a row would be `architecture`, and `CAT12` requires an
-executable row to have a ledger entry measured against one of its witnesses,
-which this has none of and would need a mutation class the ledger does not
-carry. `CAT7`
-forbids both, so the choice is real rather than a formality.
+**It is classified in `roles.ts` rather than given a row here, and the rejected side is worth one
+line each.** Kept as a classification because its subject is the residue list rather than any one
+decision — a field nobody reads produces nothing to observe, which is `AE10`'s reason and the same
+shape. Rejected as a catalogue row because such a row would be `architecture`, and `CAT12` requires
+an executable row to have a ledger entry measured against one of its witnesses, which this has none
+of and would need a mutation class the ledger does not carry. `CAT7` forbids both, so the choice is
+real rather than a formality.
 
-**Its own instrument was the round's second finding, and it runs the other way
-from the first.** Matching a bare `.field` inside a module that holds a context
-counts `getOpts().client` as a read — the caller's argument list, the exact thing
-the check exists to tell apart — so that form declares `client`, `clock`,
-`attempts` and `environment` all reached and shrinks the residue to `setRelays`
-alone. Measured, not reasoned: with `environment`'s context read deleted, the
-bare form still reports it read and the anchored form fails. Reads are therefore
-matched against the context expression itself, and a context that leaves its
-module whole is a failure rather than a silence, since a field handed out of
-frame is unread by every regex and reached in fact.
+**Its own instrument was the round's second finding, and it runs the other way from the first.**
+Matching a bare `.field` inside a module that holds a context counts `getOpts().client` as a read —
+the caller's argument list, the exact thing the check exists to tell apart — so that form declares
+`client`, `clock`, `attempts` and `environment` all reached and shrinks the residue to `setRelays`
+alone. Measured, not reasoned: with `environment`'s context read deleted, the bare form still
+reports it read and the anchored form fails. Reads are therefore matched against the context
+expression itself, and a context that leaves its module whole is a failure rather than a silence,
+since a field handed out of frame is unread by every regex and reached in fact.
 
-**A tenth limit, and the check this round added against it: an id the library
-quotes is checked for existing and for nothing else.** `CAT18` walks `src/lib`,
-extracts every decision id its prose names, and asserts each is a row in 0002,
-0003 or 0004. That closes the hole it was built for — `B-β`, `A10` and `C-γ` were
-all cited from shipped source while no record on this branch carried them, and
-the only instrument that had ever caught one was a reviewer reading. **What it
-cannot do is read the sentence the id sits in.** A comment attributing a real
-decision to the wrong claim passes it, in the same way `CAT4` passes a row naming
-a real test while describing a different one — and that is not hypothetical
-either: this round also found the drain budget credited to `A-γ` in `machine.ts`
-and in `drainbound.test.ts`, where every id involved exists. Both were found by
+**A tenth limit, and the check this round added against it: an id the library quotes is checked for
+existing and for nothing else.** `CAT18` walks `src/lib`, extracts every decision id its prose
+names, and asserts each is a row in 0002, 0003 or 0004. That closes the hole it was built for —
+`B-β`, `A10` and `C-γ` were all cited from shipped source while no record on this branch carried
+them, and the only instrument that had ever caught one was a reviewer reading. **What it cannot do
+is read the sentence the id sits in.** A comment attributing a real decision to the wrong claim
+passes it, in the same way `CAT4` passes a row naming a real test while describing a different one —
+and that is not hypothetical either: this round also found the drain budget credited to `A-γ` in
+`machine.ts` and in `drainbound.test.ts`, where every id involved exists. Both were found by
 reading, and `CAT18` is green on them.
 
-**Contract ids quoted from the library are outside it, and that is a choice
-rather than an omission.** The pattern's leading boundary drops the `C10` of
-`A11-C10` and the `C4` of `C5-C4`, so a retired _contract_ cited from `src/lib`
-is uncaught. Row ids in 0005 are renamed between rounds far more often than
-decisions are — one row moved out of `A-γ` and became `A-ζ-C1` inside this one —
-so the same check over contracts would fail on every mid-round rename and be
-silenced, which buys less than it costs. It is recorded here so it is a decision
-somebody can overturn rather than a gap nobody stated.
+**Contract ids quoted from the library are outside it, and that is a choice rather than an
+omission.** The pattern's leading boundary drops the `C10` of `A11-C10` and the `C4` of `C5-C4`, so
+a retired _contract_ cited from `src/lib` is uncaught. Row ids in 0005 are renamed between rounds
+far more often than decisions are — one row moved out of `A-γ` and became `A-ζ-C1` inside this one —
+so the same check over contracts would fail on every mid-round rename and be silenced, which buys
+less than it costs. It is recorded here so it is a decision somebody can overturn rather than a gap
+nobody stated.
 
-**And the argument is weaker than it was, because the case it does not cover
-happened.** A row written this round took the number that move had vacated. A
-citation left behind by a rename **dangles**, which is loud and is exactly what
-the check above would catch; a citation left behind by a **reissue resolves**, to
-a different row, and nothing anywhere notices — not the scan this paragraph
-declines to widen, and not a reader, since the id is real. The cheap half of the
-repair is a rule rather than a check and it is taken: **a vacated row id is not
-reused**, whatever gap it leaves in a family's numbering. The expensive half — a
-scan that would have caught the reissue by seeing three sentences call the id
-retired — is still declined, and now for a stated price rather than an assumed
-one.
+**And the argument is weaker than it was, because the case it does not cover happened.** A row
+written this round took the number that move had vacated. A citation left behind by a rename
+**dangles**, which is loud and is exactly what the check above would catch; a citation left behind
+by a **reissue resolves**, to a different row, and nothing anywhere notices — not the scan this
+paragraph declines to widen, and not a reader, since the id is real. The cheap half of the repair is
+a rule rather than a check and it is taken: **a vacated row id is not reused**, whatever gap it
+leaves in a family's numbering. The expensive half — a scan that would have caught the reissue by
+seeing three sentences call the id retired — is still declined, and now for a stated price rather
+than an assumed one.
 
-**The suite is outside it too, and for a different reason: it cites retired ids
-on purpose.** `roles.ts` records that `C-γ` is a decision 0004 no longer has, and
-`wiring.test.ts` records the row that used to name it — so the same scan over
-`src/tests` reports its own history as breakage, and would need an exemption list
-to stay green. An exemption list is the shape these records refuse, because the
-next dangling id gets added to it. So the suite got the sweep instead of a
-check, and **the sweep's whole output is written down here so that the next one
-is a diff rather than another search.** Six sites in `src/tests` cited an id no
-record carried, all found by reading.
+**The suite is outside it too, and for a different reason: it cites retired ids on purpose.**
+`roles.ts` records that `C-γ` is a decision 0004 no longer has, and `wiring.test.ts` records the row
+that used to name it — so the same scan over `src/tests` reports its own history as breakage, and
+would need an exemption list to stay green. An exemption list is the shape these records refuse,
+because the next dangling id gets added to it. So the suite got the sweep instead of a check, and
+**the sweep's whole output is written down here so that the next one is a diff rather than another
+search.** Six sites in `src/tests` cited an id no record carried, all found by reading.
 
-**Named by file and by what they say, not by line**, and that is a repair rather
-than a style: every line number in this table had rotted — five of the six were
-between 50 and 110 lines out — so the table that exists to be diffed could not
-be. A line number is a fact about a file's history; the citation has to be a fact
-about the file.
+**Named by file and by what they say, not by line**, and that is a repair rather than a style: every
+line number in this table had rotted — five of the six were between 50 and 110 lines out — so the
+table that exists to be diffed could not be. A line number is a fact about a file's history; the
+citation has to be a fact about the file.
 
 | Site                                                 | Cited | Now                                               |
 | ---------------------------------------------------- | ----- | ------------------------------------------------- |
@@ -3614,146 +3230,121 @@ about the file.
 | `reconnect.test.ts`, the reconnection arm's preamble | `C-γ` | `C4b`                                             |
 | `measurements.test.ts`, the observer-count arm       | `B7`  | **left as `B7`, recorded as resolving nowhere**   |
 
-`B7` is the one that could not be repointed: it is in no table in `docs/decisions`, nowhere in `docs/redesign` (the branch-local tree), and in no ledger entry. Guessing it
-onto `B7a` or `B7b` would have been the same move this limit exists to stop, so
-the site says it resolves nowhere instead. **Nothing stops the seventh** — when
-one appears, this table is what it has to be added to.
+`B7` is the one that could not be repointed: it is in no table in `docs/decisions`, nowhere in
+`docs/redesign` (the branch-local tree), and in no ledger entry. Guessing it onto `B7a` or `B7b`
+would have been the same move this limit exists to stop, so the site says it resolves nowhere
+instead. **Nothing stops the seventh** — when one appears, this table is what it has to be added to.
 
-**A consequence of `CAT18` that only shows up once you try to write this history
-down: inside `src/lib`, a retired id cannot be named even to say it is
-retired.** The check cannot tell an id being explained from one being relied on
-— that is the same blindness as the paragraph above, seen from the other side —
-so the two `src/lib` sites that cited retired ids (`diagnostics.svelte.ts`, for
-the diagnostics split, and `surface.ts`, twice, for the entry-point prohibition)
-say what they mean directly and leave the history here. It was measured the
-expensive way: a rewrite of the first of those explained the retirement in
-place, naming the dead id, and `CAT18` failed on it. **Prose about retired ids
-lives in the suite and in this file, and nowhere the check reads.**
+**A consequence of `CAT18` that only shows up once you try to write this history down: inside
+`src/lib`, a retired id cannot be named even to say it is retired.** The check cannot tell an id
+being explained from one being relied on — that is the same blindness as the paragraph above, seen
+from the other side — so the two `src/lib` sites that cited retired ids (`diagnostics.svelte.ts`,
+for the diagnostics split, and `surface.ts`, twice, for the entry-point prohibition) say what they
+mean directly and leave the history here. It was measured the expensive way: a rewrite of the first
+of those explained the retirement in place, naming the dead id, and `CAT18` failed on it. **Prose
+about retired ids lives in the suite and in this file, and nowhere the check reads.**
 
-**A further limit, and it is the eighth one moved from Then columns onto prose:
-two records can agree on a published type member for member and disagree about
-what the member promises, and `LK13` is structurally unable to see it.** That
-check parses the fenced `ts` blocks of 0004, reduces each type to an ordered
-list of its members, prints them back through a printer built with
-`removeComments: true`, and compares that against the emitted declarations with
-the comments stripped out again. So the input it reads contains no prose at all — not the
-paragraphs around the block, and not the `//` comments inside it. `hasMatchEvidence: boolean`
-matching on both sides says nothing whatever about what `true` means, and this
-round is where that was paid for: 0002 narrowed `accepted` to "passed the gate,
-and passed before the wait it belonged to ended" while 0004 went on defining the
-same field as "one its filters asked for and its verifier passed", which is
-the same words minus the clause that decides the case. Both records were
-internally consistent, the shipped type agreed with both, and every check here
-passed. `EV4` is what the disagreement was found with — a run in which the
-verifier passes the event and the answer says nothing was found.
+**A further limit, and it is the eighth one moved from Then columns onto prose: two records can
+agree on a published type member for member and disagree about what the member promises, and `LK13`
+is structurally unable to see it.** That check parses the fenced `ts` blocks of 0004, reduces each
+type to an ordered list of its members, prints them back through a printer built with
+`removeComments: true`, and compares that against the emitted declarations with the comments
+stripped out again. So the input it reads contains no prose at all — not the paragraphs around the
+block, and not the `//` comments inside it. `hasMatchEvidence: boolean` matching on both sides says
+nothing whatever about what `true` means, and this round is where that was paid for: 0002 narrowed
+`accepted` to "passed the gate, and passed before the wait it belonged to ended" while 0004 went on
+defining the same field as "one its filters asked for and its verifier passed", which is the same
+words minus the clause that decides the case. Both records were internally consistent, the shipped
+type agreed with both, and every check here passed. `EV4` is what the disagreement was found with —
+a run in which the verifier passes the event and the answer says nothing was found.
 
-**A check for it was built and measured rather than declared impossible, and the
-measurement is why it is not here.** The candidate: every paragraph that states
-what a published member promises must cite the record defining the terms it uses,
-so a second record restating a definition instead of pointing at it is a
-failure. Run over 0002–0005 it flags a large share of the paragraphs that
-mention a published member, and a similar share of those naming the members
-whose names are not ordinary English. **The proportions were read off that run
-and are not quoted, because the run left nothing to reproduce them from**: the
-candidate script was thrown away with the measurement taken, so a figure here
-would be one no reader of this checkout could re-derive. What can be re-derived
-is the part the decision turns on, and it is below. The flags are front matter,
-`ts` blocks, and prose using "reason" or "error" in their ordinary senses.
-Worse, **it does not flag the
-defect it was written for**: the paragraph carrying the wrong definition of
-`accepted` cites `A11` in its next sentence, so a check asking for _a_ citation
-is satisfied by it, and a check asking for the _right_ citation has to know
-which record defines a word — which is the reading being replaced. **That half
-is checkable from this checkout by anyone who reads the paragraph and its
-successor, which is why it is the half the decision rests on.** A check that
-misses its own motivating case while flagging much of the corpus around it is
-worse than none, and the same shape as the quantity join above.
+**A check for it was built and measured rather than declared impossible, and the measurement is why
+it is not here.** The candidate: every paragraph that states what a published member promises must
+cite the record defining the terms it uses, so a second record restating a definition instead of
+pointing at it is a failure. Run over 0002–0005 it flags a large share of the paragraphs that
+mention a published member, and a similar share of those naming the members whose names are not
+ordinary English. **The proportions were read off that run and are not quoted, because the run left
+nothing to reproduce them from**: the candidate script was thrown away with the measurement taken,
+so a figure here would be one no reader of this checkout could re-derive. What can be re-derived is
+the part the decision turns on, and it is below. The flags are front matter, `ts` blocks, and prose
+using "reason" or "error" in their ordinary senses. Worse, **it does not flag the defect it was
+written for**: the paragraph carrying the wrong definition of `accepted` cites `A11` in its next
+sentence, so a check asking for _a_ citation is satisfied by it, and a check asking for the _right_
+citation has to know which record defines a word — which is the reading being replaced. **That half
+is checkable from this checkout by anyone who reads the paragraph and its successor, which is why it
+is the half the decision rests on.** A check that misses its own motivating case while flagging much
+of the corpus around it is worse than none, and the same shape as the quantity join above.
 
-**So the obligation is a review step, and it is narrower than "read the
-records".** One term, one definition site: where a record defines a word that
-another record's promise turns on, the second cites the first rather than
-restating it — `hasMatchEvidence`'s definition now names A-ε instead of
-paraphrasing it, in 0004 and in the engine's own doc comment both. What makes
-that checkable at all is not a suite but a witness: a claim about meaning that
-no run can reach is one that should have had a witness constructed for it, and
-the residue of this limit is every published member whose meaning has no `EV4`.
+**So the obligation is a review step, and it is narrower than "read the records".** One term, one
+definition site: where a record defines a word that another record's promise turns on, the second
+cites the first rather than restating it — `hasMatchEvidence`'s definition now names A-ε instead of
+paraphrasing it, in 0004 and in the engine's own doc comment both. What makes that checkable at all
+is not a suite but a witness: a claim about meaning that no run can reach is one that should have
+had a witness constructed for it, and the residue of this limit is every published member whose
+meaning has no `EV4`.
 
-**Citing the definition is necessary and not sufficient, and a later sweep is
-the evidence.** The rule above was in force and `hasMatchEvidence` did cite A-ε
-rather than paraphrase it — yet sweeping for the _state_ that word names found
-places throughout these records and the engine's own comments, the public
-`IncompleteCause` comment among them, calling a candidate `accepted` while it
-was still inside the gate: the one state A-ε excludes. That comment is the
-archetype, and what it said is quoted here so this does not depend on a tree
-that goes away: the backward gate "was holding candidates it had accepted inside
-that boundary when the drain cutoff cut the wait, so they were discarded".
-Read literally, that says a cut discards an event A-ε had promised to deliver,
-which contradicts A-ε's own falsifier. **Most of the other sites did not say
-that**, and an earlier draft of this paragraph claimed they each did — they used
-the defined word for a state it excludes without drawing the conclusion, and one
-class of them named no actor at all rather than the wrong one. The sweep had to
-be over states rather than over that sentence for exactly that reason. None
-misquoted a decision id, so an id check could not have seen any of it. **What a defined word
-needs beside a citation is a vocabulary for the states it is not** — here
-`admitted to the gate` on arrival, `pending verification` while inside, and
-`accepted` only past the gate and only in time. So the review obligation is a
-sweep over the states a defined word partitions, and not only over who cites
+**Citing the definition is necessary and not sufficient, and a later sweep is the evidence.** The
+rule above was in force and `hasMatchEvidence` did cite A-ε rather than paraphrase it — yet sweeping
+for the _state_ that word names found places throughout these records and the engine's own comments,
+the public `IncompleteCause` comment among them, calling a candidate `accepted` while it was still
+inside the gate: the one state A-ε excludes. That comment is the archetype, and what it said is
+quoted here so this does not depend on a tree that goes away: the backward gate "was holding
+candidates it had accepted inside that boundary when the drain cutoff cut the wait, so they were
+discarded". Read literally, that says a cut discards an event A-ε had promised to deliver, which
+contradicts A-ε's own falsifier. **Most of the other sites did not say that**, and an earlier draft
+of this paragraph claimed they each did — they used the defined word for a state it excludes without
+drawing the conclusion, and one class of them named no actor at all rather than the wrong one. The
+sweep had to be over states rather than over that sentence for exactly that reason. None misquoted a
+decision id, so an id check could not have seen any of it. **What a defined word needs beside a
+citation is a vocabulary for the states it is not** — here `admitted to the gate` on arrival,
+`pending verification` while inside, and `accepted` only past the gate and only in time. So the
+review obligation is a sweep over the states a defined word partitions, and not only over who cites
 whom.
 
-**There was a count in that paragraph, and dropping it is the second finding.**
-It said thirteen; it was relayed onward as seventeen; the change it counts holds
-twenty sites. The three are not nested — the two smaller ones agree on ten and
-each holds sites the other does not — because each was counted under a different
-rule for what a site is, and no rule was written beside any of them. One counted
-the sentences whose actor was merely left unstated, the other counted the
-verb-form swaps instead. **A count of a change is a second derivation of
-something nothing checks**, it rotted three ways inside one branch, and the
-branch removes the change while leaving the sentence that counts it behind. So
-the number is gone rather than corrected: what this paragraph is for is the
-archetype, quoted above, and the vocabulary, stated above, and neither needs a
-cardinality to be checked. The general form is worth more than the instance —
-**a number describing a diff should not outlive the diff**, and if it must, the
-counting rule belongs beside it.
+**There was a count in that paragraph, and dropping it is the second finding.** It said thirteen; it
+was relayed onward as seventeen; the change it counts holds twenty sites. The three are not nested —
+the two smaller ones agree on ten and each holds sites the other does not — because each was counted
+under a different rule for what a site is, and no rule was written beside any of them. One counted
+the sentences whose actor was merely left unstated, the other counted the verb-form swaps instead.
+**A count of a change is a second derivation of something nothing checks**, it rotted three ways
+inside one branch, and the branch removes the change while leaving the sentence that counts it
+behind. So the number is gone rather than corrected: what this paragraph is for is the archetype,
+quoted above, and the vocabulary, stated above, and neither needs a cardinality to be checked. The
+general form is worth more than the instance — **a number describing a diff should not outlive the
+diff**, and if it must, the counting rule belongs beside it.
 
-**The sweep it records then failed the same way, one paragraph away.** Fixing
-`accepted` gave `admitted` a definition — "entered the gate" — which made a
-second sentence wrong in the other direction: "one its filters asked for, its
-verifier admitted, and admitted before the wait the event's leg belonged to
-ended" had been using `admitted` for the verifier's verdict, which the new
-vocabulary now spells `passed`. That sentence was copied verbatim into four
-places. It was repaired in one of them and left standing in the rest, including
-this record and 0004 — **which is the published one a port reads** — so the
-repair reproduced, in its own replacement, the ambiguity it had just removed.
-(It is closed now, and the sentence above is the history rather than the state:
-`verifier admitted` survives in this repository only inside this paragraph's own
-quotation of it, and 0004 and `engine.ts` both say `passed`. The clause is left
-here because the _shape_ is what the passage is for; a reader checking it can
-grep the phrase and should find exactly this one hit.)
-The lesson is the one printed two paragraphs up and it did not take: **a
-replacement is a sweep over the states of the word you are replacing _with_, and
-not only of the word you are replacing.** A correction is not safer than the
-thing it corrects.
+**The sweep it records then failed the same way, one paragraph away.** Fixing `accepted` gave
+`admitted` a definition — "entered the gate" — which made a second sentence wrong in the other
+direction: "one its filters asked for, its verifier admitted, and admitted before the wait the
+event's leg belonged to ended" had been using `admitted` for the verifier's verdict, which the new
+vocabulary now spells `passed`. That sentence was copied verbatim into four places. It was repaired
+in one of them and left standing in the rest, including this record and 0004 — **which is the
+published one a port reads** — so the repair reproduced, in its own replacement, the ambiguity it
+had just removed. (It is closed now, and the sentence above is the history rather than the state:
+`verifier admitted` survives in this repository only inside this paragraph's own quotation of it,
+and 0004 and `engine.ts` both say `passed`. The clause is left here because the _shape_ is what the
+passage is for; a reader checking it can grep the phrase and should find exactly this one hit.) The
+lesson is the one printed two paragraphs up and it did not take: **a replacement is a sweep over the
+states of the word you are replacing _with_, and not only of the word you are replacing.** A
+correction is not safer than the thing it corrects.
 
-**Two sites that sweep left standing, deliberately, and that is the other half of
-recording it.** A-ε's release clause makes the _producer_ the grammatical
-acceptor where A-ε's acceptor is the attempt — grammar rather than meaning, and
-0002 records beside the clause why re-pointing it costs more than it fixes. And
-`UnsupportedFilterError`'s message says "the events accepted locally" in the
-filter-matching sense, which is a third meaning again; it is a runtime string
-rather than a comment, so editing it is a behavior change and it is left to the
-port. **A deferral nobody wrote down is rediscovered every round**, at the cost
-of the same search each time — the same way an absent claim rots without
-anything falling over.
+**Two sites that sweep left standing, deliberately, and that is the other half of recording it.**
+A-ε's release clause makes the _producer_ the grammatical acceptor where A-ε's acceptor is the
+attempt — grammar rather than meaning, and 0002 records beside the clause why re-pointing it costs
+more than it fixes. And `UnsupportedFilterError`'s message says "the events accepted locally" in the
+filter-matching sense, which is a third meaning again; it is a runtime string rather than a comment,
+so editing it is a behavior change and it is left to the port. **A deferral nobody wrote down is
+rediscovered every round**, at the cost of the same search each time — the same way an absent claim
+rots without anything falling over.
 
 ### Which failure code reaches which surface
 
-**The published types are read off this table, and the table is read off the
-paths.** `0004` declares one alias per failure surface; each is a set, and the
-sets came from measuring what reaches each surface rather than from subtracting
-one variant from the union. For a round they were one alias — `Exclude<ReqError,
-IncompleteReqError>`, "everything except the partial answer" — standing for three
-different contracts, and four cells of `0004`'s ingress table named a surface the
-value cannot get to.
+**The published types are read off this table, and the table is read off the paths.** `0004`
+declares one alias per failure surface; each is a set, and the sets came from measuring what reaches
+each surface rather than from subtracting one variant from the union. For a round they were one
+alias — `Exclude<ReqError, IncompleteReqError>`, "everything except the partial answer" — standing
+for three different contracts, and four cells of `0004`'s ingress table named a surface the value
+cannot get to.
 
 | code                         | `state.error` when `status: 'error'` | `state.error` when `status: 'incomplete'` | `RefreshOutcome` `error` | what `refresh()` **rejects** with | the `error` slot | `lastError` | `legEnded.error` |
 | ---------------------------- | ------------------------------------ | ----------------------------------------- | ------------------------ | --------------------------------- | ---------------- | ----------- | ---------------- |
@@ -3768,151 +3359,130 @@ value cannot get to.
 | code `incomplete-result`     | —                                    | RM3                                       | —                        | —                                 | RM3              | RM3         | —                |
 | code `relay-failed`          | —                                    | —                                         | —                        | —                                 | —                | —           | RM10             |
 
-**Every reachable cell names the arm that drives it, and the cell and the arm are
-one piece of data.** A matrix whose cells said only "yes" is a matrix that can go
-on saying yes about a path nobody drives — which is how four of its cells were
-wrong the first time it was written. Naming an arm in each cell did not fix that,
-because the check behind the names asked only whether a test of that name existed
-_somewhere_: four cells went on naming arms that produce a different code, read a
-different surface, or never call `refresh()` at all, and the check stayed green
-through all of it.
+**Every reachable cell names the arm that drives it, and the cell and the arm are one piece of
+data.** A matrix whose cells said only "yes" is a matrix that can go on saying yes about a path
+nobody drives — which is how four of its cells were wrong the first time it was written. Naming an
+arm in each cell did not fix that, because the check behind the names asked only whether a test of
+that name existed _somewhere_: four cells went on naming arms that produce a different code, read a
+different surface, or never call `refresh()` at all, and the check stayed green through all of it.
 
-So the cells live in `src/tests/helpers/failure-matrix.ts`, and both halves are
-read off that one declaration:
+So the cells live in `src/tests/helpers/failure-matrix.ts`, and both halves are read off that one
+declaration:
 
-- a runtime arm is checked against **its own row**, found by the id of the test
-  that is running rather than by an argument it passes — so an arm cannot claim a
-  cell it is not. It hands over what it observed at **every** surface, and the
-  check refuses an observation that does not carry the declared code at each
-  declared surface, or that carries it at a surface the row leaves empty;
-- `CAT29` compares the table printed above against the same declaration, cell for
-  cell, em dashes included, and checks the column headers match. It is the
-  record's reference integrity and nothing more — the claim that a cell is
-  _reachable_ belongs to the arm that drove it.
+- a runtime arm is checked against **its own row**, found by the id of the test that is running
+  rather than by an argument it passes — so an arm cannot claim a cell it is not. It hands over what
+  it observed at **every** surface, and the check refuses an observation that does not carry the
+  declared code at each declared surface, or that carries it at a surface the row leaves empty;
+- `CAT29` compares the table printed above against the same declaration, cell for cell, em dashes
+  included, and checks the column headers match. It is the record's reference integrity and nothing
+  more — the claim that a cell is _reachable_ belongs to the arm that drove it.
 
-**What a port owes here is the shape of that bridge and not this module.** The
-declaration is a test helper and goes with the spike; the table above is what is
-inherited. A port's own bridge has to bind each cell to an arm that produces
-**exactly that code at exactly that surface**, and to read the empty cells in the
-same observation — a check that a test of the named id exists somewhere is not
-one, and this catalogue shipped that check for a round with four cells pointing
-at arms that produce a different code, read no code at all, or never call
-`refresh()`.
+**What a port owes here is the shape of that bridge and not this module.** The declaration is a test
+helper and goes with the spike; the table above is what is inherited. A port's own bridge has to
+bind each cell to an arm that produces **exactly that code at exactly that surface**, and to read
+the empty cells in the same observation — a check that a test of the named id exists somewhere is
+not one, and this catalogue shipped that check for a round with four cells pointing at arms that
+produce a different code, read no code at all, or never call `refresh()`.
 
 **Why each empty cell is empty**, because an empty cell is a claim:
 
-- a **descriptor** refusal is thrown above the query's `try`, so nothing writes a
-  failure record and the outcome channel never carries one — `refresh()` rejects
-  with it instead, which is the second, deliberate publication point;
-- `attempt-abandoned` is an `AbortSignal` reason. The signal has two readers and
-  only one publishes: the promise `refresh()` hands back. It was recorded as
-  reaching `state.error` and `lastError` and reaches neither;
-- `relay-failed` reaches the leg end and nothing else, **by contract rather than
-  by how many accumulators happen to ship**. This said the opposite for a round:
-  that a port shipping a third accumulator could re-open the cell, because one
-  that re-throws the leg end's reason published `relay-failed` on `state.error`,
-  and that this was therefore a property of the two implementations rather than
-  of the channel. That is exactly the freedom `A11` exists to remove — the same
-  request would come back `incomplete` under two accumulators and `error` under a
-  third — so `A11-P4` forbids it and the terminal doors enforce it: a
-  `relay-failed` value arriving at a terminal door can only have come back out of
-  the accumulator seam, and it is published as `accumulator-contract` with the
-  relay's own value on the `cause` (`RM9`). What a conforming accumulator does
-  with the same wire history is `RM10`: `incomplete`, with the code on the leg;
-- `incomplete-result` is synthesised from the state and never thrown, so it
-  cannot be a record, an outcome or a rejection.
+- a **descriptor** refusal is thrown above the query's `try`, so nothing writes a failure record and
+  the outcome channel never carries one — `refresh()` rejects with it instead, which is the second,
+  deliberate publication point;
+- `attempt-abandoned` is an `AbortSignal` reason. The signal has two readers and only one publishes:
+  the promise `refresh()` hands back. It was recorded as reaching `state.error` and `lastError` and
+  reaches neither;
+- `relay-failed` reaches the leg end and nothing else, **by contract rather than by how many
+  accumulators happen to ship**. This said the opposite for a round: that a port shipping a third
+  accumulator could re-open the cell, because one that re-throws the leg end's reason published
+  `relay-failed` on `state.error`, and that this was therefore a property of the two implementations
+  rather than of the channel. That is exactly the freedom `A11` exists to remove — the same request
+  would come back `incomplete` under two accumulators and `error` under a third — so `A11-P4`
+  forbids it and the terminal doors enforce it: a `relay-failed` value arriving at a terminal door
+  can only have come back out of the accumulator seam, and it is published as `accumulator-contract`
+  with the relay's own value on the `cause` (`RM9`). What a conforming accumulator does with the
+  same wire history is `RM10`: `incomplete`, with the code on the leg;
+- `incomplete-result` is synthesised from the state and never thrown, so it cannot be a record, an
+  outcome or a rejection.
 
-**Both halves are witnessed, and the compile half is narrower than this said.**
-`LK20` compiles the **six published aliases**, so it is total over the surfaces
-that have one — and silent about the two codes that reach only the rejection,
-`provider-disposed` and `attempt-abandoned`, which no alias names because
-`refresh()`'s rejection has none. It was called "total over the matrix": for each surface alias an exhaustive `switch` over exactly its codes must
-compile clean, and a comparison against every code it excludes must be `TS2367`.
-The runtime half is **the arms the table above names, and exactly those** — a
-range was written here twice and was wrong both times, because the `RM` band also
-holds arms that are not about a cell at all (the normalizer's, and the disposal
-linearisation's). Each reads **both edges** — where the value arrives _and_ every
-surface it is recorded as not reaching — because a positive-only witness is
-satisfied by a library that publishes every failure everywhere. The negative edge
-is no longer written arm by arm: the observation covers all seven surfaces, and
-what counts as empty is read off the **code's whole row** rather than off one
-arm's share of it, because two arms can split a row and neither of them is the
-authority on what the other's cell holds.
+**Both halves are witnessed, and the compile half is narrower than this said.** `LK20` compiles the
+**six published aliases**, so it is total over the surfaces that have one — and silent about the two
+codes that reach only the rejection, `provider-disposed` and `attempt-abandoned`, which no alias
+names because `refresh()`'s rejection has none. It was called "total over the matrix": for each
+surface alias an exhaustive `switch` over exactly its codes must compile clean, and a comparison
+against every code it excludes must be `TS2367`. The runtime half is **the arms the table above
+names, and exactly those** — a range was written here twice and was wrong both times, because the
+`RM` band also holds arms that are not about a cell at all (the normalizer's, and the disposal
+linearisation's). Each reads **both edges** — where the value arrives _and_ every surface it is
+recorded as not reaching — because a positive-only witness is satisfied by a library that publishes
+every failure everywhere. The negative edge is no longer written arm by arm: the observation covers
+all seven surfaces, and what counts as empty is read off the **code's whole row** rather than off
+one arm's share of it, because two arms can split a row and neither of them is the authority on what
+the other's cell holds.
 
 **What a port owes here: this table, and the aliases with it.**
 
-**Not "a table of its own", which is what this said.** The sentence used to be
-that a port re-measures its _own_ matrix and that one whose `refresh()` resolves
-where this one rejects owes different aliases — and a reviewer refused it in one
-line: `ReqStateError` and the rest are **exported**, so they are v1 API and not a
-description of this implementation's paths. A port's freedom is in how it gets
-there, not in what a consumer can hold. A published union whose membership
-depends on who implemented it is a union a consumer cannot write a `switch`
-against.
+**Not "a table of its own", which is what this said.** The sentence used to be that a port
+re-measures its _own_ matrix and that one whose `refresh()` resolves where this one rejects owes
+different aliases — and a reviewer refused it in one line: `ReqStateError` and the rest are
+**exported**, so they are v1 API and not a description of this implementation's paths. A port's
+freedom is in how it gets there, not in what a consumer can hold. A published union whose membership
+depends on who implemented it is a union a consumer cannot write a `switch` against.
 
-So the table above is the **fixed v1 contract**, and what a port re-measures is
-that it satisfies the same one: every reachable cell reachable, every empty cell
-empty, the same aliases exported. Two of the entries here are what make that
-possible rather than merely stated:
+So the table above is the **fixed v1 contract**, and what a port re-measures is that it satisfies
+the same one: every reachable cell reachable, every empty cell empty, the same aliases exported. Two
+of the entries here are what make that possible rather than merely stated:
 
-- **`A11-P4`** closes the accumulator's freedom to move a cell. A conforming
-  accumulator does not re-publish a leg end's reason as a terminal failure, so
-  `relay-failed` is leg-only by contract rather than by how many accumulators
-  happen to ship — and a non-conforming one is named rather than disguised: the
-  terminal doors publish `accumulator-contract`, which is a remedy about the seam
-  the port installed. It is a **new** id and not a sharpening of `A11-P3`, which
-  is the evidence-separation rule and says something else entirely; the two were
-  one id for a round, and a reader could not tell which contract a port owed.
-- **The disposal linearisation** closes the provider's, and it is `C11-C17`
-  rather than prose. What a request is given is a **capability** — the machine,
-  `requestTargets` and the stream take operations, and nothing hands back an
-  `RxNostr` a caller can keep — so revoking is the client becoming unreachable
-  rather than a flag beside it. Disposal revokes before it cancels and cancels
-  before it disposes, and `provider-disposed` is therefore a rejection: not a
-  state a request can be left in by a race. A lease that returned the client
-  would not do: revocation that changes only the next answer leaves the borrow
-  already taken alive, which `RM14` drives on both sides of the revoke.
-- **The caller's own client is not this event.** The spike's low-level seam took an
-  `rxNostr` whose owner is the caller, and there is nobody to revoke it; a caller
-  who disposes it is told the seam is unusable — `invalid-descriptor` on
-  `rxNostr` — from the request and from `refresh()` alike (`C11-C8`, `RM4`,
-  `RM5`). One ownership event, one classification.
+- **`A11-P4`** closes the accumulator's freedom to move a cell. A conforming accumulator does not
+  re-publish a leg end's reason as a terminal failure, so `relay-failed` is leg-only by contract
+  rather than by how many accumulators happen to ship — and a non-conforming one is named rather
+  than disguised: the terminal doors publish `accumulator-contract`, which is a remedy about the
+  seam the port installed. It is a **new** id and not a sharpening of `A11-P3`, which is the
+  evidence-separation rule and says something else entirely; the two were one id for a round, and a
+  reader could not tell which contract a port owed.
+- **The disposal linearisation** closes the provider's, and it is `C11-C17` rather than prose. What
+  a request is given is a **capability** — the machine, `requestTargets` and the stream take
+  operations, and nothing hands back an `RxNostr` a caller can keep — so revoking is the client
+  becoming unreachable rather than a flag beside it. Disposal revokes before it cancels and cancels
+  before it disposes, and `provider-disposed` is therefore a rejection: not a state a request can be
+  left in by a race. A lease that returned the client would not do: revocation that changes only the
+  next answer leaves the borrow already taken alive, which `RM14` drives on both sides of the
+  revoke.
+- **The caller's own client is not this event.** The spike's low-level seam took an `rxNostr` whose
+  owner is the caller, and there is nobody to revoke it; a caller who disposes it is told the seam
+  is unusable — `invalid-descriptor` on `rxNostr` — from the request and from `refresh()` alike
+  (`C11-C8`, `RM4`, `RM5`). One ownership event, one classification.
 
 ### Drafted for the next round, and not contracts yet
 
-**These rows have no witness, so they are not in the catalogue above and the
-parser does not read them.** **Ten of the thirteen** have since been struck
-through: they were written, witnessed and moved into the catalogue with the
-change that made them true. The remaining **three** are struck **in half** and
-say which half — `NA-6`, `NB-1` and `NC-2` — and every remainder is the same
-thing: something that needs a **component** to exist, which the spike has none
-of, or a claim another row already holds. "The component builds this descriptor"
-and "the outlet renders with the handle" are the port's first run rather than a
-gap in the writing, and `NC-2`'s timer half is the clock's own row.
+**These rows have no witness, so they are not in the catalogue above and the parser does not read
+them.** **Ten of the thirteen** have since been struck through: they were written, witnessed and
+moved into the catalogue with the change that made them true. The remaining **three** are struck
+**in half** and say which half — `NA-6`, `NB-1` and `NC-2` — and every remainder is the same thing:
+something that needs a **component** to exist, which the spike has none of, or a claim another row
+already holds. "The component builds this descriptor" and "the outlet renders with the handle" are
+the port's first run rather than a gap in the writing, and `NC-2`'s timer half is the clock's own
+row.
 
-**Nothing on this list is owed _here_, and that is not the same as nothing
-being owed.** What is written is what a spike with no components can write:
-`NA-6`'s and `NB-1`'s component halves are **phase-2 obligations and a condition
-of the production port's accept**, not remainders that have quietly discharged
-themselves. Counting "the contract shape is fixed" and "a static witness exists"
-as _landed_ is the arithmetic that flatters, and the adjudication of 2026-09-11
-refused it.
+**Nothing on this list is owed _here_, and that is not the same as nothing being owed.** What is
+written is what a spike with no components can write: `NA-6`'s and `NB-1`'s component halves are
+**phase-2 obligations and a condition of the production port's accept**, not remainders that have
+quietly discharged themselves. Counting "the contract shape is fixed" and "a static witness exists"
+as _landed_ is the arithmetic that flatters, and the adjudication of 2026-09-11 refused it.
 
-The sentence is still worth the check it invites: the last row that _was_ owed
-here — `NC-3`'s re-add — was written rather than carried, and writing it found
-that the arm holding the row asserted its premise and stopped, with both halves
-of its own title unwitnessed.
-Their ids are written without backticks for exactly
-that reason: a row this branch cannot witness must not be counted among the rows
-it can. They are the thirteen observations the adjudication of 2026-09-10
-requires before the changed decisions can be accepted, one per unit-critical
-behaviour, and they are recorded here so the next round is written against a
-fixed list rather than against a memory of the conversation.
+The sentence is still worth the check it invites: the last row that _was_ owed here — `NC-3`'s
+re-add — was written rather than carried, and writing it found that the arm holding the row asserted
+its premise and stopped, with both halves of its own title unwitnessed. Their ids are written
+without backticks for exactly that reason: a row this branch cannot witness must not be counted
+among the rows it can. They are the thirteen observations the adjudication of 2026-09-10 requires
+before the changed decisions can be accepted, one per unit-critical behaviour, and they are recorded
+here so the next round is written against a fixed list rather than against a memory of the
+conversation.
 
-**The adjudication's own condition on them**: a unit test over a new internal
-function is not enough. Each has to combine the **public declarations**, the
-**Svelte call site**, the **wire**, and **timer or resource ownership**, so that
-the changed decision can be made false rather than the helper that implements it.
+**The adjudication's own condition on them**: a unit test over a new internal function is not
+enough. Each has to combine the **public declarations**, the **Svelte call site**, the **wire**, and
+**timer or resource ownership**, so that the changed decision can be made false rather than the
+helper that implements it.
 
 | Row      | Unit | What must be observable                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -3930,182 +3500,152 @@ the changed decision can be made false rather than the helper that implements it
 | ~~NC-4~~ | C    | **landed** as `C16-C1` rewritten (`CF3`, `CF3b`, and `SS1`/`SS5` on the server): the render does not fail, the children mount, the accepted scope is empty rather than partial, the refusal is on the diagnostics axis, and a valid update clears it on the same provider                                                                                                                                                                         |
 | ~~NC-5~~ | C    | **landed** as `C6-C10` (`RT6`): two overlapping subsets inside one provider reach the shared relay over one socket and only one of them reaches the other relay, and a second provider on the same relay is a second socket — which is the cost the descriptor field replaces                                                                                                                                                                     |
 
-**Five of the thirteen are about absence** — no key, no REQ, no timer, no
-listener, no socket, no re-send — and absence is the shape this repository has
-most often failed to witness. Each of those owes a positive control in the same
-arm: an arrangement where the thing _is_ created, so that "nothing was made" is
-distinguishable from "the probe was blind".
+**Five of the thirteen are about absence** — no key, no REQ, no timer, no listener, no socket, no
+re-send — and absence is the shape this repository has most often failed to witness. Each of those
+owes a positive control in the same arm: an arrangement where the thing _is_ created, so that
+"nothing was made" is distinguishable from "the probe was blind".
 
 ### What this catalogue was witnessed against, and where that is not the shipped thing
 
-**Every row about the provider was witnessed against a test fixture, and the
-record said so nowhere that outlives the branch.** `src/lib/stores/spike-v6/`
-contains no provider component: `createNostrContext` is a function, and the
-thing that applies a `relays` prop in an effect, mounts a subtree under it and
-tears the subtree down on a boundary throw is
-`src/tests/stores/spike-v6/fixtures/RelayProvider.svelte`. Every `C16`, `C6` and
-`C-δ` arm that mounts anything mounts that. A reader of these records would
-otherwise take "the provider" for `NostrApp`, which exists — as the **v1**
-component this redesign replaces, wired to none of this.
+**Every row about the provider was witnessed against a test fixture, and the record said so nowhere
+that outlives the branch.** `src/lib/stores/spike-v6/` contains no provider component:
+`createNostrContext` is a function, and the thing that applies a `relays` prop in an effect, mounts
+a subtree under it and tears the subtree down on a boundary throw is
+`src/tests/stores/spike-v6/fixtures/RelayProvider.svelte`. Every `C16`, `C6` and `C-δ` arm that
+mounts anything mounts that. A reader of these records would otherwise take "the provider" for
+`NostrApp`, which exists — as the **v1** component this redesign replaces, wired to none of this.
 
-**And the same is true of the hook, which this section did not say.** The
-published request surface is `useReq(plan: () => ReqPlan)`, whose request arm
-carries a descriptor of **six** fields (0004). What every row here was witnessed
-through is `useStreamedReq(getOpts: () => UseStreamedReqOpts)` — **23 fields**, of which
-`reqIdBase` and `filters` are required by the type and `rxNostr`, `client` and
-`attempts` are required in effect (declared optional, refused at run time when
-no provider supplies them) — **and requiredness is not ownership, which this
-sentence used to collapse**: it called all five "the things 0004 says the
-provider owns", and two of them are not. `filters` is the first field of the
-published six-field `ReqDescriptor`, so it is the _consumer's_; `reqIdBase` is
-minted by the library, which `0002` records and `0004` repeats where it says a
-port mints the request id rather than taking one. Only `rxNostr`, `client` and
-`attempts` are the provider-owned runtime the descriptor has nowhere to put. A
-reviewer found the collapse by reading this paragraph as a port would, and it
-is the one direction that matters: the sentence leads into "what a port
-inherits", so a port could have moved the caller's filters onto the provider
-and demanded a request-id base as a provider prop — which is `A16`/`C6`'s
-ownership boundary, backwards.
+**And the same is true of the hook, which this section did not say.** The published request surface
+is `useReq(plan: () => ReqPlan)`, whose request arm carries a descriptor of **six** fields (0004).
+What every row here was witnessed through is `useStreamedReq(getOpts: () => UseStreamedReqOpts)` —
+**23 fields**, of which `reqIdBase` and `filters` are required by the type and `rxNostr`, `client`
+and `attempts` are required in effect (declared optional, refused at run time when no provider
+supplies them) — **and requiredness is not ownership, which this sentence used to collapse**: it
+called all five "the things 0004 says the provider owns", and two of them are not. `filters` is the
+first field of the published six-field `ReqDescriptor`, so it is the _consumer's_; `reqIdBase` is
+minted by the library, which `0002` records and `0004` repeats where it says a port mints the
+request id rather than taking one. Only `rxNostr`, `client` and `attempts` are the provider-owned
+runtime the descriptor has nowhere to put. A reviewer found the collapse by reading this paragraph
+as a port would, and it is the one direction that matters: the sentence leads into "what a port
+inherits", so a port could have moved the caller's filters onto the provider and demanded a
+request-id base as a provider prop — which is `A16`/`C6`'s ownership boundary, backwards.
 
-**Requiredness and ownership are two statements, and only the second is a
-port's.** The five above are what the _spike's_ hook cannot run without. Who
-supplies each is the mapping a port needs, and it has three answers rather than
-one: **the consumer supplies `filters`**, in the request arm's descriptor; **the
-library mints `reqIdBase`**; **the provider owns `rxNostr`, `client` and
-`attempts`**. Nothing is true of all five on the ownership axis — the sentence
-that stood here claimed there was ("a v1 consumer cannot supply any of them"),
-in the paragraph that had just said `filters` is the consumer's, so the owner of
-`filters` depended on which sentence a reader stopped at. That is `A16`/`C6`'s
-entrance and it has to be one.
+**Requiredness and ownership are two statements, and only the second is a port's.** The five above
+are what the _spike's_ hook cannot run without. Who supplies each is the mapping a port needs, and
+it has three answers rather than one: **the consumer supplies `filters`**, in the request arm's
+descriptor; **the library mints `reqIdBase`**; **the provider owns `rxNostr`, `client` and
+`attempts`**. Nothing is true of all five on the ownership axis — the sentence that stood here
+claimed there was ("a v1 consumer cannot supply any of them"), in the paragraph that had just said
+`filters` is the consumer's, so the owner of `filters` depended on which sentence a reader stopped
+at. That is `A16`/`C6`'s entrance and it has to be one.
 
-Of the rest of the bag, `consumeSignal`, `poisonId`, `passiveAbort`,
-`initialData`, `enabled`, `refetchOnMount` and `staleTime` are spike-only
-switches for reproducing defects. So a port reading this section learned that the provider
-was one layer removed and not that the hook was: every `C5`, `C11`, `C12`,
-`C15`, `A11` and `A13` row was witnessed through an option bag four times the
-width of the published one, whose extra fields include the query-layer knobs
-`A4` says are not nameable. Found by reading these records as a port would, with
-the spike deleted.
+Of the rest of the bag, `consumeSignal`, `poisonId`, `passiveAbort`, `initialData`, `enabled`,
+`refetchOnMount` and `staleTime` are spike-only switches for reproducing defects. So a port reading
+this section learned that the provider was one layer removed and not that the hook was: every `C5`,
+`C11`, `C12`, `C15`, `A11` and `A13` row was witnessed through an option bag four times the width of
+the published one, whose extra fields include the query-layer knobs `A4` says are not nameable.
+Found by reading these records as a port would, with the spike deleted.
 
-**Which changes what a port inherits, and it is not the arm.** `C16-A1` already
-pins the stand-in against the props this record publishes, so the fixture is not
-free to drift from the declared surface; and it says a port keeps this check
-with its subject changed, because a boundary above the component under test is
-itself a component. What a port does _not_ inherit is the arrangement: it builds
-`NostrApp` for real, and the first time these rows run against a real component
-is the port's own first run. **The rows are contracts on behaviour and the
-evidence behind them is one layer removed** — that gap is the honest size of it,
-and it is smaller than "untested" and larger than "tested".
+**Which changes what a port inherits, and it is not the arm.** `C16-A1` already pins the stand-in
+against the props this record publishes, so the fixture is not free to drift from the declared
+surface; and it says a port keeps this check with its subject changed, because a boundary above the
+component under test is itself a component. What a port does _not_ inherit is the arrangement: it
+builds `NostrApp` for real, and the first time these rows run against a real component is the port's
+own first run. **The rows are contracts on behaviour and the evidence behind them is one layer
+removed** — that gap is the honest size of it, and it is smaller than "untested" and larger than
+"tested".
 
-**It is not repairable inside the spike**, which is why it is here rather than
-in a row's port column. Building the component would mean building the half of
-the published surface `0001` says this rebuild replaces, and `LK7` excludes by
-name for the same reason (`notBuiltYet` holds `useReq` and every component). The
-thing that was missing was the sentence, and the sentence had to be in a record
-that survives: the fact lived in a submission document and in this file's own
-`C16-A1` prose, and `grep -rn RelayProvider docs/` reached neither.
+**It is not repairable inside the spike**, which is why it is here rather than in a row's port
+column. Building the component would mean building the half of the published surface `0001` says
+this rebuild replaces, and `LK7` excludes by name for the same reason (`notBuiltYet` holds `useReq`
+and every component). The thing that was missing was the sentence, and the sentence had to be in a
+record that survives: the fact lived in a submission document and in this file's own `C16-A1` prose,
+and `grep -rn RelayProvider docs/` reached neither.
 
-**Three fixtures build a context, not one, and the first version of this
-paragraph counted one.** `RelayProvider.svelte` is the one `C16`, `C6` and `C-δ`
-mount and the one `WR15` polices against the declared props.
-`LazyRequestFromHandlerHost.svelte` builds its own — deliberately, because
-`WR15` forbids `RelayProvider` an `environment` prop and the server arm needs
-one — and it is what three of `A12-C4`'s five witnesses render.
-`ThrowsWhenTold.svelte` builds one in order to fail inside it, for `C16`'s
-initialisation-throw arm. **So "policed by `WR15`" covers the first and not the
-other two**, and what keeps those honest is only that each is a handful of lines
-whose whole content is the arrangement its arms need.
+**Three fixtures build a context, not one, and the first version of this paragraph counted one.**
+`RelayProvider.svelte` is the one `C16`, `C6` and `C-δ` mount and the one `WR15` polices against the
+declared props. `LazyRequestFromHandlerHost.svelte` builds its own — deliberately, because `WR15`
+forbids `RelayProvider` an `environment` prop and the server arm needs one — and it is what three of
+`A12-C4`'s five witnesses render. `ThrowsWhenTold.svelte` builds one in order to fail inside it, for
+`C16`'s initialisation-throw arm. **So "policed by `WR15`" covers the first and not the other two**,
+and what keeps those honest is only that each is a handful of lines whose whole content is the
+arrangement its arms need.
 
-**And nothing enumerates the fixture directory**, so a fourth would be
-invisible: `WR15`'s list is written by hand, and adding an unpublished prop to
-`LazyRequestFromHandlerHost` leaves the suite green — measured. That is the
-completeness edge this section does not have. A port inherits none of it, since
-the fixtures are the part that does not travel.
+**And nothing enumerates the fixture directory**, so a fourth would be invisible: `WR15`'s list is
+written by hand, and adding an unpublished prop to `LazyRequestFromHandlerHost` leaves the suite
+green — measured. That is the completeness edge this section does not have. A port inherits none of
+it, since the fixtures are the part that does not travel.
 
-**The other stand-ins are drivers rather than subjects**, checked:
-`runes.svelte.ts`'s `mount` is an effect root, the relay is
-`vitest-websocket-mock`, and no row's Then is a statement about either. The
-provider is the one place where the thing under test stands in for something the
-published surface names.
+**The other stand-ins are drivers rather than subjects**, checked: `runes.svelte.ts`'s `mount` is an
+effect root, the relay is `vitest-websocket-mock`, and no row's Then is a statement about either.
+The provider is the one place where the thing under test stands in for something the published
+surface names.
 
 ### Running it, and what of that survives the spike
 
-The check above is only worth what running it is worth. It had gone unrun across
-several rounds of work that added tests, and a re-run found **90/101** with three
-recorded claims false — nothing broken, the instrument simply not measuring. So
-the ledger runs in CI as `.github/workflows/contract-ledger.yml`: four shards,
-`pipefail` so that `tee` cannot swallow the exit status, and the result table on
-every pull request to `main` and every push to it, with **no path filter** — the
-set of files that can invalidate a measurement of the whole suite includes these
-five records, the lockfile and the test configuration, and enumerating it is how
-a filter comes to be wrong quietly.
+The check above is only worth what running it is worth. It had gone unrun across several rounds of
+work that added tests, and a re-run found **90/101** with three recorded claims false — nothing
+broken, the instrument simply not measuring. So the ledger runs in CI as
+`.github/workflows/contract-ledger.yml`: four shards, `pipefail` so that `tee` cannot swallow the
+exit status, and the result table on every pull request to `main` and every push to it, with **no
+path filter** — the set of files that can invalidate a measurement of the whole suite includes these
+five records, the lockfile and the test configuration, and enumerating it is how a filter comes to
+be wrong quietly.
 
-**Two limits of the checks themselves, stated because the checks do not outlive
-the branch and the rows do.** `CAT25` — the check that a row's named seam
-resolves to something — reads only identifiers written in backticks, so a row
-that names its seam in plain prose is unchecked and looks exactly like one that
-has none; a rule requiring code voice in that column was drafted and abandoned
-because a large minority of rows legitimately break it, writing an instruction
-rather than a seam — the count that stood here could not be reproduced against
-any reading of the column an adversarial pass could construct, so what survives
-is the reason and not a figure nothing derives.
-And the check resolves against the library's **code** rather than its comments,
-which it did not until this round: a symbol deleted from `src/lib` stayed
-"declared" for as long as one docblock still named it, which is the ordinary
-shape of a rename.
+**Two limits of the checks themselves, stated because the checks do not outlive the branch and the
+rows do.** `CAT25` — the check that a row's named seam resolves to something — reads only
+identifiers written in backticks, so a row that names its seam in plain prose is unchecked and looks
+exactly like one that has none; a rule requiring code voice in that column was drafted and abandoned
+because a large minority of rows legitimately break it, writing an instruction rather than a seam —
+the count that stood here could not be reproduced against any reading of the column an adversarial
+pass could construct, so what survives is the reason and not a figure nothing derives. And the check
+resolves against the library's **code** rather than its comments, which it did not until this round:
+a symbol deleted from `src/lib` stayed "declared" for as long as one docblock still named it, which
+is the ordinary shape of a rename.
 
-**And one about a published type this catalogue does not yet have a row for.**
-The expiry clock's `wakeAt` takes its domain from the tag parser two files away —
-a non-negative safe integer of seconds — and nothing at the clock defends it,
-because nothing else can reach it. Measured at both edges before this was
-written: `NaN` passes every guard, clears a pending timer and arms nothing, so it
-loses a deadline silently rather than spinning, while `Infinity` and
-`Number.MAX_SAFE_INTEGER` clamp like any far deadline. **Publishing the clock
-means checking `at` there or carrying the parser's guarantee into the published
-type**, and the same paragraph covers the other pairing nothing forbids: a source
-that never advances together with scheduling on re-arms for ever, which is right
-for a clock told time is not moving and is reachable through the published
-`clock` option.
+**And one about a published type this catalogue does not yet have a row for.** The expiry clock's
+`wakeAt` takes its domain from the tag parser two files away — a non-negative safe integer of
+seconds — and nothing at the clock defends it, because nothing else can reach it. Measured at both
+edges before this was written: `NaN` passes every guard, clears a pending timer and arms nothing, so
+it loses a deadline silently rather than spinning, while `Infinity` and `Number.MAX_SAFE_INTEGER`
+clamp like any far deadline. **Publishing the clock means checking `at` there or carrying the
+parser's guarantee into the published type**, and the same paragraph covers the other pairing
+nothing forbids: a source that never advances together with scheduling on re-arms for ever, which is
+right for a clock told time is not moving and is reachable through the published `clock` option.
 
-**And what a run costs is checked too, for the reason the rest of this section
-exists.** This ledger went from sixteen minutes to fifty-three across three
-changes — more entries, entries scoped to heavier suites, and this baseline pass
-— and no commit said so, because the only number a run reports is a wall clock
-and wall clocks differ by machine. `MU9` computes what a full run walks, from the
-ledger's own shape and a committed table of what each suite costs unmutated, and
-refuses a total the repository has not agreed to; the budget carries no slack, so
-an entry that costs more edits a number in the same commit. **What it charges an
-entry is its dearest suite rather than the sum of them**, because an entry hands
-vitest its whole scope in one invocation and vitest runs those files in
-parallel — measured, an eight-file entry whose suites sum to 46s takes 13s — and
-charging the sum both overstated the total by 41% and put a price on the negative
-controls a wide scope exists for, which is a reward for deleting them. **A port that keeps a
-ledger this size owes something of the shape**, or it will find out the same way.
+**And what a run costs is checked too, for the reason the rest of this section exists.** This ledger
+went from sixteen minutes to fifty-three across three changes — more entries, entries scoped to
+heavier suites, and this baseline pass — and no commit said so, because the only number a run
+reports is a wall clock and wall clocks differ by machine. `MU9` computes what a full run walks,
+from the ledger's own shape and a committed table of what each suite costs unmutated, and refuses a
+total the repository has not agreed to; the budget carries no slack, so an entry that costs more
+edits a number in the same commit. **What it charges an entry is its dearest suite rather than the
+sum of them**, because an entry hands vitest its whole scope in one invocation and vitest runs those
+files in parallel — measured, an eight-file entry whose suites sum to 46s takes 13s — and charging
+the sum both overstated the total by 41% and put a price on the negative controls a wide scope
+exists for, which is a reward for deleting them. **A port that keeps a ledger this size owes
+something of the shape**, or it will find out the same way.
 
-**What a kill set means was weaker than this section said, and the repair is the
-part a port should take.** The runner shortens two real-time budgets so that a
-mutation's hang costs seconds instead of minutes, and one witness needs longer
-than the shortened `--testTimeout`: it waits out a real one-second deadline and
-takes 3.2 seconds. It therefore failed under the runner **whatever was applied**,
-and every entry scoped to its file had it written into their kill sets as a
-witness that died — for as long as those entries have existed. Nothing could see
-it, because an arm that fails for every entry and an arm that every entry kills
-print the same thing. The count this catalogue quotes was that much larger than
-the measurement under it.
+**What a kill set means was weaker than this section said, and the repair is the part a port should
+take.** The runner shortens two real-time budgets so that a mutation's hang costs seconds instead of
+minutes, and one witness needs longer than the shortened `--testTimeout`: it waits out a real
+one-second deadline and takes 3.2 seconds. It therefore failed under the runner **whatever was
+applied**, and every entry scoped to its file had it written into their kill sets as a witness that
+died — for as long as those entries have existed. Nothing could see it, because an arm that fails
+for every entry and an arm that every entry kills print the same thing. The count this catalogue
+quotes was that much larger than the measurement under it.
 
-So the runner now runs **each scoped suite unmutated before the first mutation**
-and refuses the run by name if one is red; an arm slower than the budget carries
-its own, the way two already did. The price is one suite run per distinct file in
-the selected entries' scopes — seconds for a single entry, **4.2 to 4.4 minutes measured** for
-the whole ledger, and once per shard in CI, where the round-robin puts most files
-in every shard. **A port that shortens a deadline to make a mutation run
-affordable inherits this problem and should inherit the check with it**: the
-rule "do not read kill sets on a red baseline" had been written down here for
-rounds and was still being applied by memory.
+So the runner now runs **each scoped suite unmutated before the first mutation** and refuses the run
+by name if one is red; an arm slower than the budget carries its own, the way two already did. The
+price is one suite run per distinct file in the selected entries' scopes — seconds for a single
+entry, **4.2 to 4.4 minutes measured** for the whole ledger, and once per shard in CI, where the
+round-robin puts most files in every shard. **A port that shortens a deadline to make a mutation run
+affordable inherits this problem and should inherit the check with it**: the rule "do not read kill
+sets on a red baseline" had been written down here for rounds and was still being applied by memory.
 
-**That workflow is a spike-only instrument, and it is a report rather than a
-gate.** Measured rather than assumed, since GitHub authentication was available
-this round and the previous one said it could not be checked from a checkout:
+**That workflow is a spike-only instrument, and it is a report rather than a gate.** Measured rather
+than assumed, since GitHub authentication was available this round and the previous one said it
+could not be checked from a checkout:
 
 ```
 gh api repos/akiomik/nosvelte/rulesets               -> []
@@ -4113,42 +3653,38 @@ gh api repos/akiomik/nosvelte/branches/main/protection
   -> required_status_checks.contexts: ["build"]
 ```
 
-`contract-ledger` is not required, and is not going to be. This branch does not
-produce a pull request, and the workflow is deleted with the spike — requiring a
-check that is about to stop existing leaves a ruleset naming a job nothing
-produces, which blocks every pull request for the opposite of the intended
-reason. An earlier version of this section called it a merge gate and asked for
-that job name to be required after the port, which contradicted the same
-record's own account of what is disposable.
+`contract-ledger` is not required, and is not going to be. This branch does not produce a pull
+request, and the workflow is deleted with the spike — requiring a check that is about to stop
+existing leaves a ruleset naming a job nothing produces, which blocks every pull request for the
+opposite of the intended reason. An earlier version of this section called it a merge gate and asked
+for that job name to be required after the port, which contradicted the same record's own account of
+what is disposable.
 
 **What ports is the contracts, not the job.** The sequence is:
 
-- every row's **`Production evidence`** in the port-route roster leaves `TBD`,
-  row by row, and each entry is run rather than written — the **Implementation
-  test** column says what to write and never changes as it is written;
-- the spike is deleted only once that roster has no `TBD` **and** the
-  spike-artifact roster has no `unresolved` line — the two together are the
-  whole of the condition, and this workflow goes with it;
-- the implementation's contract tests may simply be part of the existing
-  required `build`, in which case nothing new has to be required at all;
-- if they warrant a job of their own, the implementation's pull request adds a
-  **persisting** job first and it is made required afterwards, in that order;
+- every row's **`Production evidence`** in the port-route roster leaves `TBD`, row by row, and each
+  entry is run rather than written — the **Implementation test** column says what to write and never
+  changes as it is written;
+- the spike is deleted only once that roster has no `TBD` **and** the spike-artifact roster has no
+  `unresolved` line — the two together are the whole of the condition, and this workflow goes with
+  it;
+- the implementation's contract tests may simply be part of the existing required `build`, in which
+  case nothing new has to be required at all;
+- if they warrant a job of their own, the implementation's pull request adds a **persisting** job
+  first and it is made required afterwards, in that order;
 - no part of this asks for a job called `contract-ledger` to exist again.
 
-A `sentinel` row is a measurement of a dependency, which is worth nothing
-without the version it was taken against. Those are pinned by a test rather than
-by prose — rx-nostr 3.7.5, `tanstack-svelte-query-v6` 6.1.38, and the query-core
-5.101.4 that resolves underneath it, which is _not_ the 5.90.2 at the top level.
-A bump fails that test and the measurements have to be re-taken.
+A `sentinel` row is a measurement of a dependency, which is worth nothing without the version it was
+taken against. Those are pinned by a test rather than by prose — rx-nostr 3.7.5,
+`tanstack-svelte-query-v6` 6.1.38, and the query-core 5.101.4 that resolves underneath it, which is
+_not_ the 5.90.2 at the top level. A bump fails that test and the measurements have to be re-taken.
 
-**`consulted` names rounds, and it had become a commit counter.** Every one of
-these five records carries `consulted: redesign review rounds 1-N` in its front
-matter, and for eleven commits running N went up by exactly one per commit. That
-tracked the rounds only while there was one repair commit per round; it stopped
-the moment a round took two commits or a commit closed two rounds, and by the
-time anybody re-derived it the records claimed 23 while two further rounds had
-been submitted and one of them already repaired. **The field is a claim about
-which feedback these records have been revised against**, so it moves when a
-round is closed rather than when a commit is made — and it is worth re-deriving
-from the feedback that exists rather than from the last value, which is the check
+**`consulted` names rounds, and it had become a commit counter.** Every one of these five records
+carries `consulted: redesign review rounds 1-N` in its front matter, and for eleven commits running
+N went up by exactly one per commit. That tracked the rounds only while there was one repair commit
+per round; it stopped the moment a round took two commits or a commit closed two rounds, and by the
+time anybody re-derived it the records claimed 23 while two further rounds had been submitted and
+one of them already repaired. **The field is a claim about which feedback these records have been
+revised against**, so it moves when a round is closed rather than when a commit is made — and it is
+worth re-deriving from the feedback that exists rather than from the last value, which is the check
 nothing here automates and the reason this paragraph is written down.
