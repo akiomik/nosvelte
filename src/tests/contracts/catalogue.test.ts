@@ -404,6 +404,13 @@ describe('the production contract bridge', () => {
       ].join('\n')
     ).rows;
     expect([...(wrapped.get('CT4') ?? [])]).toEqual(['A2-C1']);
+    // A declaration inside a string is not an arm either, though a marker sits
+    // directly above it: what counts is a call in the syntax tree.
+    expect([
+      ...declarationsIn(
+        ['  // @contracts A1-C1', `  const source = "${'it'}('CT6: fake', () => {});";`].join('\n')
+      ).rows.keys()
+    ]).toEqual([]);
     // A declaration inside a comment is not an arm.
     expect([
       ...declarationsIn(
@@ -496,7 +503,14 @@ describe('the production contract bridge', () => {
       `${'it'}('CT: y', function (ctx) { const n = 1; ctx.skip(); });`,
       `${'it'}('CT: y', async (context) => { await x(); context.skip(true, 'later'); });`,
       `${'it'}('CT: y', ({ skip }) => { const n = 1; skip(); });`,
-      `${'it'}('CT: y', ({ skip: skipTest }) => { const n = 1; skipTest(); });`
+      `${'it'}('CT: y', ({ skip: skipTest }) => { const n = 1; skipTest(); });`,
+      `${'describe'}('x', { ['skip']: true }, () => {});`,
+      `${'describe'}('x', { ...{ only: true } }, () => {});`,
+      `const options = { skip: true }; ${'describe'}('x', options, () => {});`,
+      `const quiet = ${'describe'}.skip; quiet('x', () => {});`,
+      `${'describe'}[mode]('x', () => {});`,
+      `${'describe'}('x', makeOptions(), () => {});`,
+      `${'describe'}('x', { [key]: true }, () => {});`
     ])
       expect(disabledIn(statement), `${statement} does not run`).not.toEqual([]);
     for (const statement of [
@@ -512,9 +526,22 @@ describe('the production contract bridge', () => {
       `${'it'}('CT: y', (ctx) => { other.skip(); });`,
       `${'it'}('CT: y', ({ expect }) => { source.pipe(skip(1)); });`,
       `${'it'}('CT: y', ({ skip: skipTest }) => { skip(); });`,
-      `${'it'}('CT: y', () => { const skip = 1; });`
+      `${'it'}('CT: y', () => { const skip = 1; });`,
+      `${'it'}('CT: y', () => {}, 20_000);`,
+      `const options = { timeout: 5 }; ${'describe'}('x', options, () => {});`,
+      `const plain = ${'describe'}; plain('x', () => {});`,
+      `${'describe'}['each']([1])('x', () => {});`
     ])
       expect(disabledIn(statement), `${statement} runs`).toEqual([]);
+    // Resolved rather than refused: a computed key that is a literal, a spread
+    // of an object and a `const` in the file are read, so each is reported as
+    // disabled by its options and not merely as options nobody could read.
+    for (const statement of [
+      `${'describe'}('x', { ['skip']: true }, () => {});`,
+      `${'describe'}('x', { ...{ only: true } }, () => {});`,
+      `const options = { skip: true }; ${'describe'}('x', options, () => {});`
+    ])
+      expect(disabledIn(statement), statement).toEqual([`x.test.ts:1 (disabled by its options)`]);
     // One report per declaration: a chain is read at its last link, so the
     // curried call inside it is not a second suite.
     expect(disabledIn(`${'describe'}.skipIf(true)('x', () => {});`)).toEqual(['x.test.ts:1']);
@@ -585,7 +612,7 @@ describe('the production contract bridge', () => {
       // running forms beside them are the controls — a curried `.each`, an
       // ordinary option, and a body that happens to hold `skip: true`.
       const tick = String.fromCharCode(96);
-      const suite = (opening: string, id: string, body = ''): string =>
+      const suiteSource = (opening: string, id: string, body = ''): string =>
         [
           `${opening} () => {`,
           ...(body === '' ? [] : [`  ${body}`]),
@@ -594,18 +621,18 @@ describe('the production contract bridge', () => {
           '});'
         ].join('\n');
       const suites: Record<string, string> = {
-        'each-skip': suite(`${'describe'}.each([1]).skip('x %s',`, 'CT14'),
-        'each-only': suite(`${'describe'}.each([1]).only('x %s',`, 'CT15'),
-        'tagged-skip': suite(
+        'each-skip': suiteSource(`${'describe'}.each([1]).skip('x %s',`, 'CT14'),
+        'each-only': suiteSource(`${'describe'}.each([1]).only('x %s',`, 'CT15'),
+        'tagged-skip': suiteSource(
           `${'describe'}.skip.each${tick}\n  a\n  $${'{'}1}\n${tick}('x $a',`,
           'CT17'
         ),
-        'alias-skip': suite(`${'suite'}.skip('x',`, 'CT18'),
-        'options-skip': suite(`${'describe'}('x', { skip: true },`, 'CT19'),
-        'options-only': suite(`${'suite'}('x', { only: true },`, 'CT20'),
-        'each-runs': suite(`${'describe'}.each([1])('x %s',`, 'CT16'),
-        'options-run': suite(`${'describe'}('x', { timeout: 5 },`, 'CT21'),
-        'body-says-skip': suite(`${'describe'}('x',`, 'CT22', 'const o = { skip: true };')
+        'alias-skip': suiteSource(`${'suite'}.skip('x',`, 'CT18'),
+        'options-skip': suiteSource(`${'describe'}('x', { skip: true },`, 'CT19'),
+        'options-only': suiteSource(`${'suite'}('x', { only: true },`, 'CT20'),
+        'each-runs': suiteSource(`${'describe'}.each([1])('x %s',`, 'CT16'),
+        'options-run': suiteSource(`${'describe'}('x', { timeout: 5 },`, 'CT21'),
+        'body-says-skip': suiteSource(`${'describe'}('x',`, 'CT22', 'const o = { skip: true };')
       };
       for (const [file, source] of Object.entries(suites))
         writeFileSync(join(sandbox, `${file}.test.ts`), source);

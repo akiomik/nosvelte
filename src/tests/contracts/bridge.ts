@@ -133,32 +133,27 @@ export function code(raw: string): string {
   return out;
 }
 
-/** The text of the call that starts at `at`, by matching its parentheses. */
-export const callAt = (source: string, at: number): string => {
-  const opened = source.indexOf('(', at);
-  if (opened === -1) return '';
-  let depth = 0;
-  for (let index = opened; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === '(') depth += 1;
-    else if (character === ')') {
-      depth -= 1;
-      if (depth === 0) return source.slice(at, index + 1);
-    }
-  }
+/** A parsed TypeScript source, with parent links. */
+const parse = (source: string): ts.SourceFile =>
+  ts.createSourceFile('arms.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
-  return source.slice(at);
-};
+/** Whether a callee declares an arm this bridge reads: `it(` or `it.fails(`. */
+const armCallee = (callee: ts.Expression): boolean =>
+  (ts.isIdentifier(callee) && callee.text === 'it') ||
+  (ts.isPropertyAccessExpression(callee) &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === 'it' &&
+    callee.name.text === 'fails');
 
 /**
  * The rows each test arm declares, its call text, and the ids declared twice.
  *
- * A marker `@contracts <id> …` belongs to the arm it sits **directly** above:
- * the comment block above the declaration, which a blank line ends. A marker
- * floating above a `describe` or at the top of a file belongs to nothing.
- * Declarations are found in the code with comments stripped — one somebody
- * commented out is not an arm — while markers, being comments, are read from
- * the raw lines at the same index.
+ * An arm is a call in the syntax tree — `it('ID: …', …)` or `it.fails(…)` —
+ * so text that only looks like one, inside a string or a comment, is not an
+ * arm. A marker `@contracts <id> …` belongs to the arm it sits **directly**
+ * above: the comment block above the line the call starts on, which a blank
+ * line ends. A marker floating above a `describe` or at the top of a file
+ * belongs to nothing.
  */
 export const declarationsIn = (
   source: string
@@ -166,26 +161,36 @@ export const declarationsIn = (
   const rows = new Map<string, Set<string>>();
   const bodies = new Map<string, string>();
   const twice: string[] = [];
-  const stripped = code(source);
+  const tree = parse(source);
   const lines = source.split('\n');
-  const startOf = (index: number): number => stripped.slice(0, index).split('\n').length - 1;
-  for (const arm of stripped.matchAll(declaresTest())) {
-    const id = arm[2] as string;
-    bodies.set(id, callAt(stripped, arm.index));
-    if (rows.has(id)) twice.push(id);
-    const declared = new Set<string>();
-    for (let above = startOf(arm.index) - 1; above >= 0; above -= 1) {
-      const text = (lines[above] as string).trim();
-      if (text === '') break;
-      if (!text.startsWith('//') && !text.startsWith('*') && !text.startsWith('/*')) break;
-      // The closer of a one-line JSDoc marker is not a row id.
-      const marker = /@contracts\s+(.+?)(?:\s*\*\/)?$/.exec(text);
-      if (marker !== null) {
-        for (const id of (marker[1] as string).trim().split(/\s+/)) declared.add(id);
+  const shape = new RegExp(`^(${TEST_ID}):`);
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && armCallee(node.expression)) {
+      const title = node.arguments[0];
+      const id =
+        title !== undefined && ts.isStringLiteralLike(title)
+          ? shape.exec(title.text)?.[1]
+          : undefined;
+      if (id !== undefined) {
+        bodies.set(id, node.getText(tree));
+        if (rows.has(id)) twice.push(id);
+        const declared = new Set<string>();
+        const start = tree.getLineAndCharacterOfPosition(node.getStart(tree)).line;
+        for (let above = start - 1; above >= 0; above -= 1) {
+          const text = (lines[above] as string).trim();
+          if (text === '') break;
+          if (!text.startsWith('//') && !text.startsWith('*') && !text.startsWith('/*')) break;
+          // The closer of a one-line JSDoc marker is not a row id.
+          const marker = /@contracts\s+(.+?)(?:\s*\*\/)?$/.exec(text);
+          if (marker !== null)
+            for (const row of (marker[1] as string).trim().split(/\s+/)) declared.add(row);
+        }
+        rows.set(id, declared);
       }
     }
-    rows.set(id, declared);
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
 
   return { rows, twice, bodies };
 };
@@ -231,16 +236,37 @@ const SUITES = new Set(['it', 'test', 'describe', 'suite']);
 const ARMS = new Set(['it', 'test']);
 const DISABLING = new Set(['skip', 'only', 'todo', 'skipIf', 'runIf']);
 
-/** A callee walked down to its root name, with every member named on the way. */
-const unwind = (expression: ts.Expression): { root: string | undefined; names: string[] } => {
+/** A property's own name, when it has one this check can read — `skip`, `'skip'` or `['skip']`. */
+const keyOf = (name: ts.Node): string | undefined =>
+  ts.isComputedPropertyName(name)
+    ? literalOf(name.expression)
+    : ts.isIdentifier(name) || ts.isStringLiteralLike(name)
+      ? name.text
+      : undefined;
+
+/** A string literal's text; a variable in its place is a name nobody can read. */
+const literalOf = (expression: ts.Expression): string | undefined =>
+  ts.isStringLiteralLike(expression) ? expression.text : undefined;
+
+/**
+ * A callee walked down to its root name, with every member named on the way.
+ * `opaque` says a member could not be read — `describe[mode]` — so the chain
+ * may hold a modifier nobody can see.
+ */
+const unwind = (
+  expression: ts.Expression
+): { root: string | undefined; names: string[]; opaque: boolean } => {
   const names: string[] = [];
+  let opaque = false;
   let at: ts.Expression = expression;
   for (;;) {
     if (ts.isPropertyAccessExpression(at)) {
       names.unshift(at.name.text);
       at = at.expression;
-    } else if (ts.isElementAccessExpression(at) && ts.isStringLiteralLike(at.argumentExpression)) {
-      names.unshift(at.argumentExpression.text);
+    } else if (ts.isElementAccessExpression(at)) {
+      const name = literalOf(at.argumentExpression);
+      if (name === undefined) opaque = true;
+      else names.unshift(name);
       at = at.expression;
     } else if (ts.isCallExpression(at)) at = at.expression;
     else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
@@ -248,7 +274,7 @@ const unwind = (expression: ts.Expression): { root: string | undefined; names: s
     else break;
   }
 
-  return { root: ts.isIdentifier(at) ? at.text : undefined, names };
+  return { root: ts.isIdentifier(at) ? at.text : undefined, names, opaque };
 };
 
 /** Whether `call` is the last link of its chain rather than a link inside one. */
@@ -264,31 +290,67 @@ const outermost = (call: ts.CallExpression): boolean => {
   );
 };
 
-/** A property's own name, when it has one this check can read. */
-const keyOf = (name: ts.Node): string | undefined =>
-  ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+const OPTION_KEYS = ['skip', 'only', 'todo'];
 
 /**
- * Whether the call's options disable it: a **top-level** `skip`, `only` or
- * `todo` set to anything but `false`. A property inside a nested object is
- * not an option of this call.
+ * What a call's options say about whether it runs: `disabled` for a
+ * **top-level** `skip`, `only` or `todo` set to anything but `false`,
+ * `unreadable` for options this check cannot evaluate, `undefined` for options
+ * that leave it running. A property inside a nested object is not an option of
+ * this call. A spread of an object, and a `const` in the same file, are
+ * followed; anything else that is neither the title, a function, a number nor
+ * `undefined` is unreadable rather than assumed harmless.
  */
-const disablingOptions = (call: ts.CallExpression): boolean =>
-  call.arguments.some(
-    (argument) =>
-      ts.isObjectLiteralExpression(argument) &&
-      argument.properties.some((property) => {
-        if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property))
-          return false;
-        const name = keyOf(property.name);
-        if (name === undefined || !['skip', 'only', 'todo'].includes(name)) return false;
+const optionsOf = (
+  call: ts.CallExpression,
+  consts: ReadonlyMap<string, ts.Expression>
+): 'disabled' | 'unreadable' | undefined => {
+  const judge = (value: ts.Expression, depth: number): 'disabled' | 'unreadable' | undefined => {
+    if (depth > 8) return 'unreadable';
+    if (ts.isParenthesizedExpression(value) || ts.isAsExpression(value))
+      return judge(value.expression, depth + 1);
+    if (ts.isNumericLiteral(value) || ts.isStringLiteralLike(value)) return undefined;
+    if (ts.isIdentifier(value)) {
+      if (value.text === 'undefined') return undefined;
+      const bound = consts.get(value.text);
 
-        return !(
-          ts.isPropertyAssignment(property) &&
-          property.initializer.kind === ts.SyntaxKind.FalseKeyword
-        );
-      })
-  );
+      return bound === undefined ? 'unreadable' : judge(bound, depth + 1);
+    }
+    if (!ts.isObjectLiteralExpression(value)) return 'unreadable';
+    let verdict: 'disabled' | 'unreadable' | undefined;
+    for (const property of value.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        verdict = judge(property.expression, depth + 1) ?? verdict;
+        if (verdict === 'disabled') return verdict;
+        continue;
+      }
+      const name = property.name === undefined ? undefined : keyOf(property.name);
+      if (name === undefined) {
+        // A computed key nobody can read may be any of the three.
+        verdict = 'unreadable';
+        continue;
+      }
+      if (!OPTION_KEYS.includes(name)) continue;
+      if (
+        ts.isPropertyAssignment(property) &&
+        property.initializer.kind === ts.SyntaxKind.FalseKeyword
+      )
+        continue;
+
+      return 'disabled';
+    }
+
+    return verdict;
+  };
+  let verdict: 'disabled' | 'unreadable' | undefined;
+  for (const [index, argument] of call.arguments.entries()) {
+    if (index === 0 || ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) continue;
+    verdict = judge(argument, 0) ?? verdict;
+    if (verdict === 'disabled') return verdict;
+  }
+
+  return verdict;
+};
 
 /**
  * Whether an arm's callback skips the test through its context: a call to
@@ -319,7 +381,7 @@ const skipsThroughContext = (call: ts.CallExpression): boolean => {
       const member = ts.isPropertyAccessExpression(callee)
         ? callee.name.text
         : ts.isElementAccessExpression(callee)
-          ? keyOf(callee.argumentExpression)
+          ? literalOf(callee.argumentExpression)
           : undefined;
       if (
         context !== undefined &&
@@ -352,16 +414,53 @@ export const inspect = (
   file: string,
   declared: ReadonlySet<string> = new Set()
 ): { disabled: string[]; unreadable: string[] } => {
-  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const tree = parse(source);
+  // Every `const` in the file, so an options object or a suite alias bound to
+  // one can be followed.
+  const consts = new Map<string, ts.Expression>();
+  const collect = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      ts.isVariableDeclarationList(node.parent) &&
+      (node.parent.flags & ts.NodeFlags.Const) !== 0
+    )
+      consts.set(node.name.text, node.initializer);
+    ts.forEachChild(node, collect);
+  };
+  collect(tree);
+  // A chain whose root is a `const` bound to another chain is that chain:
+  // `const quiet = describe.skip; quiet('x', …)`.
+  const resolve = (
+    expression: ts.Expression
+  ): { root: string | undefined; names: string[]; opaque: boolean } => {
+    let chain = unwind(expression);
+    for (let depth = 0; depth < 8; depth += 1) {
+      const bound = chain.root === undefined ? undefined : consts.get(chain.root);
+      if (bound === undefined || SUITES.has(chain.root as string)) break;
+      const inner = unwind(bound);
+      chain = {
+        root: inner.root,
+        names: [...inner.names, ...chain.names],
+        opaque: inner.opaque || chain.opaque
+      };
+    }
+
+    return chain;
+  };
   const disabled: string[] = [];
   const unreadable: string[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && outermost(node)) {
-      const { root, names } = unwind(node.expression);
+      const { root, names, opaque } = resolve(node.expression);
       if (root !== undefined && SUITES.has(root)) {
         const at = `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
         if (names.some((name) => DISABLING.has(name))) disabled.push(at);
-        if (disablingOptions(node)) disabled.push(`${at} (disabled by its options)`);
+        if (opaque) disabled.push(`${at} (a chain this bridge cannot read)`);
+        const options = optionsOf(node, consts);
+        if (options === 'disabled') disabled.push(`${at} (disabled by its options)`);
+        if (options === 'unreadable') disabled.push(`${at} (options this bridge cannot read)`);
         if (ARMS.has(root) && names.some((name) => name === 'each' || name === 'for'))
           disabled.push(`${at} (a table-driven arm; this bridge records one id per arm)`);
         if (ARMS.has(root) && skipsThroughContext(node))
