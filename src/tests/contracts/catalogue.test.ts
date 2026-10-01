@@ -510,7 +510,10 @@ describe('the production contract bridge', () => {
       `const quiet = ${'describe'}.skip; quiet('x', () => {});`,
       `${'describe'}[mode]('x', () => {});`,
       `${'describe'}('x', makeOptions(), () => {});`,
-      `${'describe'}('x', { [key]: true }, () => {});`
+      `${'describe'}('x', { [key]: true }, () => {});`,
+      `function make(options) { ${'describe'}('x', options, () => {}); }`,
+      `let quiet = ${'describe'}.skip; quiet = ${'describe'}; quiet('x', () => { ${'it'}('CT1: y', () => {}); });`,
+      `forEachRelay(() => { ${'it'}('CT1: y', () => {}); });`
     ])
       expect(disabledIn(statement), `${statement} does not run`).not.toEqual([]);
     for (const statement of [
@@ -530,7 +533,16 @@ describe('the production contract bridge', () => {
       `${'it'}('CT: y', () => {}, 20_000);`,
       `const options = { timeout: 5 }; ${'describe'}('x', options, () => {});`,
       `const plain = ${'describe'}; plain('x', () => {});`,
-      `${'describe'}['each']([1])('x', () => {});`
+      `${'describe'}['each']([1])('x', () => {});`,
+      `${'describe'}('x', { ...{ skip: true }, skip: false }, () => {});`,
+      [
+        'const options = { skip: false };',
+        `${'describe'}('x', options, () => {`,
+        '  const options = { skip: true };',
+        '});'
+      ].join(' '),
+      `${'describe'}('x', { skip: 0, only: '' }, () => {});`,
+      `${'describe'}('x', () => { beforeEach(() => {}); ${'it'}('CT1: y', () => {}); });`
     ])
       expect(disabledIn(statement), `${statement} runs`).toEqual([]);
     // Resolved rather than refused: a computed key that is a literal, a spread
@@ -539,7 +551,16 @@ describe('the production contract bridge', () => {
     for (const statement of [
       `${'describe'}('x', { ['skip']: true }, () => {});`,
       `${'describe'}('x', { ...{ only: true } }, () => {});`,
-      `const options = { skip: true }; ${'describe'}('x', options, () => {});`
+      `const options = { skip: true }; ${'describe'}('x', options, () => {});`,
+      // The binding where the name is used, not the last one in the file.
+      [
+        'const options = { skip: true };',
+        `${'describe'}('x', options, () => {`,
+        '  const options = { skip: false };',
+        '});'
+      ].join(' '),
+      // The final value of each key, after every spread.
+      `${'describe'}('x', { skip: false, ...{ skip: true } }, () => {});`
     ])
       expect(disabledIn(statement), statement).toEqual([`x.test.ts:1 (disabled by its options)`]);
     // One report per declaration: a chain is read at its last link, so the

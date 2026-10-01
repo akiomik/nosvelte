@@ -249,13 +249,13 @@ const literalOf = (expression: ts.Expression): string | undefined =>
   ts.isStringLiteralLike(expression) ? expression.text : undefined;
 
 /**
- * A callee walked down to its root name, with every member named on the way.
+ * A callee walked down to its root, with every member named on the way.
  * `opaque` says a member could not be read — `describe[mode]` — so the chain
  * may hold a modifier nobody can see.
  */
 const unwind = (
   expression: ts.Expression
-): { root: string | undefined; names: string[]; opaque: boolean } => {
+): { root: ts.Identifier | undefined; names: string[]; opaque: boolean } => {
   const names: string[] = [];
   let opaque = false;
   let at: ts.Expression = expression;
@@ -274,7 +274,38 @@ const unwind = (
     else break;
   }
 
-  return { root: ts.isIdentifier(at) ? at.text : undefined, names, opaque };
+  return { root: ts.isIdentifier(at) ? at : undefined, names, opaque };
+};
+
+/**
+ * What a name refers to **where it is used**: the initializer of the `const`
+ * the type checker binds it to, `'unknown'` for any other binding — a
+ * parameter, a `let`, an import — and `undefined` for a name bound to nothing
+ * in the file. Scope is the checker's, so an inner `const` with the same name
+ * shadows an outer one only where it is in scope.
+ */
+type Binding = ts.Expression | 'unknown' | undefined;
+
+const checkerFor = (tree: ts.SourceFile): ts.TypeChecker => {
+  const options: ts.CompilerOptions = { noLib: true, noResolve: true, types: [] };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = (name) => (name === tree.fileName ? tree : undefined);
+  host.fileExists = (name) => name === tree.fileName;
+
+  return ts.createProgram({ rootNames: [tree.fileName], options, host }).getTypeChecker();
+};
+
+const bindingOf = (checker: ts.TypeChecker, name: ts.Identifier): Binding => {
+  const declaration = checker.getSymbolAtLocation(name)?.declarations?.[0];
+  if (declaration === undefined) return undefined;
+  if (
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer !== undefined &&
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+  )
+    return declaration.initializer;
+
+  return 'unknown';
 };
 
 /** Whether `call` is the last link of its chain rather than a link inside one. */
@@ -290,66 +321,91 @@ const outermost = (call: ts.CallExpression): boolean => {
   );
 };
 
-const OPTION_KEYS = ['skip', 'only', 'todo'];
+const OPTION_KEYS = ['skip', 'only', 'todo'] as const;
+type Setting = 'runs' | 'off' | 'unknown';
 
 /**
- * What a call's options say about whether it runs: `disabled` for a
- * **top-level** `skip`, `only` or `todo` set to anything but `false`,
- * `unreadable` for options this check cannot evaluate, `undefined` for options
- * that leave it running. A property inside a nested object is not an option of
- * this call. A spread of an object, and a `const` in the same file, are
- * followed; anything else that is neither the title, a function, a number nor
- * `undefined` is unreadable rather than assumed harmless.
+ * What a call's options say about whether it runs: `disabled` when `skip`,
+ * `only` or `todo` ends up truthy, `unreadable` when one of them ends up with a
+ * value this check cannot evaluate, `undefined` when all of them leave it
+ * running.
+ *
+ * The properties are folded **in order**, as the runtime folds them, so a
+ * later `skip: false` overrides a spread that set it, and only the final value
+ * of each key counts. A property inside a nested object is not an option. A
+ * spread, a shorthand property and a name are followed to the `const` they are
+ * bound to where they are used; anything else this check cannot evaluate — a
+ * call, a parameter, a computed key from a variable — leaves the keys it could
+ * set unknown rather than assumed harmless. A title, a function, a number or a
+ * string is not an options argument.
  */
 const optionsOf = (
   call: ts.CallExpression,
-  consts: ReadonlyMap<string, ts.Expression>
+  checker: ts.TypeChecker
 ): 'disabled' | 'unreadable' | undefined => {
-  const judge = (value: ts.Expression, depth: number): 'disabled' | 'unreadable' | undefined => {
-    if (depth > 8) return 'unreadable';
+  const settings = new Map<string, Setting>();
+  const unknownAll = (): void => {
+    for (const key of OPTION_KEYS) settings.set(key, 'unknown');
+  };
+  const settingOf = (value: ts.Expression, depth: number): Setting => {
+    if (depth > 8) return 'unknown';
     if (ts.isParenthesizedExpression(value) || ts.isAsExpression(value))
-      return judge(value.expression, depth + 1);
-    if (ts.isNumericLiteral(value) || ts.isStringLiteralLike(value)) return undefined;
+      return settingOf(value.expression, depth + 1);
+    if (value.kind === ts.SyntaxKind.FalseKeyword || value.kind === ts.SyntaxKind.NullKeyword)
+      return 'runs';
+    if (value.kind === ts.SyntaxKind.TrueKeyword) return 'off';
+    if (ts.isNumericLiteral(value)) return Number(value.text) === 0 ? 'runs' : 'off';
+    if (ts.isStringLiteralLike(value)) return value.text === '' ? 'runs' : 'off';
     if (ts.isIdentifier(value)) {
-      if (value.text === 'undefined') return undefined;
-      const bound = consts.get(value.text);
+      if (value.text === 'undefined') return 'runs';
+      const bound = bindingOf(checker, value);
 
-      return bound === undefined ? 'unreadable' : judge(bound, depth + 1);
+      return bound === undefined || bound === 'unknown' ? 'unknown' : settingOf(bound, depth + 1);
     }
-    if (!ts.isObjectLiteralExpression(value)) return 'unreadable';
-    let verdict: 'disabled' | 'unreadable' | undefined;
+
+    return 'unknown';
+  };
+  const fold = (value: ts.Expression, depth: number): void => {
+    if (depth > 8) return unknownAll();
+    if (ts.isParenthesizedExpression(value) || ts.isAsExpression(value))
+      return fold(value.expression, depth + 1);
+    if (ts.isNumericLiteral(value) || ts.isStringLiteralLike(value)) return;
+    if (ts.isIdentifier(value)) {
+      if (value.text === 'undefined') return;
+      const bound = bindingOf(checker, value);
+
+      return bound === undefined || bound === 'unknown' ? unknownAll() : fold(bound, depth + 1);
+    }
+    if (!ts.isObjectLiteralExpression(value)) return unknownAll();
     for (const property of value.properties) {
       if (ts.isSpreadAssignment(property)) {
-        verdict = judge(property.expression, depth + 1) ?? verdict;
-        if (verdict === 'disabled') return verdict;
+        fold(property.expression, depth + 1);
         continue;
       }
-      const name = property.name === undefined ? undefined : keyOf(property.name);
+      const name = keyOf(property.name);
       if (name === undefined) {
         // A computed key nobody can read may be any of the three.
-        verdict = 'unreadable';
+        unknownAll();
         continue;
       }
-      if (!OPTION_KEYS.includes(name)) continue;
-      if (
-        ts.isPropertyAssignment(property) &&
-        property.initializer.kind === ts.SyntaxKind.FalseKeyword
-      )
-        continue;
-
-      return 'disabled';
+      if (!(OPTION_KEYS as readonly string[]).includes(name)) continue;
+      settings.set(
+        name,
+        ts.isPropertyAssignment(property)
+          ? settingOf(property.initializer, depth + 1)
+          : ts.isShorthandPropertyAssignment(property)
+            ? settingOf(property.name, depth + 1)
+            : 'unknown'
+      );
     }
-
-    return verdict;
   };
-  let verdict: 'disabled' | 'unreadable' | undefined;
-  for (const [index, argument] of call.arguments.entries()) {
-    if (index === 0 || ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) continue;
-    verdict = judge(argument, 0) ?? verdict;
-    if (verdict === 'disabled') return verdict;
-  }
+  for (const [index, argument] of call.arguments.entries())
+    if (index > 0 && !ts.isArrowFunction(argument) && !ts.isFunctionExpression(argument))
+      fold(argument, 0);
+  const final = [...settings.values()];
+  if (final.includes('off')) return 'disabled';
 
-  return verdict;
+  return final.includes('unknown') ? 'unreadable' : undefined;
 };
 
 /**
@@ -415,30 +471,19 @@ export const inspect = (
   declared: ReadonlySet<string> = new Set()
 ): { disabled: string[]; unreadable: string[] } => {
   const tree = parse(source);
-  // Every `const` in the file, so an options object or a suite alias bound to
-  // one can be followed.
-  const consts = new Map<string, ts.Expression>();
-  const collect = (node: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined &&
-      ts.isVariableDeclarationList(node.parent) &&
-      (node.parent.flags & ts.NodeFlags.Const) !== 0
-    )
-      consts.set(node.name.text, node.initializer);
-    ts.forEachChild(node, collect);
-  };
-  collect(tree);
+  const checker = checkerFor(tree);
   // A chain whose root is a `const` bound to another chain is that chain:
-  // `const quiet = describe.skip; quiet('x', …)`.
+  // `const quiet = describe.skip; quiet('x', …)`. A root bound some other way
+  // — a parameter, a `let` — cannot be read.
   const resolve = (
     expression: ts.Expression
   ): { root: string | undefined; names: string[]; opaque: boolean } => {
     let chain = unwind(expression);
     for (let depth = 0; depth < 8; depth += 1) {
-      const bound = chain.root === undefined ? undefined : consts.get(chain.root);
-      if (bound === undefined || SUITES.has(chain.root as string)) break;
+      const root = chain.root;
+      if (root === undefined || SUITES.has(root.text)) break;
+      const bound = bindingOf(checker, root);
+      if (bound === undefined || bound === 'unknown') break;
       const inner = unwind(bound);
       chain = {
         root: inner.root,
@@ -447,18 +492,46 @@ export const inspect = (
       };
     }
 
-    return chain;
+    return { root: chain.root?.text, names: chain.names, opaque: chain.opaque };
   };
   const disabled: string[] = [];
   const unreadable: string[] = [];
+  const shape = new RegExp(`^(${TEST_ID}):`);
+  // Whether a function handed to this call declares an arm somewhere inside it.
+  const wrapsArm = (call: ts.CallExpression): boolean => {
+    let found = false;
+    const look = (node: ts.Node): void => {
+      if (found) return;
+      if (ts.isCallExpression(node) && armCallee(node.expression)) {
+        const title = node.arguments[0];
+        if (title !== undefined && ts.isStringLiteralLike(title) && shape.test(title.text))
+          found = true;
+      }
+      ts.forEachChild(node, look);
+    };
+    for (const argument of call.arguments)
+      if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) look(argument.body);
+
+    return found;
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && outermost(node)) {
       const { root, names, opaque } = resolve(node.expression);
+      // A call this check cannot identify as a suite, around an arm: whether
+      // that arm runs is the call's decision, and nothing here can read it.
+      if (
+        (root === undefined || !SUITES.has(root)) &&
+        !armCallee(node.expression) &&
+        wrapsArm(node)
+      )
+        disabled.push(
+          `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1} (arms inside a call this bridge cannot read)`
+        );
       if (root !== undefined && SUITES.has(root)) {
         const at = `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
         if (names.some((name) => DISABLING.has(name))) disabled.push(at);
         if (opaque) disabled.push(`${at} (a chain this bridge cannot read)`);
-        const options = optionsOf(node, consts);
+        const options = optionsOf(node, checker);
         if (options === 'disabled') disabled.push(`${at} (disabled by its options)`);
         if (options === 'unreadable') disabled.push(`${at} (options this bridge cannot read)`);
         if (ARMS.has(root) && names.some((name) => name === 'each' || name === 'for'))
