@@ -31,6 +31,7 @@ import {
   PRODUCTION_ROOT,
   PRODUCTION_ROOT_LEAF,
   ROUTES,
+  skipsInside,
   TEST_ID
 } from './bridge.js';
 
@@ -505,6 +506,23 @@ describe('the production contract bridge', () => {
     ])
       expect(collectDisabled(spelling), `${spelling} runs`).toEqual([]);
 
+    // Skipping from inside the body, both ways.
+    const armCalling = (callback: string): string => `${'it'}('CT: y', ${callback})`;
+    for (const callback of [
+      '(ctx) => { ctx.skip(); }',
+      'async (context) => { await x(); context.skip(true, "later"); }',
+      '({ skip }) => { const y = 1; skip(); }',
+      'ctx => { ctx.skip(); }'
+    ])
+      expect(skipsInside(armCalling(callback)), `${callback} skips`).toBe(true);
+    for (const callback of [
+      '(ctx) => { expect(ctx.task).toBeDefined(); }',
+      '(ctx) => { other.skip(); }',
+      '({ expect }) => { source.pipe(skip(1)); }',
+      '() => { const skip = 1; }'
+    ])
+      expect(skipsInside(armCalling(callback)), `${callback} runs`).toBe(false);
+
     // The walker itself, over a directory that exists.
     const sandbox = mkdtempSync(join(tmpdir(), 'nosvelte-contracts-'));
     try {
@@ -565,23 +583,62 @@ describe('the production contract bridge', () => {
       // A modifier after the first call of a suite chain: through the walker,
       // because the chain is what the walker extracts. The curried form, which
       // runs, is the control.
-      const suite = (chain: string, id: string): string =>
+      // How a suite is disabled, through the walker, because the declaration
+      // the walker extracts is what decides: a modifier after the first call,
+      // a tagged template, the `suite` alias, and the suite's own options. The
+      // running forms beside them are the controls — a curried `.each`, an
+      // ordinary option, and a body that happens to hold `skip: true`.
+      const tick = String.fromCharCode(96);
+      const suite = (opening: string, id: string, body = ''): string =>
         [
-          `${'describe'}${chain}('x %s', () => {`,
+          `${opening} () => {`,
+          ...(body === '' ? [] : [`  ${body}`]),
           '  // @contracts A8-C1',
           `  ${'it'}('${id}: inside', () => { expect(1).toBe(1); });`,
           '});'
         ].join('\n');
-      writeFileSync(join(sandbox, 'each-skip.test.ts'), suite('.each([1]).skip', 'CT14'));
-      writeFileSync(join(sandbox, 'each-only.test.ts'), suite('.each([1]).only', 'CT15'));
-      writeFileSync(join(sandbox, 'each-runs.test.ts'), suite('.each([1])', 'CT16'));
-      expect(collectFrom(sandbox).disabled.sort()).toEqual([
+      const suites: Record<string, string> = {
+        'each-skip': suite(`${'describe'}.each([1]).skip('x %s',`, 'CT14'),
+        'each-only': suite(`${'describe'}.each([1]).only('x %s',`, 'CT15'),
+        'tagged-skip': suite(
+          `${'describe'}.skip.each${tick}\n  a\n  $${'{'}1}\n${tick}('x $a',`,
+          'CT17'
+        ),
+        'alias-skip': suite(`${'suite'}.skip('x',`, 'CT18'),
+        'options-skip': suite(`${'describe'}('x', { skip: true },`, 'CT19'),
+        'options-only': suite(`${'suite'}('x', { only: true },`, 'CT20'),
+        'each-runs': suite(`${'describe'}.each([1])('x %s',`, 'CT16'),
+        'options-run': suite(`${'describe'}('x', { timeout: 5 },`, 'CT21'),
+        'body-says-skip': suite(`${'describe'}('x',`, 'CT22', 'const o = { skip: true };')
+      };
+      for (const [file, source] of Object.entries(suites))
+        writeFileSync(join(sandbox, `${file}.test.ts`), source);
+      const walked = collectFrom(sandbox);
+      expect(walked.disabled.sort()).toEqual([
+        'alias-skip.test.ts:1',
         'deep/skipped.test.ts:2',
         'each-only.test.ts:1',
-        'each-skip.test.ts:1'
+        'each-skip.test.ts:1',
+        'options-only.test.ts:1 (disabled by its options)',
+        'options-skip.test.ts:1 (disabled by its options)',
+        'tagged-skip.test.ts:1'
       ]);
-      for (const file of ['each-skip', 'each-only', 'each-runs'])
-        rmSync(join(sandbox, `${file}.test.ts`));
+      expect(walked.tests.has('CT17'), 'the arm inside the tagged suite was read').toBe(true);
+
+      // And an arm that skips itself through its context, after a statement,
+      // so that nothing but the body check can see it.
+      writeFileSync(
+        join(sandbox, 'context-skip.test.ts'),
+        [
+          '  // @contracts A9-C1',
+          `  ${'it'}('CT23: skips itself', (ctx) => { const x = 1; ctx.skip(); expect(x).toBe(1); });`
+        ].join('\n')
+      );
+      expect(collectFrom(sandbox).disabled).toContain(
+        'CT23 in context-skip.test.ts (skipped from inside its body)'
+      );
+      rmSync(join(sandbox, 'context-skip.test.ts'));
+      for (const file of Object.keys(suites)) rmSync(join(sandbox, `${file}.test.ts`));
       writeFileSync(
         join(sandbox, 'prose.test.ts'),
         [

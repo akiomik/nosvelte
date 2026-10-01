@@ -150,26 +150,48 @@ export const callAt = (source: string, at: number): string => {
 
 /**
  * The whole declaration chain that starts at `at`: the callee, every member
- * and every call after it — `describe.each([1]).skip('x', fn)` and the curried
- * `describe.each([1])('x', fn)` alike.
+ * and every call or tagged template after it — `describe.each([1]).skip('x',
+ * fn)`, the curried `describe.each([1])('x', fn)` and the tagged
+ * ``describe.skip.each`…`('x', fn)`` alike.
  *
  * `callAt` stops at the first call's closing parenthesis, which for a
  * parametrised suite is `describe.each([1])`, so a disabling modifier written
  * after it was invisible and the arms inside were credited as running.
  */
+/** The template literal that opens at `at`, with its `${…}` holes. */
+const templateAt = (source: string, at: number): string => {
+  let depth = 0;
+  for (let index = at + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '\\') index += 1;
+    else if (depth === 0 && character === '`') return source.slice(at, index + 1);
+    else if (character === '$' && source[index + 1] === '{') {
+      depth += 1;
+      index += 1;
+    } else if (depth > 0 && character === '{') depth += 1;
+    else if (depth > 0 && character === '}') depth -= 1;
+  }
+
+  return source.slice(at);
+};
+
 export const chainAt = (source: string, at: number): string => {
   let index = at;
   let text = '';
   for (;;) {
-    const open = source.indexOf('(', index);
-    if (open === -1) break;
-    const callee = source.slice(index, open);
-    // Only a name, or members of one, may stand between two calls.
-    if (!/^\s*(?:\.?\s*[A-Za-z_$][\w$]*\s*)*$/.test(callee)) break;
-    const call = callAt(source, open);
-    text += callee + call;
-    index = open + call.length;
-    if (!/^\s*[.(]/.test(source.slice(index))) break;
+    // Only a name, or members of one, may stand before each call or tag.
+    const callee = /^\s*(?:\.?\s*[A-Za-z_$][\w$]*\s*)*/.exec(source.slice(index))?.[0] ?? '';
+    const opens = index + callee.length;
+    const segment =
+      source[opens] === '('
+        ? callAt(source, opens)
+        : source[opens] === '`'
+          ? templateAt(source, opens)
+          : undefined;
+    if (segment === undefined) break;
+    text += callee + segment;
+    index = opens + segment.length;
+    if (!/^\s*[.(`]/.test(source.slice(index))) break;
   }
 
   return text;
@@ -246,8 +268,14 @@ export const mergeDeclarations = (
 export const collectDisabled = (call: string): string[] => {
   const bare = call.trim().replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
   const found: string[] = [];
-  if (/^(it|describe|test)\b[^;]*\.(skip|only|todo|skipIf|runIf)\b/.test(bare)) found.push('');
-  if (/^(it|test)\b[^;]*\{[^}]*\b(skip|only|todo)\s*:\s*true/.test(bare))
+  if (/^(it|describe|test|suite)\b[^;]*\.(skip|only|todo|skipIf|runIf)\b/.test(bare))
+    found.push('');
+  // A suite's options sit right after its title; anything later is its body,
+  // where an object that happens to say `skip: true` is not an option.
+  if (
+    /^(it|test)\b[^;]*\{[^}]*\b(skip|only|todo)\s*:\s*true/.test(bare) ||
+    /^(describe|suite)\b[^;]*?\(\s*''\s*,\s*\{[^}]*\b(skip|only|todo)\s*:\s*true/.test(bare)
+  )
     found.push(' (disabled by its options)');
   if (/^(it|test)\b[^;]*\.each\b/.test(bare))
     found.push(' (a table-driven arm; this bridge records one id per arm)');
@@ -268,6 +296,27 @@ export const asserts = (body: string): boolean => {
     /\bexpect(?:Type)?Of\s*\(/.test(bare) ||
     /\bassert(?:\.\w+)?\s*\(/.test(bare) ||
     /\bexpect\s*\.\s*(?:assertions|hasAssertions|unreachable)\s*\(/.test(bare)
+  );
+};
+
+/**
+ * Whether an arm skips itself at run time through its test context —
+ * `(ctx) => { ctx.skip(); … }` or `({ skip }) => { skip(); … }`. The
+ * declaration then reads as running, and only the body says otherwise.
+ */
+export const skipsInside = (call: string): boolean => {
+  const bare = code(call).replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
+  const named = /,\s*(?:async\s+)?(?:\(\s*([A-Za-z_$][\w$]*)\s*[,:)]|([A-Za-z_$][\w$]*)\s*=>)/.exec(
+    bare
+  );
+  const name = named?.[1] ?? named?.[2];
+  if (name !== undefined && new RegExp(`\\b${name}\\s*\\.\\s*skip\\s*\\(`).test(bare)) return true;
+  const destructured = /,\s*(?:async\s+)?\(\s*\{([^}]*)\}/.exec(bare);
+
+  return (
+    destructured !== null &&
+    /\bskip\b/.test(destructured[1] as string) &&
+    /(?<![.\w$])skip\s*\(/.test(bare.slice(destructured.index + destructured[0].length))
   );
 };
 
@@ -299,13 +348,15 @@ export const collectFrom = (root: string): Landings => {
   const disabled: string[] = [];
   for (const { file, source } of files) {
     const parsed = declarationsIn(source);
-    for (const [id, body] of parsed.bodies)
+    for (const [id, body] of parsed.bodies) {
       if (!asserts(body)) assertionless.push(`${id} in ${file}`);
+      if (skipsInside(body)) disabled.push(`${id} in ${file} (skipped from inside its body)`);
+    }
     const declared = new Set(parsed.rows.keys());
     const stripped = code(source);
     const strippedLines = stripped.split('\n');
     for (const [at, line] of source.split('\n').entries()) {
-      if (!/^\s*(it|describe|test)\b/.test(line)) continue;
+      if (!/^\s*(it|describe|test|suite)\b/.test(line)) continue;
       // The whole chain rather than the line, because the title may be on the
       // next one and a modifier may follow the first call.
       const from = strippedLines.slice(0, at).join('\n').length + (at > 0 ? 1 : 0);
