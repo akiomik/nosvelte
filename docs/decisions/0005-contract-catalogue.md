@@ -1202,10 +1202,12 @@ So a row carries two fields of its own, in the roster below, and neither is infe
   member of each chain, each call's options folded to their final values, and a `skip` the arm calls
   through its own test context. Options and tables are read only where they are written — `const`
   freezes a binding, not the object behind it — and a name inside them is followed only to a `const`
-  bound to a primitive. The test context is credited only when it is read as a member other than
-  `skip`; taking it apart, handing it on or aliasing it is refused. **Everything outside that shape
-  is refused, not modelled** — an arm under an `if`, in a loop, a `try`, a helper or a function
-  declaration, a suite reached through a `let`, options or a table from a name, a call or a
+  bound to a primitive. The test context is credited only when it is read through `expect`,
+  `signal`, `onTestFailed`, `onTestFinished` or `annotate`, none of which leads back to it — `task`
+  does, as `ctx.task.context` — and taking it apart, handing it on or aliasing it is refused.
+  `undefined` is the global only when nothing in the file binds the name. **Everything outside that
+  shape is refused, not modelled** — an arm under an `if`, in a loop, a `try`, a helper or a
+  function declaration, a suite reached through a `let`, options or a table from a name, a call or a
   parameter — because whether it runs is decided by something the check does not read. Two
   consequences are deliberate. A shape the check refuses although the runner would run it is not a
   defect: the landing is rewritten into the shape. A shape inside the allow-list that the check

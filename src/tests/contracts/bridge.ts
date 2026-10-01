@@ -434,7 +434,8 @@ const optionsOf = (
     if (ts.isNumericLiteral(value)) return Number(value.text) === 0 ? 'runs' : 'off';
     if (ts.isStringLiteralLike(value)) return value.text === '' ? 'runs' : 'off';
     if (ts.isIdentifier(value)) {
-      if (value.text === 'undefined') return 'runs';
+      // The global `undefined`, not a local binding that happens to be called so.
+      if (value.text === 'undefined' && bindingOf(checker, value) === undefined) return 'runs';
       // Only a `const` bound to a primitive, which nothing can change.
       const bound = bindingOf(checker, value);
       const primitive =
@@ -457,7 +458,7 @@ const optionsOf = (
       return fold(value.expression, depth + 1);
     if (ts.isNumericLiteral(value) || ts.isStringLiteralLike(value)) return;
     if (ts.isIdentifier(value)) {
-      if (value.text === 'undefined') return;
+      if (value.text === 'undefined' && bindingOf(checker, value) === undefined) return;
       // An object behind a name can be changed after it was written, so only
       // options written in place are read.
       return unknownAll();
@@ -497,11 +498,18 @@ const optionsOf = (
 /**
  * How an arm's callback uses its test context: `skips` when it calls `skip`
  * through it, `escapes` when it uses the context any way this check does not
- * follow, `undefined` when it only reads members other than `skip` — which is
+ * follow, `undefined` when it only reads members on `CONTEXT_MEMBERS` — which is
  * the only use credited. Taking `skip` out of the context, passing the context
  * on, aliasing it, indexing it, a rest element in its destructuring, and
  * `arguments` in a `function` are all refused rather than traced.
  */
+/**
+ * The members of a test context an arm may read and still be credited: none of
+ * them leads back to the context, so none of them can skip it. `task` is not
+ * one — `ctx.task.context.skip()` reaches the same context again.
+ */
+const CONTEXT_MEMBERS = new Set(['expect', 'signal', 'onTestFailed', 'onTestFinished', 'annotate']);
+
 const contextUse = (call: ts.CallExpression): 'skips' | 'escapes' | undefined => {
   const callback = [...call.arguments]
     .reverse()
@@ -518,8 +526,14 @@ const contextUse = (call: ts.CallExpression): 'skips' | 'escapes' | undefined =>
   if (parameter !== undefined && !ts.isIdentifier(parameter)) {
     if (!ts.isObjectBindingPattern(parameter)) return 'escapes';
     for (const element of parameter.elements) {
-      if (element.dotDotDotToken !== undefined) mark('escapes');
-      if (keyOf(element.propertyName ?? element.name) === 'skip') mark('skips');
+      const key = keyOf(element.propertyName ?? element.name);
+      if (key === 'skip') mark('skips');
+      else if (
+        element.dotDotDotToken !== undefined ||
+        key === undefined ||
+        !CONTEXT_MEMBERS.has(key)
+      )
+        mark('escapes');
     }
   }
   const context =
@@ -531,6 +545,7 @@ const contextUse = (call: ts.CallExpression): 'skips' | 'escapes' | undefined =>
         const parent = node.parent;
         if (!ts.isPropertyAccessExpression(parent) || parent.expression !== node) mark('escapes');
         else if (parent.name.text === 'skip') mark('skips');
+        else if (!CONTEXT_MEMBERS.has(parent.name.text)) mark('escapes');
       }
     }
     ts.forEachChild(node, visit);

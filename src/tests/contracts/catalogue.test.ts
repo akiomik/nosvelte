@@ -525,7 +525,14 @@ describe('the production contract bridge', () => {
       `${'it'}('CT: y', (ctx) => { ctx[member](); });`,
       `${'it'}('CT: y', ({ skip: skipTest }) => { skip(); });`,
       `${'it'}('CT: y', ({ task, ...rest }) => { rest.skip(); });`,
-      `${'it'}('CT: y', function () { arguments[0].skip(); });`
+      `${'it'}('CT: y', function () { arguments[0].skip(); });`,
+      // Only the members on the list, none of which leads back to the context.
+      `${'it'}('CT: y', (ctx) => { ctx.task.context.skip(); });`,
+      `${'it'}('CT: y', (ctx) => { expect(ctx.task).toBeDefined(); });`,
+      `${'it'}('CT: y', ({ task }) => { task.context.skip(); });`,
+      // A local binding called `undefined` is not the global.
+      `${'describe'}('x', () => { const undefined = true; ${'describe'}('y', { skip: undefined }, () => {}); });`,
+      `${'describe'}('x', () => { const undefined = { skip: true }; ${'describe'}('y', undefined, () => {}); });`
     ])
       expect(disabledIn(statement), `${statement} does not run`).not.toEqual([]);
     for (const statement of [
@@ -537,7 +544,9 @@ describe('the production contract bridge', () => {
       `${'describe'}('x', { meta: { skip: true } }, () => {});`,
       `${'describe'}('x', { skip: false }, () => {});`,
       `${'describe'}('x', () => { const o = { skip: true }; });`,
-      `${'it'}('CT: y', (ctx) => { expect(ctx.task).toBeDefined(); });`,
+      `${'it'}('CT: y', (ctx) => { ctx.expect(1).toBe(1); });`,
+      `${'it'}('CT: y', (ctx) => { ctx.onTestFinished(() => {}); });`,
+      `${'describe'}('x', { skip: undefined }, () => {});`,
       `${'it'}('CT: y', (ctx) => { other.skip(); });`,
       `${'it'}('CT: y', ({ expect }) => { source.pipe(skip(1)); });`,
       `${'it'}('CT: y', () => { const skip = 1; });`,
