@@ -1200,11 +1200,11 @@ So a row carries two fields of its own, in the roster below, and neither is infe
   and the honest form is that the gate is mechanical about the edges and a reviewer reads the tests.
   What the mechanism does buy is that no cell can be filled by a name alone.
 
-  The root is empty today — phase 2 has not begun — so every branch is driven against a **fabricated
-  source put through the same parser**, and a fabricated roster put through the same reverse check,
-  rather than left to be discovered when the first test lands. A fabricated _map_ is what the round
-  before this used, and a reviewer measured what it bought: the parser it was standing in for was
-  the thing under test.
+  The root holds no landing yet — `CAT33` lives there itself, and declares no row — so every branch
+  is driven against a **fabricated source put through the same parser**, and a fabricated roster put
+  through the same reverse check, rather than left to be discovered when the first test lands. A
+  fabricated _map_ is what the round before this used, and a reviewer measured what it bought: the
+  parser it was standing in for was the thing under test.
 
   **`absent:` exists because the state machine had no terminal state for a conforming port.** The
   route table says an `internal` row is discharged by "a test against the port's own seam **or** the
@@ -1682,7 +1682,10 @@ which is which:
 
 - **`CAT33` moves.** It is about `0005`, which survives, and phase 2 cannot be judged without it.
   Re-homing it is part of phase 2's first commit, together with `src/tests/contracts/` and a line in
-  this roster for it, and it takes with it whatever of `roles.ts` it reads.
+  this roster for it, and it takes with it whatever of `roles.ts` it reads. **It has moved**: on the
+  production line `src/tests/contracts/catalogue.test.ts` carries it, beside `CAT37` — the arm for
+  the comment stripper it reads arm ids through — and `src/tests/contracts/bridge.ts` carries the
+  two things it read from elsewhere, the arm-id shape and `code`. Neither needs `TEST_ROLES`.
 - **`CAT34` drops with the spike.** Its subject is the deletion of this branch; once the branch is
   gone there is nothing for it to hold, and its population — a diff against `main` — has no meaning
   in the port's history. What survives it is the record of the decision, not the check.
@@ -1712,6 +1715,7 @@ src/tests/sentinels/             moves-to-production  replacement: the same four
 src/tests/components/            moves-to-production  replacement: the component suites move as they are; they already run against the published components — except their fixtures, which import the spike's context module and are rebuilt against the port's own provider, the way the spike's own fixtures are  owner: port
 src/tests/stores/spike-v6/       moves-to-production  except: src/tests/stores/spike-v6/fixtures/ replacement: two classes, and the second was unwritten — the arms witnessing rows routed public or internal become production contract tests under src/tests/contracts/, and the arms holding rules over the surviving records (CAT33 and the catalogue arms beside it, and the record-reading arms in wiring, leak and surface) are re-homed with the records they read; who holds them afterwards is an obligation of its own in the table above, not a decision this line makes; CAT34 is the exception and drops with the spike, because its population is this branch's own diff  owner: port
 src/tests/stores/spike-v6/fixtures/ drops-with-the-spike rationale: the harness components exist to drive the spike's own seams — a port builds its fixtures against its own surface, and none of these outlive it  owner: port
+src/tests/contracts/             stays-in-the-library reason: the production contract root phase 2 lands its tests in, with the re-homed CAT33 and CAT37 that read it and this record  owner: the library
 src/tests/helpers/               moves-to-production  replacement: the fixtures the moved suites still need, rewritten against the production seams  owner: port
 src/tests/tools/                 unresolved           why: the mutation harness — whether a production repository keeps a ledger at all is a decision nobody has made, and it owns MG, MU, SP, DR and the cost budget  owner: port
 tools/                           unresolved           why: the runner, its verdict module, the typechecker and the cost table, tied to the line above by the same decision  owner: port
