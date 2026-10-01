@@ -20,18 +20,17 @@ import {
   asserts,
   backwardFaults,
   code,
-  collectDisabled,
   collectFrom,
   DECISION_ID,
   declarationsIn,
   declaresTest,
   disagrees,
   faultInLanding,
+  inspect,
   mergeDeclarations,
   PRODUCTION_ROOT,
   PRODUCTION_ROOT_LEAF,
   ROUTES,
-  skipsInside,
   TEST_ID
 } from './bridge.js';
 
@@ -473,55 +472,52 @@ describe('the production contract bridge', () => {
       ]).duplicates
     ).toEqual([]);
 
-    for (const spelling of [
-      `${'describe'}.skip('x', () => {`,
-      `${'it'}.concurrent.skip('CT: y', () => {`,
-      `${'test'}.todo('CT: z')`,
-      `${'describe'}.skipIf(true)('x', () => {`,
-      `${'it'}.runIf(false)('CT: y', () => {`,
-      `${'describe'}.each([1]).skip('x', () => {`,
-      `${'it'}.each([1]).skip('CT: y', () => {`
+    // What does not run, read out of the syntax tree, both ways. Each case is
+    // a whole statement, because the tree is what decides.
+    const disabledIn = (statement: string): string[] => inspect(statement, 'x.test.ts').disabled;
+    for (const statement of [
+      `${'describe'}.skip('x', () => {});`,
+      `${'it'}.concurrent.skip('CT: y', () => {});`,
+      `${'test'}.todo('CT: z');`,
+      `${'describe'}.skipIf(true)('x', () => {});`,
+      `${'it'}.runIf(false)('CT: y', () => {});`,
+      `${'describe'}.each([1]).skip('x', () => {});`,
+      `${'it'}.each([1]).skip('CT: y', () => {});`,
+      `${'describe'}.skip.each${'`'}a${'`'}('x', () => {});`,
+      `${'suite'}.only('x', () => {});`,
+      `${'it'}.each([1])('CT: y %s', () => {});`,
+      `${'it'}.for([1])('CT: y %s', () => {});`,
+      `${'it'}('CT: y', { skip: true }, () => {});`,
+      `${'describe'}('x', { meta: {}, skip: true }, () => {});`,
+      `${'describe'}('x', { 'only': 1 }, () => {});`,
+      `${'describe'}('x', { todo }, () => {});`,
+      `${'it'}('CT: y', (ctx) => { const n = 1; ctx.skip(); });`,
+      `${'it'}('CT: y', ctx => { ctx['skip'](); });`,
+      `${'it'}('CT: y', function (ctx) { const n = 1; ctx.skip(); });`,
+      `${'it'}('CT: y', async (context) => { await x(); context.skip(true, 'later'); });`,
+      `${'it'}('CT: y', ({ skip }) => { const n = 1; skip(); });`,
+      `${'it'}('CT: y', ({ skip: skipTest }) => { const n = 1; skipTest(); });`
     ])
-      expect(collectDisabled(spelling), `${spelling} is disabled`).not.toEqual([]);
-    expect(
-      collectDisabled(`${'it'}.each([1])('CT: y %s', () => {`),
-      'a table-driven arm'
-    ).not.toEqual([]);
-    expect(
-      collectDisabled(`${'describe'}.each([1])('$name', () => {`),
-      'a parametrised describe is readable'
-    ).toEqual([]);
-    expect(
-      collectDisabled(`${'it'}('CT: y', { skip: true }, () => {`),
-      'skipped by its options'
-    ).not.toEqual([]);
-    expect(
-      collectDisabled(`${'it'}('CT: y', { timeout: 20_000 }, () => {`),
-      'an ordinary options object'
-    ).toEqual([]);
-    for (const spelling of [
-      `${'it'}('CT: y', () => {`,
-      `${'it'}.fails('CT: y', () => {`,
-      `${'describe'}('skip and only', () => {`
+      expect(disabledIn(statement), `${statement} does not run`).not.toEqual([]);
+    for (const statement of [
+      `${'it'}('CT: y', () => {});`,
+      `${'it'}.fails('CT: y', () => {});`,
+      `${'describe'}('skip and only', () => {});`,
+      `${'describe'}.each([1])('$name', () => {});`,
+      `${'it'}('CT: y', { timeout: 20_000 }, () => {});`,
+      `${'describe'}('x', { meta: { skip: true } }, () => {});`,
+      `${'describe'}('x', { skip: false }, () => {});`,
+      `${'describe'}('x', () => { const o = { skip: true }; });`,
+      `${'it'}('CT: y', (ctx) => { expect(ctx.task).toBeDefined(); });`,
+      `${'it'}('CT: y', (ctx) => { other.skip(); });`,
+      `${'it'}('CT: y', ({ expect }) => { source.pipe(skip(1)); });`,
+      `${'it'}('CT: y', ({ skip: skipTest }) => { skip(); });`,
+      `${'it'}('CT: y', () => { const skip = 1; });`
     ])
-      expect(collectDisabled(spelling), `${spelling} runs`).toEqual([]);
-
-    // Skipping from inside the body, both ways.
-    const armCalling = (callback: string): string => `${'it'}('CT: y', ${callback})`;
-    for (const callback of [
-      '(ctx) => { ctx.skip(); }',
-      'async (context) => { await x(); context.skip(true, "later"); }',
-      '({ skip }) => { const y = 1; skip(); }',
-      'ctx => { ctx.skip(); }'
-    ])
-      expect(skipsInside(armCalling(callback)), `${callback} skips`).toBe(true);
-    for (const callback of [
-      '(ctx) => { expect(ctx.task).toBeDefined(); }',
-      '(ctx) => { other.skip(); }',
-      '({ expect }) => { source.pipe(skip(1)); }',
-      '() => { const skip = 1; }'
-    ])
-      expect(skipsInside(armCalling(callback)), `${callback} runs`).toBe(false);
+      expect(disabledIn(statement), `${statement} runs`).toEqual([]);
+    // One report per declaration: a chain is read at its last link, so the
+    // curried call inside it is not a second suite.
+    expect(disabledIn(`${'describe'}.skipIf(true)('x', () => {});`)).toEqual(['x.test.ts:1']);
 
     // The walker itself, over a directory that exists.
     const sandbox = mkdtempSync(join(tmpdir(), 'nosvelte-contracts-'));
@@ -635,7 +631,7 @@ describe('the production contract bridge', () => {
         ].join('\n')
       );
       expect(collectFrom(sandbox).disabled).toContain(
-        'CT23 in context-skip.test.ts (skipped from inside its body)'
+        'context-skip.test.ts:2 (skipped from inside its body)'
       );
       rmSync(join(sandbox, 'context-skip.test.ts'));
       for (const file of Object.keys(suites)) rmSync(join(sandbox, `${file}.test.ts`));

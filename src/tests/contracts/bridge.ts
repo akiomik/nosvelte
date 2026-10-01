@@ -11,6 +11,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
+import ts from 'typescript';
+
 /** Where landing tests live, as 0005 names it. */
 export const PRODUCTION_ROOT_LEAF = 'contracts';
 export const PRODUCTION_ROOT = `src/tests/${PRODUCTION_ROOT_LEAF}`;
@@ -149,55 +151,6 @@ export const callAt = (source: string, at: number): string => {
 };
 
 /**
- * The whole declaration chain that starts at `at`: the callee, every member
- * and every call or tagged template after it — `describe.each([1]).skip('x',
- * fn)`, the curried `describe.each([1])('x', fn)` and the tagged
- * ``describe.skip.each`…`('x', fn)`` alike.
- *
- * `callAt` stops at the first call's closing parenthesis, which for a
- * parametrised suite is `describe.each([1])`, so a disabling modifier written
- * after it was invisible and the arms inside were credited as running.
- */
-/** The template literal that opens at `at`, with its `${…}` holes. */
-const templateAt = (source: string, at: number): string => {
-  let depth = 0;
-  for (let index = at + 1; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === '\\') index += 1;
-    else if (depth === 0 && character === '`') return source.slice(at, index + 1);
-    else if (character === '$' && source[index + 1] === '{') {
-      depth += 1;
-      index += 1;
-    } else if (depth > 0 && character === '{') depth += 1;
-    else if (depth > 0 && character === '}') depth -= 1;
-  }
-
-  return source.slice(at);
-};
-
-export const chainAt = (source: string, at: number): string => {
-  let index = at;
-  let text = '';
-  for (;;) {
-    // Only a name, or members of one, may stand before each call or tag.
-    const callee = /^\s*(?:\.?\s*[A-Za-z_$][\w$]*\s*)*/.exec(source.slice(index))?.[0] ?? '';
-    const opens = index + callee.length;
-    const segment =
-      source[opens] === '('
-        ? callAt(source, opens)
-        : source[opens] === '`'
-          ? templateAt(source, opens)
-          : undefined;
-    if (segment === undefined) break;
-    text += callee + segment;
-    index = opens + segment.length;
-    if (!/^\s*[.(`]/.test(source.slice(index))) break;
-  }
-
-  return text;
-};
-
-/**
  * The rows each test arm declares, its call text, and the ids declared twice.
  *
  * A marker `@contracts <id> …` belongs to the arm it sits **directly** above:
@@ -259,31 +212,6 @@ export const mergeDeclarations = (
 };
 
 /**
- * Why a call would not run as a single readable arm, if it would not: a
- * disabling word anywhere in the chain (`skip`, `only`, `todo`, `skipIf`,
- * `runIf`), a disabling options object, or a table-driven arm (`it.each`),
- * which this bridge cannot record one id for. A parametrised `describe` is
- * none of these — its arms are ordinary declarations.
- */
-export const collectDisabled = (call: string): string[] => {
-  const bare = call.trim().replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
-  const found: string[] = [];
-  if (/^(it|describe|test|suite)\b[^;]*\.(skip|only|todo|skipIf|runIf)\b/.test(bare))
-    found.push('');
-  // A suite's options sit right after its title; anything later is its body,
-  // where an object that happens to say `skip: true` is not an option.
-  if (
-    /^(it|test)\b[^;]*\{[^}]*\b(skip|only|todo)\s*:\s*true/.test(bare) ||
-    /^(describe|suite)\b[^;]*?\(\s*''\s*,\s*\{[^}]*\b(skip|only|todo)\s*:\s*true/.test(bare)
-  )
-    found.push(' (disabled by its options)');
-  if (/^(it|test)\b[^;]*\.each\b/.test(bare))
-    found.push(' (a table-driven arm; this bridge records one id per arm)');
-
-  return found;
-};
-
-/**
  * Whether an arm's call makes an assertion: a matcher after `expect(…)`,
  * `expectTypeOf`/`expectOf`, `assert`, or `expect.assertions` and its
  * siblings. Strings come out first, so a title cannot assert by being named.
@@ -299,25 +227,164 @@ export const asserts = (body: string): boolean => {
   );
 };
 
-/**
- * Whether an arm skips itself at run time through its test context —
- * `(ctx) => { ctx.skip(); … }` or `({ skip }) => { skip(); … }`. The
- * declaration then reads as running, and only the body says otherwise.
- */
-export const skipsInside = (call: string): boolean => {
-  const bare = code(call).replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
-  const named = /,\s*(?:async\s+)?(?:\(\s*([A-Za-z_$][\w$]*)\s*[,:)]|([A-Za-z_$][\w$]*)\s*=>)/.exec(
-    bare
-  );
-  const name = named?.[1] ?? named?.[2];
-  if (name !== undefined && new RegExp(`\\b${name}\\s*\\.\\s*skip\\s*\\(`).test(bare)) return true;
-  const destructured = /,\s*(?:async\s+)?\(\s*\{([^}]*)\}/.exec(bare);
+const SUITES = new Set(['it', 'test', 'describe', 'suite']);
+const ARMS = new Set(['it', 'test']);
+const DISABLING = new Set(['skip', 'only', 'todo', 'skipIf', 'runIf']);
 
-  return (
-    destructured !== null &&
-    /\bskip\b/.test(destructured[1] as string) &&
-    /(?<![.\w$])skip\s*\(/.test(bare.slice(destructured.index + destructured[0].length))
+/** A callee walked down to its root name, with every member named on the way. */
+const unwind = (expression: ts.Expression): { root: string | undefined; names: string[] } => {
+  const names: string[] = [];
+  let at: ts.Expression = expression;
+  for (;;) {
+    if (ts.isPropertyAccessExpression(at)) {
+      names.unshift(at.name.text);
+      at = at.expression;
+    } else if (ts.isElementAccessExpression(at) && ts.isStringLiteralLike(at.argumentExpression)) {
+      names.unshift(at.argumentExpression.text);
+      at = at.expression;
+    } else if (ts.isCallExpression(at)) at = at.expression;
+    else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
+    else if (ts.isParenthesizedExpression(at) || ts.isNonNullExpression(at)) at = at.expression;
+    else break;
+  }
+
+  return { root: ts.isIdentifier(at) ? at.text : undefined, names };
+};
+
+/** Whether `call` is the last link of its chain rather than a link inside one. */
+const outermost = (call: ts.CallExpression): boolean => {
+  const parent = call.parent;
+
+  return !(
+    ((ts.isCallExpression(parent) ||
+      ts.isPropertyAccessExpression(parent) ||
+      ts.isElementAccessExpression(parent)) &&
+      parent.expression === call) ||
+    (ts.isTaggedTemplateExpression(parent) && parent.tag === call)
   );
+};
+
+/** A property's own name, when it has one this check can read. */
+const keyOf = (name: ts.Node): string | undefined =>
+  ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+
+/**
+ * Whether the call's options disable it: a **top-level** `skip`, `only` or
+ * `todo` set to anything but `false`. A property inside a nested object is
+ * not an option of this call.
+ */
+const disablingOptions = (call: ts.CallExpression): boolean =>
+  call.arguments.some(
+    (argument) =>
+      ts.isObjectLiteralExpression(argument) &&
+      argument.properties.some((property) => {
+        if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property))
+          return false;
+        const name = keyOf(property.name);
+        if (name === undefined || !['skip', 'only', 'todo'].includes(name)) return false;
+
+        return !(
+          ts.isPropertyAssignment(property) &&
+          property.initializer.kind === ts.SyntaxKind.FalseKeyword
+        );
+      })
+  );
+
+/**
+ * Whether an arm's callback skips the test through its context: a call to
+ * `<param>.skip(…)`, or to whatever local name the parameter's `skip` was
+ * destructured into — in an arrow function or a `function` alike.
+ */
+const skipsThroughContext = (call: ts.CallExpression): boolean => {
+  const callback = [...call.arguments]
+    .reverse()
+    .find(
+      (argument): argument is ts.ArrowFunction | ts.FunctionExpression =>
+        ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)
+    );
+  const parameter = callback?.parameters[0]?.name;
+  if (callback === undefined || parameter === undefined) return false;
+  const context = ts.isIdentifier(parameter) ? parameter.text : undefined;
+  const aliases = new Set<string>();
+  if (ts.isObjectBindingPattern(parameter))
+    for (const element of parameter.elements)
+      if (keyOf(element.propertyName ?? element.name) === 'skip' && ts.isIdentifier(element.name))
+        aliases.add(element.name.text);
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (ts.isIdentifier(callee) && aliases.has(callee.text)) found = true;
+      const member = ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : ts.isElementAccessExpression(callee)
+          ? keyOf(callee.argumentExpression)
+          : undefined;
+      if (
+        context !== undefined &&
+        member === 'skip' &&
+        (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === context
+      )
+        found = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(callback.body);
+
+  return found;
+};
+
+/**
+ * Why each suite or arm in a test file would not run, or could not be read,
+ * found in the file's syntax tree rather than in its text: a disabling member
+ * anywhere in the chain (`.skip`, `.only`, `.todo`, `.skipIf`, `.runIf`,
+ * including after a curried call or a tagged template), a disabling top-level
+ * option, a table-driven arm (`it.each`, `it.for`), an arm that skips itself
+ * through its test context, and an id-shaped title the arm-id shape does not
+ * read. What it cannot see is a decision made at run time, such as a suite
+ * declared only under an `if`.
+ */
+export const inspect = (
+  source: string,
+  file: string,
+  declared: ReadonlySet<string> = new Set()
+): { disabled: string[]; unreadable: string[] } => {
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const disabled: string[] = [];
+  const unreadable: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && outermost(node)) {
+      const { root, names } = unwind(node.expression);
+      if (root !== undefined && SUITES.has(root)) {
+        const at = `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
+        if (names.some((name) => DISABLING.has(name))) disabled.push(at);
+        if (disablingOptions(node)) disabled.push(`${at} (disabled by its options)`);
+        if (ARMS.has(root) && names.some((name) => name === 'each' || name === 'for'))
+          disabled.push(`${at} (a table-driven arm; this bridge records one id per arm)`);
+        if (ARMS.has(root) && skipsThroughContext(node))
+          disabled.push(`${at} (skipped from inside its body)`);
+        // Only a title that means to be an id — one with a digit in it — is
+        // held to the id shape; `it('rejects: an empty filter', …)` is prose.
+        const title = node.arguments[0];
+        const id =
+          ARMS.has(root) && title !== undefined && ts.isStringLiteralLike(title)
+            ? /^(\S*\d\S*):/.exec(title.text)?.[1]
+            : undefined;
+        if (id !== undefined && !declared.has(id))
+          unreadable.push(
+            `${at} — this bridge cannot read "${id}" as an arm id` +
+              `${root === 'test' ? ', and it reads only `it(`' : ''}`
+          );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+
+  return { disabled, unreadable };
 };
 
 export interface Landings {
@@ -348,29 +415,11 @@ export const collectFrom = (root: string): Landings => {
   const disabled: string[] = [];
   for (const { file, source } of files) {
     const parsed = declarationsIn(source);
-    for (const [id, body] of parsed.bodies) {
+    for (const [id, body] of parsed.bodies)
       if (!asserts(body)) assertionless.push(`${id} in ${file}`);
-      if (skipsInside(body)) disabled.push(`${id} in ${file} (skipped from inside its body)`);
-    }
-    const declared = new Set(parsed.rows.keys());
-    const stripped = code(source);
-    const strippedLines = stripped.split('\n');
-    for (const [at, line] of source.split('\n').entries()) {
-      if (!/^\s*(it|describe|test|suite)\b/.test(line)) continue;
-      // The whole chain rather than the line, because the title may be on the
-      // next one and a modifier may follow the first call.
-      const from = strippedLines.slice(0, at).join('\n').length + (at > 0 ? 1 : 0);
-      const call = chainAt(stripped, from).replace(/\s+/g, ' ').trim();
-      for (const why of collectDisabled(call)) disabled.push(`${file}:${at + 1}${why}`);
-      // Only a title that means to be an id — one with a digit in it — is held
-      // to the id shape; `it('rejects: an empty filter', …)` is prose.
-      const titled = /^(it|test)(?:\.\w+)*\(\s*['"`]([^\s'"`]*\d[^\s'"`]*):/.exec(call);
-      if (titled !== null && !declared.has(titled[2] as string))
-        unreadable.push(
-          `${file}:${at + 1} — this bridge cannot read "${titled[2] as string}" as an arm id` +
-            `${(titled[1] as string) === 'test' ? ', and it reads only `it(`' : ''}`
-        );
-    }
+    const found = inspect(source, file, new Set(parsed.rows.keys()));
+    disabled.push(...found.disabled);
+    unreadable.push(...found.unreadable);
   }
 
   return { ...merged, assertionless, disabled, unreadable };
