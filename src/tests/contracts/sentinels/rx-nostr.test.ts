@@ -382,7 +382,9 @@ describe('rx-nostr, exercised directly', () => {
     rxNostr.dispose();
   });
 
-  // @contracts B-α-C9
+  // `B-α-C9` is measured by this arm, `DS26` and `DS27` together, and a roster
+  // line can credit one test only, so the row stays `TBD` until one arm carries
+  // all three clauses rather than being credited to the first of them.
   it('DS25: the client rewrites a relay URL, and its own relay list does not say so', async () => {
     // The spelling this library has to match, taken from the client rather than
     // read off the dependency's source.
@@ -397,8 +399,9 @@ describe('rx-nostr, exercised directly', () => {
     // spelling while `packet.from` carries the client's. `SC15` is where the two
     // are compared; this is the half that can be taken without our code.
     //
-    // The version these were taken against is `DS10`'s: rx-nostr 3.7.5. Nothing
-    // here reads a second dependency, so it needs no version record of its own.
+    // These were taken at rx-nostr 3.7.5 on the spike and re-run at 3.7.6, the
+    // version `DS10` pins here. Nothing here reads a second dependency, so it
+    // needs no version record of its own.
     //
     // No relay listed here is connected to — the default connection strategy is
     // lazy, and `getAllRelayStatus()` reports `initialized` — so the hosts are
@@ -491,8 +494,7 @@ describe('rx-nostr, exercised directly', () => {
     rxNostr.dispose();
   });
 
-  // Part of `B-α-C9`'s measurement, which a roster line can credit to one
-  // test only: `DS25` carries the row.
+  // Part of `B-α-C9`'s measurement, with `DS25` — see there.
   it('DS27: naming a relay is not dialling it, which is what makes a probe cheap', async () => {
     // The premise the transport-key comparison rests on. That check asks the
     // resolved transport what it calls a set of relays by configuring a
@@ -537,8 +539,7 @@ describe('rx-nostr, exercised directly', () => {
     expect(server.server.clients()).toEqual([]);
   });
 
-  // Part of `B-α-C9`'s measurement, which a roster line can credit to one
-  // test only: `DS25` carries the row.
+  // Part of `B-α-C9`'s measurement, with `DS25` — see there.
   it('DS26: the rewrite is not idempotent, and this is which shapes it moves twice', () => {
     // The fact the library's refusal rule rests on, taken where no `$lib` is on
     // the path (`DS0`). `DS25` records that the transport renames a relay;

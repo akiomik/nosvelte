@@ -1200,11 +1200,12 @@ So a row carries two fields of its own, in the roster below, and neither is infe
   and the honest form is that the gate is mechanical about the edges and a reviewer reads the tests.
   What the mechanism does buy is that no cell can be filled by a name alone.
 
-  The root holds no landing yet — `CAT33` lives there itself, and declares no row — so every branch
-  is driven against a **fabricated source put through the same parser**, and a fabricated roster put
-  through the same reverse check, rather than left to be discovered when the first test lands. A
-  fabricated _map_ is what the round before this used, and a reviewer measured what it bought: the
-  parser it was standing in for was the thing under test.
+  The landings in the root exercise only the accepting path — every one of them is a test that
+  declares its row correctly — so every branch is driven against a **fabricated source put through
+  the same parser**, and a fabricated roster put through the same reverse check, rather than left to
+  be discovered when the first test lands. A fabricated _map_ is what the round before this used,
+  and a reviewer measured what it bought: the parser it was standing in for was the thing under
+  test.
 
   **`absent:` exists because the state machine had no terminal state for a conforming port.** The
   route table says an `internal` row is discharged by "a test against the port's own seam **or** the
@@ -1278,7 +1279,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **342 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **24 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **311 are
+Of those, **23 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **312 are
 TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1473,7 +1474,7 @@ B-α-C22      public        TBD
 B-α-C3       public        TBD
 B-α-C7       public        TBD
 B-α-C8       discharged    discharged:C6;see the row
-B-α-C9       sentinel      test:DS25
+B-α-C9       sentinel      TBD
 B-α-C10      internal      TBD
 B-α-C11      public        TBD
 B-α-C12      public        TBD

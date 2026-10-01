@@ -40,7 +40,7 @@ import ContextWindows from './fixtures/ContextWindows.svelte';
  * `svelte/src/index-client.js`. The `default`/`worker` condition resolves to
  * `index-server.js`, whose `getContext` is a different function in a different
  * file — and it guards itself identically, on `ssr_context === null` instead of
- * `component_context === null`. Both were measured directly at 5.56.8:
+ * `component_context === null`. Both were measured directly at 5.56.8, and re-run at the 5.57.1 this tree resolves:
  *
  * ```
  * $ node --input-type=module -e "import {getContext} from 'svelte'; getContext(Symbol())"

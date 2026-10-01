@@ -1262,17 +1262,20 @@ cannot be settled here, and `non-goal`, for what is deliberately not done. Readi
 kind is how to see what this record is actually promising.
 
 **Every claim in this record about what the dependency does is a measurement at a version, and the
-version is rx-nostr 3.7.5.** `SEN10` asserts it against the installed tree — `DS10` on the
-production line — so a bump fails a test rather than being inherited quietly. The production line
-resolved rx-nostr **3.7.6**, and the pin moved there after the sentinels re-ran green against it:
-the one source change between the two is `confirmOK` in `connection/publish.ts`, which now removes
-an acknowledged event from the publish count — 3.7.5's inverted test never did — so it touches the
-send path and no file the request-path measurements read. A claim dated 3.7.5 below is still a
-measurement at 3.7.5. Some of the sentences above carry it inline, where the figure beside it is
-doing work; the rest are dated by this one. The rule is that a dependency-behaviour claim in this
-record is dated somewhere, or it is not a measurement — which was not true of it until this round:
-`SEN13` was cited here bare while 0002 cited the same measurement at its version, so one correction
-had been applied to one of the two records that carry the claim.
+version is rx-nostr 3.7.5.** `SEN10` asserts it against the spike's installed tree and `DS10`
+against the production line's, so a bump fails a test rather than being inherited quietly. The
+production line resolved **3.7.6**, and `DS10`'s pin moved there after the sentinels re-ran green
+against it. The one source change between the two is `confirmOK` in `connection/publish.ts`: an
+acknowledged event now leaves the publish count, which 3.7.5's inverted test never let it do. That
+count feeds a relay connection's idle state, so at 3.7.5 a client that had published to a relay kept
+it communicating and never let it go `dormant`, and at 3.7.6 it idles like any other. No measurement
+here involves a publish, so none of them moved; and 0002's statement that a relay goes `dormant` ten
+seconds after a request goes quiet now holds for a provider whose client has also sent. The claims
+dated 3.7.5 above are still measurements at 3.7.5. Some of the sentences above carry it inline,
+where the figure beside it is doing work; the rest are dated by this one. The rule is that a
+dependency-behaviour claim in this record is dated somewhere, or it is not a measurement — which was
+not true of it until this round: `SEN13` was cited here bare while 0002 cited the same measurement
+at its version, so one correction had been applied to one of the two records that carry the claim.
 
 ## More Information
 

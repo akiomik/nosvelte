@@ -5,7 +5,8 @@
  * production evidence — and phase 2 moves the evidence from `TBD` to
  * `test:<id>` as tests land under this directory. Everything here is a pure
  * function over text, so that `catalogue.test.ts` can drive each refusal
- * against fabricated sources while the directory holds no landing yet.
+ * against fabricated sources: the landings in this directory only ever take
+ * the accepting path.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';

@@ -4,7 +4,17 @@
  *
  * The rule that makes this directory mean something.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -101,6 +111,45 @@ function resolveRelative(from: string, specifier: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Walk every literal specifier from `roots`, recursing through anything under
+ * `tests`, and report each path that reaches `lib` or `dist` — by `$lib`, by
+ * `src/lib`, or by a relative path that resolves there. Bare specifiers are
+ * dependencies and are not followed. Taken as a function so that `DS0` can
+ * drive it over a fabricated tree as well as over this one.
+ */
+function reach(
+  roots: readonly string[],
+  { here, tests, root, lib, dist }: Record<'here' | 'tests' | 'root' | 'lib' | 'dist', string>
+): { offenders: string[]; walked: Set<string> } {
+  const offenders: string[] = [];
+  const walked = new Set<string>();
+  const queue = roots.map((path) => ({ path, via: [relative(here, path)] }));
+  while (queue.length > 0) {
+    const { path, via } = queue.shift() as { path: string; via: string[] };
+    if (walked.has(path)) continue;
+    walked.add(path);
+    for (const specifier of specifiersIn(withoutComments(readFileSync(path, 'utf8')))) {
+      if (specifier.startsWith('$lib') || specifier.startsWith('src/lib')) {
+        offenders.push([...via, specifier].join(' -> '));
+        continue;
+      }
+      if (!specifier.startsWith('.')) continue;
+      const target = resolveRelative(path, specifier);
+      if (target === undefined) continue;
+      // `dist/` is the library too, and it is in this tree.
+      if (target.startsWith(`${lib}/`) || target.startsWith(`${dist}/`)) {
+        offenders.push([...via, relative(root, target)].join(' -> '));
+        continue;
+      }
+      if (target.startsWith(`${tests}/`) && !walked.has(target))
+        queue.push({ path: target, via: [...via, relative(tests, target)] });
+    }
+  }
+
+  return { offenders, walked };
+}
+
 describe('the sentinel boundary', () => {
   /**
    * **This read the spelling of one file's imports, and the property it claims
@@ -111,7 +160,8 @@ describe('the sentinel boundary', () => {
    * check's two conditions could see it: `helpers/` is not under the directory
    * it walked, and the specifier the sentinel wrote did not start with `$lib`.
    *
-   * That matters beyond this file. `0005` exempts the whole `DS*` family from
+   * That matters beyond this file. `0005` exempts the whole `SEN*` family — the
+   * `DS*` arms here — from
    * the mutation ledger on the strength of this claim, and calls the exemption
    * "stronger than aimed at and provably not killable — a property of the
    * directory". A property of the directory that holds only for directly
@@ -130,8 +180,6 @@ describe('the sentinel boundary', () => {
    * after it.
    */
   it('DS0: nothing here reaches the library it is meant to be independent of', () => {
-    const LIB = resolve(ROOT, 'src/lib');
-    const DIST = resolve(ROOT, 'dist');
     // **The setup file is in every one of these modules' graphs and in none of
     // their sources.** Vitest injects `test.setupFiles` ahead of each test file,
     // so a `$lib` import added there would be executed by every sentinel while
@@ -151,39 +199,13 @@ describe('the sentinel boundary', () => {
     expect(injected.length).toBeGreaterThan(0);
 
     const roots = [...filesUnder(HERE), ...injected];
-    const offenders: string[] = [];
-    const walked = new Set<string>();
-    let followed = 0;
-    const queue = roots.map((path) => ({ path, via: [relative(HERE, path)] }));
-
-    while (queue.length > 0) {
-      const { path, via } = queue.shift() as { path: string; via: string[] };
-      if (walked.has(path)) continue;
-      walked.add(path);
-
-      for (const specifier of specifiersIn(withoutComments(readFileSync(path, 'utf8')))) {
-        if (specifier.startsWith('$lib') || specifier.startsWith('src/lib')) {
-          offenders.push([...via, specifier].join(' -> '));
-          continue;
-        }
-        if (!specifier.startsWith('.')) continue;
-        const target = resolveRelative(path, specifier);
-        if (target === undefined) continue;
-        followed += 1;
-        // **`dist/` is the library too, and it is in this tree.** The walk read
-        // `src/lib` and dropped everything else on the floor, so
-        // `import '../../../dist/index.js'` loaded the built library and this
-        // check stayed green — measured. What the sentinels may reach is
-        // packages, not this repository's own output.
-        if (target.startsWith(`${LIB}/`) || target.startsWith(`${DIST}/`)) {
-          offenders.push([...via, relative(ROOT, target)].join(' -> '));
-          continue;
-        }
-        if (target.startsWith(`${TESTS}/`) && !walked.has(target)) {
-          queue.push({ path: target, via: [...via, relative(TESTS, target)] });
-        }
-      }
-    }
+    const { offenders } = reach(roots, {
+      here: HERE,
+      tests: TESTS,
+      root: ROOT,
+      lib: resolve(ROOT, 'src/lib'),
+      dist: resolve(ROOT, 'dist')
+    });
 
     // **The control, and `length > 0` is not it.** The defect this check has
     // actually had was a *filter* that dropped part of the directory — a
@@ -200,11 +222,49 @@ describe('the sentinel boundary', () => {
         .map((path) => relative(HERE, path))
         .sort()
     ).toEqual(everyFile.map((path) => relative(HERE, path)).sort());
-    // And the walk followed something, which is the half the count above
-    // cannot see: a resolver that returned `undefined` for everything would
-    // report nothing. The harness the rx-nostr sentinels share lives in this
-    // directory, so the walk need not leave it to have followed an edge.
-    expect(followed, 'the walk resolved no relative import').toBeGreaterThan(0);
+    // **And the walk leaves the directory, driven rather than assumed.** The
+    // real tree no longer exercises that: the harness the rx-nostr sentinels
+    // share lives in this directory, so every edge it has stays inside. A
+    // fabricated tree puts the library one hop outside — a sentinel importing a
+    // helper elsewhere under the suite root, which imports the library both by
+    // path and by alias — and the clean variant beside it says the walk still
+    // reaches that helper when nothing is wrong with it.
+    const sandbox = mkdtempSync(join(tmpdir(), 'nosvelte-boundary-'));
+    try {
+      const fake = {
+        here: join(sandbox, 'src/tests/contracts/sentinels'),
+        tests: join(sandbox, 'src/tests'),
+        root: sandbox,
+        lib: join(sandbox, 'src/lib'),
+        dist: join(sandbox, 'dist')
+      };
+      for (const dir of [fake.here, join(fake.tests, 'helpers'), fake.lib])
+        mkdirSync(dir, { recursive: true });
+      writeFileSync(join(fake.lib, 'index.ts'), 'export const x = 1;');
+      // The imports are assembled, so that this file's own text names none of
+      // them: `DS0` reads this file, and a literal one would be an offender.
+      const from = (specifier: string): string => `import { v } ${'from'} '${specifier}';`;
+      const sentinel = join(fake.here, 'a.test.ts');
+      writeFileSync(sentinel, from(['..', '..', 'helpers', 'h.js'].join('/')));
+      const helper = join(fake.tests, 'helpers/h.ts');
+      writeFileSync(
+        helper,
+        [
+          from(['..', '..', 'lib', 'index.js'].join('/')),
+          from(['$lib', 'index.js'].join('/'))
+        ].join('\n')
+      );
+      expect(reach([sentinel], fake).offenders.sort()).toEqual([
+        'a.test.ts -> helpers/h.ts -> $lib/index.js',
+        'a.test.ts -> helpers/h.ts -> src/lib/index.ts'
+      ]);
+      writeFileSync(helper, "import { z } from 'rx-nostr';");
+      const clean = reach([sentinel], fake);
+      expect(clean.offenders).toEqual([]);
+      expect([...clean.walked], 'the walk did not leave the directory').toContain(helper);
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
 
     expect(offenders).toEqual([]);
   });
@@ -231,9 +291,10 @@ describe('the sentinels name what they measured', () => {
       ).version;
 
     // 3.7.6 rather than the 3.7.5 the spike measured: the production line
-    // resolved it, these sentinels re-ran green, and the one source change is
-    // `confirmOK` in `connection/publish.ts` (the publish count now drops on an
-    // OK), which no request-path measurement reads. `0003` records the move.
+    // resolved it and these sentinels re-ran green. The one source change is
+    // `confirmOK` in `connection/publish.ts` — an acknowledged event now leaves
+    // the publish count, which feeds a connection's idle state — and no
+    // sentinel publishes. `0003` records the move and what it changes.
     expect(versionAt('rx-nostr')).toBe('3.7.6');
     expect(versionAt('tanstack-svelte-query-v6')).toBe('6.1.38');
     expect(versionAt('tanstack-svelte-query-v6', 'node_modules', '@tanstack', 'query-core')).toBe(

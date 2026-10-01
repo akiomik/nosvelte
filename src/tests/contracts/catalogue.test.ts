@@ -6,8 +6,8 @@
  * under this directory. This file is what makes a landing mean something: the
  * roster's shape and counts, the grammar of each evidence cell, and the seven
  * rules 0005 states for `test:<id>`. Each rule is also driven against
- * fabricated sources, because until tests land the real population cannot
- * exercise the refusals.
+ * fabricated sources, because the real landings only ever take the accepting
+ * path and so cannot exercise the refusals.
  */
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,7 +30,8 @@ import {
   mergeDeclarations,
   PRODUCTION_ROOT,
   PRODUCTION_ROOT_LEAF,
-  ROUTES
+  ROUTES,
+  TEST_ID
 } from './bridge.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -60,6 +61,8 @@ interface Row {
   readonly kind: string;
   /** The Implementation test cell. */
   readonly implementation: string;
+  /** The Spike witness cell: the arms on the spike branch that made the observation. */
+  readonly witness: string;
 }
 
 const CATALOGUE = read('0005-contract-catalogue.md');
@@ -71,8 +74,23 @@ const rows: Row[] = [
 ].map((match) => ({
   contract: match[1] as string,
   kind: match[3] as string,
-  implementation: (match[7] as string).trim()
+  implementation: (match[7] as string).trim(),
+  witness: (match[6] as string).trim()
 }));
+
+/**
+ * The ids rule 1 refuses as landings: every arm 0005 names as a spike witness.
+ * The spike is not on this branch, so its arms cannot be read from the tree;
+ * the record's witness column is the list of them, and a landing that reuses
+ * one is a spike arm wearing a new directory, whatever directory it is in.
+ */
+const spikeWitnesses = new Set(
+  rows.flatMap((row) =>
+    [...row.witness.matchAll(new RegExp(`(?<![\\w-])(${TEST_ID})(?![\\w-])`, 'g'))].map(
+      (match) => match[1] as string
+    )
+  )
+);
 
 /** Every `.test.ts` under the suite root, relative to it. */
 const testFilesUnder = (dir: string): string[] =>
@@ -142,6 +160,18 @@ describe('the production contract bridge', () => {
     expect(
       [...landed.tests.keys()].filter((id) => elsewhere.has(id)),
       'a landing test reusing an id the suite declares outside the root'
+    ).toEqual([]);
+    // And rule 1 proper: an id 0005 records as a spike witness is not a landing.
+    // The read is driven both ways — the spike's own name for a sentinel the
+    // production line renamed is in the set, and the production name is not.
+    expect(spikeWitnesses.has('SEN25'), 'the witness column was not read').toBe(true);
+    expect(spikeWitnesses.has('DS25')).toBe(false);
+    expect(spikeWitnesses.size, 'the witness column was read as almost nothing').toBeGreaterThan(
+      300
+    );
+    expect(
+      [...landed.tests.keys()].filter((id) => spikeWitnesses.has(id)),
+      'a landing test reusing an id 0005 records as a spike witness'
     ).toEqual([]);
 
     // One root, and the record names it wherever it sends a port: the route
@@ -631,7 +661,13 @@ describe('the production contract bridge', () => {
 
     // Over the real files this bridge reads: a comment inserted at a statement
     // boundary anywhere in them is not an arm.
-    for (const name of ['catalogue.test.ts', 'bridge.ts']) {
+    for (const name of [
+      'catalogue.test.ts',
+      'bridge.ts',
+      'sentinels/rx-nostr.test.ts',
+      'sentinels/query-core.test.ts',
+      'sentinels/boundary.test.ts'
+    ]) {
       const lines = readFileSync(join(HERE, name), 'utf8').split('\n');
       const boundaries = lines
         .map((line, at) => (/;\s*$/.test(line) ? at + 1 : -1))
