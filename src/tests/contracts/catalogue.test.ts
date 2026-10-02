@@ -542,6 +542,10 @@ describe('the production contract bridge', () => {
       `import { getCurrentTest } from 'vitest/suite'; ${armStatement}`,
       `import * as runner from '@vitest/runner'; ${armStatement}`,
       `${'describe'}('x', () => { helper(); ${armStatement} });`,
+      // A sibling whose registration evaluates something while it is read.
+      `${'describe'}('x', () => { ${'it'}((beforeEach((ctx) => ctx.skip()), 'sibling'), () => {}); ${armStatement} });`,
+      `${'describe'}('x', () => { ${'it'}.each([beforeEach((ctx) => ctx.skip())])('sibling', () => {}); ${armStatement} });`,
+      `${'describe'}('x', () => { ${'describe'}.each${'`'}a\n${'$'}{beforeEach((ctx) => ctx.skip())}${'`'}('sibling', () => {}); ${armStatement} });`,
       // An only anywhere in the file skips everything else.
       `${'it'}.only('CT9: other', () => {}); ${armStatement}`,
       `${'describe'}('y', { only: true }, () => {}); ${armStatement}`
@@ -566,7 +570,9 @@ describe('the production contract bridge', () => {
       `beforeEach(() => {}, 1000); ${armStatement}`,
       `const websocket = Socket as unknown as Constructor; const make = () => build(); ${armStatement}`,
       `type Row = { a: number }; function helper() { return 1; } ${armStatement}`,
-      `${'describe'}.skip('other', () => {}); ${armStatement}`
+      `${'describe'}.skip('other', () => {}); ${armStatement}`,
+      `${'it'}.each([1, 2])('sibling %s', () => {}); ${armStatement}`,
+      `${'describe'}('sibling', () => { beforeEach((ctx) => ctx.skip()); }); ${armStatement}`
     ])
       expect(inspect(statement, 'x.test.ts').disabled, `${statement} is credited`).toEqual([]);
 

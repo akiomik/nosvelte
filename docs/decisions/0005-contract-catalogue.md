@@ -1201,19 +1201,21 @@ So a row carries two fields of its own, in the roster below, and neither is infe
   takes no parameter, placed the same way all the way up, with no `return` or `throw` in any block
   on the path. **Every statement beside it on that path is quiet too**: an import that is not from
   `vitest/…` or `@vitest/…`, a type, a function declaration, a declaration whose initializer calls,
-  constructs, awaits or tags nothing outside a function body, another test or suite, or a hook —
-  `beforeEach`, `afterEach`, `beforeAll`, `afterAll` — whose callback takes no parameter, so it
-  cannot reach the test context. A file that holds an `only` anywhere has no landing credited,
-  because the runner skips everything else in it. Only an arm that declares a row is judged.
-  **Nothing is interpreted** — no modifier, no options object, no table, no test context — so there
-  is nothing to interpret wrongly. This is narrower than it was: for several rounds the check
-  credited more and read what decides whether the extra shapes run, and each round a reviewer found
-  a reading that disagreed with the runner. Two consequences are deliberate. A shape refused
-  although the runner would run it is not a defect: the landing is rewritten into one of the two. A
-  shape inside the two that the check credits although the runner would not run it **is** a defect.
-  What no static read of the file can see — an environment variable, a command-line filter, the
-  runner's own include and exclude, what a module it imports does — is outside rule 6, and a
-  reviewer reading a landing reads it under the configuration CI runs.
+  constructs, awaits or tags nothing outside a function body, another test or suite whose
+  registration evaluates nothing — no argument of any call in its chain, and no tagged template,
+  calls, constructs, awaits or tags outside a function body — or a hook — `beforeEach`, `afterEach`,
+  `beforeAll`, `afterAll` — whose callback takes no parameter, so it cannot reach the test context.
+  A file that holds an `only` anywhere has no landing credited, because the runner skips everything
+  else in it. Only an arm that declares a row is judged. **Nothing is interpreted** — no modifier,
+  no options object, no table, no test context — so there is nothing to interpret wrongly. This is
+  narrower than it was: for several rounds the check credited more and read what decides whether the
+  extra shapes run, and each round a reviewer found a reading that disagreed with the runner. Two
+  consequences are deliberate. A shape refused although the runner would run it is not a defect: the
+  landing is rewritten into one of the two. A shape inside the two that the check credits although
+  the runner would not run it **is** a defect. What no static read of the file can see — an
+  environment variable, a command-line filter, the runner's own include and exclude, what a module
+  it imports does — is outside rule 6, and a reviewer reading a landing reads it under the
+  configuration CI runs.
 
   **What these seven cannot hold, said here rather than found in phase 2.** They are rules about
   _edges_: that a cell names a test, that the test names the row back, that the test exists, runs,

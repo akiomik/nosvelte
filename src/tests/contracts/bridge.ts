@@ -411,13 +411,25 @@ export const inspect = (
       return false;
     const call = statement.expression;
     const root = rootOf(call.expression);
-    // Another test or suite registers its own and decides nothing for this one.
+    // Another test or suite registers its own and decides nothing for this one
+    // — provided registering it evaluates nothing: every argument of every
+    // call in its chain, and every tagged template, is inert outside a function
+    // body. `it((beforeEach(…), 'x'), …)` registers a hook while it is read.
+    const inert = (link: ts.Expression): boolean => {
+      if (ts.isCallExpression(link))
+        return link.arguments.every((argument) => !eager(argument)) && inert(link.expression);
+      if (ts.isTaggedTemplateExpression(link)) return !eager(link.template) && inert(link.tag);
+      if (ts.isPropertyAccessExpression(link)) return inert(link.expression);
+
+      return ts.isIdentifier(link);
+    };
+    const sibling = directRoot(call.expression);
     if (
       (root === 'it' || root === 'test' || root === 'describe' || root === 'suite') &&
-      ts.isIdentifier(directRoot(call.expression) ?? call.expression) &&
-      runnerName(checker, directRoot(call.expression) as ts.Identifier)
+      sibling !== undefined &&
+      runnerName(checker, sibling)
     )
-      return true;
+      return inert(call);
     const rest = call.arguments.slice(1);
 
     return (
