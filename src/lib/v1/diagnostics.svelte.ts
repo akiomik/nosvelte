@@ -52,6 +52,7 @@
  */
 
 import type { RxNostr } from 'rx-nostr';
+import { untrack } from 'svelte';
 
 import type { UnixSeconds } from './clock.svelte.js';
 import { getNostrContext } from './context.svelte.js';
@@ -637,7 +638,12 @@ export function createRelayDiagnostics(
       // with an equal new array refuses it again on every render. Each was a
       // fresh object on a `$state` cell, so a consumer keyed on the refusal
       // churned for an input that had not changed.
-      if (configurationError !== undefined && sameRefusal(configurationError, error)) return;
+      //
+      // **Read untracked**, because this is called from the provider's effect:
+      // a tracked read of the cell this then writes made that effect rerun
+      // itself, forever, for a list whose reads throw something new each time.
+      const current = untrack(() => configurationError);
+      if (current !== undefined && sameRefusal(current, error)) return;
       configurationError = error;
     },
     accept() {

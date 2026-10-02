@@ -357,4 +357,57 @@ describe('the walking slice', () => {
       changed.unmount();
     }
   });
+
+  it('SL8: a list that answers differently per read settles, at construction and on a change', async () => {
+    browserLike();
+    const url = 'ws://localhost:9831';
+    const other = 'ws://localhost:9832';
+    new WS(url, { jsonProtocol: true });
+    new WS(other, { jsonProtocol: true });
+    // Each read of the entry says something new: the provider applies the list
+    // from an effect, and anything it reads of its own while applying would
+    // make that effect rerun for as long as the answers keep changing.
+    const shifting = (): [string, () => { list: unknown[]; reads: () => number }][] => {
+      const make = (entry: (read: () => number) => PropertyDescriptor) => () => {
+        let reads = 0;
+        const list: unknown[] = [undefined];
+        Object.defineProperty(
+          list,
+          0,
+          entry(() => ++reads)
+        );
+        return { list, reads: () => reads };
+      };
+      return [
+        [
+          'a refusal that says something new',
+          make((read) => ({
+            get() {
+              throw new Error(`unreadable ${read()}`);
+            }
+          }))
+        ],
+        [
+          'one relay, spelled differently',
+          make((read) => ({ get: () => (read() % 2 === 0 ? url : `${url}/`) }))
+        ],
+        ['two relays in turn', make((read) => ({ get: () => (read() % 2 === 0 ? url : other) }))]
+      ];
+    };
+    for (const [name, make] of shifting()) {
+      const constructed = make();
+      const first = render(DiagHost, { relays: constructed.list as string[] });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(constructed.reads(), name).toBeLessThanOrEqual(2);
+      first.unmount();
+
+      const changed = make();
+      const second = render(DiagHost, { relays: [url] });
+      await waitFor(() => expect(text('scope'), name).toBe(url));
+      await second.rerender({ relays: changed.list as string[] });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(changed.reads(), name).toBe(1);
+      second.unmount();
+    }
+  });
 });

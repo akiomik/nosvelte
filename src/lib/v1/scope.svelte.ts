@@ -21,6 +21,7 @@
 
 import type { RxNostr } from 'rx-nostr';
 import { createRxNostr } from 'rx-nostr';
+import { untrack } from 'svelte';
 
 import { describeValue, InvalidDescriptorError } from './normalize.js';
 import { saidBy } from './own.js';
@@ -1738,27 +1739,37 @@ export function createRelayScope(
       // The alternative is to answer "did anything move" from a local
       // transcription, which is the oracle this round removed.
       const next = named(entries);
-      // Same readable set, same scope: re-setting it would churn every request
-      // keyed on it for no change in what can be asked. B-ζ measured that cost.
-      // Note this compares the *identity*, so flipping a relay from write-only
-      // to readable is a change and flipping one the other way is too.
-      if (next.id === scope.id && sameConfig(next, scope)) {
-        // **Same relays, different spellings — the diagnostics still move.**
-        // Nothing routed or keyed changes here: the transport's names, the
-        // capabilities and the identity are all what they were, so no request
-        // is re-keyed and nothing refetches. What did change is what the
-        // consumer wrote, and `RelayDiagnostic.configuredUrls` is the field
-        // that publishes it — a consumer who edits `wss://a.example` to
-        // `wss://a.example/` would otherwise go on being told they configured
-        // the old spelling for as long as the provider lives.
-        if (!sameAliases(next, scope)) scope = next;
-        return;
-      }
-      // After the early return, deliberately: a generation nothing publishes
-      // has nothing for the set probe to protect, and the live one already
-      // passed it. Every generation that *is* published has been through this.
-      write(probedAsASet(next));
-      scope = next;
+      // **The caller's list is the only thing read here that the caller's
+      // effect may depend on.** `NostrApp` applies its list from an `$effect`,
+      // so every reactive read below would be tracked by it — and the scope is
+      // read and then written, so an entry answering differently per read made
+      // the effect rerun itself until Svelte gave up
+      // (`effect_update_depth_exceeded`). The comparison, the write to the
+      // transport — whose listeners can run inside the call — and the
+      // assignment are the provider's own business, and are untracked.
+      untrack(() => {
+        // Same readable set, same scope: re-setting it would churn every request
+        // keyed on it for no change in what can be asked. B-ζ measured that cost.
+        // Note this compares the *identity*, so flipping a relay from write-only
+        // to readable is a change and flipping one the other way is too.
+        if (next.id === scope.id && sameConfig(next, scope)) {
+          // **Same relays, different spellings — the diagnostics still move.**
+          // Nothing routed or keyed changes here: the transport's names, the
+          // capabilities and the identity are all what they were, so no request
+          // is re-keyed and nothing refetches. What did change is what the
+          // consumer wrote, and `RelayDiagnostic.configuredUrls` is the field
+          // that publishes it — a consumer who edits `wss://a.example` to
+          // `wss://a.example/` would otherwise go on being told they configured
+          // the old spelling for as long as the provider lives.
+          if (!sameAliases(next, scope)) scope = next;
+          return;
+        }
+        // After the early return, deliberately: a generation nothing publishes
+        // has nothing for the set probe to protect, and the live one already
+        // passed it. Every generation that *is* published has been through this.
+        write(probedAsASet(next));
+        scope = next;
+      });
     }
   };
 }
