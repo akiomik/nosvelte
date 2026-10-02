@@ -26,4 +26,22 @@ export type Outlets<T> = {
 export type Events = { events: readonly ReqEvent[] };
 export type Event = { event: ReqEvent };
 
-export type MetadataProps = { namespace?: string; pubkey: string } & Outlets<Event>;
+export type EventListProps = { namespace?: string; ids: readonly string[] } & Outlets<Events>;
+export type UniqueEventListProps = EventListProps;
+export type UserReactionListProps = {
+  namespace?: string;
+  pubkey: string;
+  limit?: number;
+} & Outlets<Events>;
+export type ContactsProps = { namespace?: string; pubkey: string } & Outlets<Event>;
+export type MetadataProps = ContactsProps;
+export type MuteProps = ContactsProps;
+export type PinProps = ContactsProps;
+export type RelayListMetadataProps = ContactsProps;
+export type ArticleProps = {
+  namespace?: string;
+  pubkey: string;
+  identifier: string;
+} & Outlets<Event>;
+export type EventProps = { namespace?: string; id: string } & Outlets<Event>;
+export type TextProps = EventProps;

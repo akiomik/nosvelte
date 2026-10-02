@@ -58,13 +58,52 @@ const optionsOf = (descriptor: ReqDescriptor): UseStreamedReqOpts =>
     }
   }) as UseStreamedReqOpts;
 
+/**
+ * A plan that could not be read, handed to the engine as a descriptor whose
+ * only filter throws what the plan threw.
+ *
+ * **The plan is the caller's code, and it runs where a throw has nowhere to
+ * go.** A component builds its plan from props, and a prop read is a getter a
+ * consumer owns: a throwing one came out of the render path, for every request
+ * component, past every outlet. 0004's failure table already has the row for
+ * "their own code threw below the guarded reads" — `descriptor-unreadable`,
+ * quoting what it said — and re-throwing the same value from inside the one
+ * filter the engine reads under its guard is what puts it on that row, on the
+ * channel every other refusal takes. Nothing else of the plan rides along:
+ * there is nothing else that could be read.
+ */
+const unreadablePlan = (thrown: unknown): UseStreamedReqOpts => ({
+  reqIdBase: WIRE_BASE,
+  filters: [
+    Object.defineProperty({}, 'ids', {
+      enumerable: true,
+      get() {
+        throw thrown;
+      }
+    })
+  ]
+});
+
 export function useReq(plan: () => ReqPlan): ReqHandle {
   const handle = useStreamedReq(() => {
-    const current = plan();
+    // The plan, its `kind` and its `descriptor` are each a read of the
+    // caller's; the descriptor's own fields are read later, by the engine,
+    // behind its guards.
+    let deferred: boolean;
+    let descriptor: unknown;
+    try {
+      const current = plan();
+      deferred = current.kind === 'deferred';
+      if (!deferred) descriptor = (current as { descriptor: unknown }).descriptor;
+    } catch (thrown) {
+      return unreadablePlan(thrown);
+    }
 
-    return current.kind === 'deferred'
+    // A request plan's descriptor goes to the engine as it is, absent or not:
+    // its fields are read there, and one that is missing is refused there.
+    return deferred
       ? { deferred: true, filters: [], reqIdBase: WIRE_BASE }
-      : optionsOf(current.descriptor);
+      : optionsOf(descriptor as ReqDescriptor);
   });
 
   return {
