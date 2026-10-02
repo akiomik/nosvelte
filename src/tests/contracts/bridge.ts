@@ -137,18 +137,18 @@ export function code(raw: string): string {
 const parse = (source: string): ts.SourceFile =>
   ts.createSourceFile('arms.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
-/** Whether a callee declares an arm this bridge reads: `it(` or `it.fails(`. */
+/**
+ * Whether a callee declares an arm this bridge reads: `it(` and nothing else.
+ * `it.fails` inverts what passing means, so its `passed` in a report is not a
+ * landing having run and held.
+ */
 const armCallee = (callee: ts.Expression): boolean =>
-  (ts.isIdentifier(callee) && callee.text === 'it') ||
-  (ts.isPropertyAccessExpression(callee) &&
-    ts.isIdentifier(callee.expression) &&
-    callee.expression.text === 'it' &&
-    callee.name.text === 'fails');
+  ts.isIdentifier(callee) && callee.text === 'it';
 
 /**
  * The rows each test arm declares, its call text, and the ids declared twice.
  *
- * An arm is a call in the syntax tree — `it('ID: …', …)` or `it.fails(…)` —
+ * An arm is a call in the syntax tree — `it('ID: …', …)` —
  * so text that only looks like one, inside a string or a comment, is not an
  * arm. A marker `@contracts <id> …` belongs to the arm it sits **directly**
  * above: the comment block above the line the call starts on, which a blank
@@ -233,308 +233,46 @@ export const asserts = (body: string): boolean => {
 };
 
 /**
- * Whether a name is the runner's own: imported from `vitest` under its own
- * name, or bound to nothing in the file (the runner's globals). A local
- * binding that shadows `it` or `describe` — `const it = test.skip` — is not,
- * whatever it holds.
+ * The id-shaped titles in a test file that the arm-id shape cannot read: an
+ * `it(` or `test(` whose title carries a digit before its colon, and is not an
+ * arm `declarationsIn` read. The natural mistake is naming a landing after its
+ * row (`it('A5-C1: …')`), and it is refused here, loudly, at the file.
  */
-const runnerName = (checker: ts.TypeChecker, name: ts.Identifier): boolean => {
-  const declaration = checker.getSymbolAtLocation(name)?.declarations?.[0];
-  if (declaration === undefined) return true;
-  if (!ts.isImportSpecifier(declaration)) return false;
-  // Under its own name: `import { describe as it }` is a suite called `it`.
-  const imported = declaration.propertyName ?? declaration.name;
-  if (imported.text !== name.text) return false;
-  const from = declaration.parent.parent.parent.moduleSpecifier;
-
-  return ts.isStringLiteral(from) && from.text === 'vitest';
-};
-
-const checkerFor = (tree: ts.SourceFile): ts.TypeChecker => {
-  const options: ts.CompilerOptions = { noLib: true, noResolve: true, types: [] };
-  const host = ts.createCompilerHost(options);
-  host.getSourceFile = (name) => (name === tree.fileName ? tree : undefined);
-  host.fileExists = (name) => name === tree.fileName;
-
-  return ts.createProgram({ rootNames: [tree.fileName], options, host }).getTypeChecker();
-};
-
-/**
- * An arrow function that takes no parameter. Only an arrow: it has no
- * `arguments` of its own, so nothing inside it — a computed method name
- * included — can reach what the runner passed, and with every callback on the
- * path an arrow there is no outer `function` whose `arguments` it could reach.
- */
-const bareCallback = (node: ts.Node | undefined): node is ts.ArrowFunction =>
-  node !== undefined && ts.isArrowFunction(node) && node.parameters.length === 0;
-
-/** Whether a block can end early — a `return` or a `throw` anywhere in it, outside a function of its own. */
-const leaves = (block: ts.Block): boolean => {
-  let found = false;
-  const look = (node: ts.Node): void => {
-    if (found || ts.isFunctionLike(node)) return;
-    if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) found = true;
-    else ts.forEachChild(node, look);
-  };
-  for (const statement of block.statements) look(statement);
-
-  return found;
-};
-
-/**
- * Which id-shaped arms in a test file are not credited, and which id-shaped
- * titles the arm-id shape cannot read.
- *
- * **What is credited is two shapes and nothing else.** An arm is
- * `it('ID: …', () => { … })` — the runner's own `it`, written directly, a
- * string title, a callback that takes no parameter, and at most a numeric
- * timeout after it — called as a statement of its own, at the top of the file
- * or inside the callback of a suite of the one shape a suite may have:
- * `describe('title', () => { … })`, the runner's own `describe`, a string
- * title and a callback that takes no parameter, itself placed the same way,
- * with no `return` or `throw` in any block on the path, and every statement
- * beside it on the way quiet (`quiet`); a file holding an `only` credits
- * nothing, and only an arm that declares a row is judged. Nothing is
- * interpreted — no modifier, no options object, no table, no test context —
- * so there is nothing to interpret wrongly. Every other shape is refused,
- * including ones the runner would run; that is the price, and a landing in
- * one is rewritten into these two.
- */
-export const inspect = (
+export const unreadableIn = (
   source: string,
   file: string,
-  declared: ReadonlySet<string> = new Set(),
-  landings?: ReadonlySet<string>
-): { disabled: string[]; unreadable: string[] } => {
+  declared: ReadonlySet<string>
+): string[] => {
   const tree = parse(source);
-  const checker = checkerFor(tree);
-  const named = (callee: ts.Expression, name: string): boolean =>
-    ts.isIdentifier(callee) && callee.text === name && runnerName(checker, callee);
-  const titled = (call: ts.CallExpression): boolean => {
-    const title = call.arguments[0];
-
-    return title !== undefined && ts.isStringLiteralLike(title);
-  };
-  // The name a chain starts from, through members, calls and tagged
-  // templates: every `it…` call with an id-shaped title is judged, so
-  // `it.skip('CT1: …')` is refused as out of shape rather than passed over.
-  const rootOf = (callee: ts.Expression): string | undefined => {
-    let at: ts.Expression = callee;
-    for (;;) {
-      if (ts.isPropertyAccessExpression(at) || ts.isCallExpression(at)) at = at.expression;
-      else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
-      else return ts.isIdentifier(at) ? at.text : undefined;
-    }
-  };
-  // The root of a chain written directly, for a sibling registration.
-  const directRoot = (callee: ts.Expression): ts.Identifier | undefined => {
-    let at: ts.Expression = callee;
-    for (;;) {
-      if (ts.isPropertyAccessExpression(at) || ts.isCallExpression(at)) at = at.expression;
-      else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
-      else return ts.isIdentifier(at) ? at : undefined;
-    }
-  };
-  const suite = (call: ts.Node): call is ts.CallExpression =>
-    ts.isCallExpression(call) &&
-    named(call.expression, 'describe') &&
-    call.arguments.length === 2 &&
-    titled(call) &&
-    bareCallback(call.arguments[1]);
-  const arm = (call: ts.CallExpression): boolean => {
-    const rest = call.arguments.slice(2);
-
-    return (
-      named(call.expression, 'it') &&
-      titled(call) &&
-      bareCallback(call.arguments[1]) &&
-      rest.length <= 1 &&
-      rest.every((argument) => ts.isNumericLiteral(argument))
-    );
-  };
-  // A statement that runs nothing at collection time beyond registering tests:
-  // the list below and nothing else. A hook takes a callback with no
-  // parameter, so it cannot reach the test context; nothing is imported from
-  // the runner's internals, through which a context is reachable; and every
-  // value evaluated while the file is collected is `settled`.
-  //
-  // **`settled` is an allow-list of expressions, not a search for dangerous
-  // ones.** A search missed a computed method name, which is evaluated when
-  // its object is built although it sits on a function; a getter, a spread
-  // or a coercion would each have been the next. So a value counts only when
-  // every part of it is one of these: a literal, a name or a property read, a
-  // function (its body runs later), a type-only wrapper, a sign on a number,
-  // an array of settled elements, or an object of plain settled properties. A
-  // spread, a method, an accessor, a computed key, a template with a hole, an
-  // operator and any call are not on the list.
-  const settled = (value: ts.Node): boolean => {
-    if (
-      ts.isStringLiteral(value) ||
-      ts.isNumericLiteral(value) ||
-      ts.isBigIntLiteral(value) ||
-      ts.isNoSubstitutionTemplateLiteral(value) ||
-      ts.isRegularExpressionLiteral(value) ||
-      value.kind === ts.SyntaxKind.TrueKeyword ||
-      value.kind === ts.SyntaxKind.FalseKeyword ||
-      value.kind === ts.SyntaxKind.NullKeyword ||
-      ts.isIdentifier(value) ||
-      ts.isArrowFunction(value) ||
-      ts.isFunctionExpression(value)
-    )
-      return true;
-    if (
-      ts.isParenthesizedExpression(value) ||
-      ts.isAsExpression(value) ||
-      ts.isSatisfiesExpression(value) ||
-      ts.isNonNullExpression(value) ||
-      ts.isTypeAssertionExpression(value) ||
-      ts.isPropertyAccessExpression(value)
-    )
-      return settled(value.expression);
-    if (ts.isPrefixUnaryExpression(value))
-      return (
-        (value.operator === ts.SyntaxKind.MinusToken ||
-          value.operator === ts.SyntaxKind.PlusToken) &&
-        (ts.isNumericLiteral(value.operand) || ts.isBigIntLiteral(value.operand))
-      );
-    if (ts.isArrayLiteralExpression(value))
-      return value.elements.every((element) => !ts.isSpreadElement(element) && settled(element));
-    if (ts.isObjectLiteralExpression(value))
-      return value.properties.every(
-        (property) =>
-          (ts.isShorthandPropertyAssignment(property) &&
-            property.objectAssignmentInitializer === undefined) ||
-          (ts.isPropertyAssignment(property) &&
-            !ts.isComputedPropertyName(property.name) &&
-            settled(property.initializer))
-      );
-
-    return false;
-  };
-  const HOOKS = ['beforeEach', 'afterEach', 'beforeAll', 'afterAll'];
-  const quiet = (statement: ts.Statement): boolean => {
-    if (ts.isImportDeclaration(statement)) {
-      const from = statement.moduleSpecifier;
-
-      return (
-        ts.isStringLiteral(from) &&
-        !from.text.startsWith('vitest/') &&
-        !from.text.startsWith('@vitest/')
-      );
-    }
-    if (
-      ts.isTypeAliasDeclaration(statement) ||
-      ts.isInterfaceDeclaration(statement) ||
-      ts.isFunctionDeclaration(statement) ||
-      ts.isEmptyStatement(statement)
-    )
-      return true;
-    if (ts.isVariableStatement(statement))
-      return statement.declarationList.declarations.every(
-        // A plain name: a destructuring pattern evaluates defaults and
-        // computed keys of its own, on the binding side.
-        (declaration) =>
-          ts.isIdentifier(declaration.name) &&
-          (declaration.initializer === undefined || settled(declaration.initializer))
-      );
-    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression))
-      return false;
-    const call = statement.expression;
-    const root = rootOf(call.expression);
-    // Another test or suite registers its own and decides nothing for this one
-    // — provided registering it evaluates nothing: every argument of every
-    // call in its chain, and every tagged template, is inert outside a function
-    // body. `it((beforeEach(…), 'x'), …)` registers a hook while it is read.
-    const inert = (link: ts.Expression): boolean => {
-      if (ts.isCallExpression(link)) return link.arguments.every(settled) && inert(link.expression);
-      if (ts.isTaggedTemplateExpression(link)) return settled(link.template) && inert(link.tag);
-      if (ts.isPropertyAccessExpression(link)) return inert(link.expression);
-
-      return ts.isIdentifier(link);
-    };
-    const sibling = directRoot(call.expression);
-    if (
-      (root === 'it' || root === 'test' || root === 'describe' || root === 'suite') &&
-      sibling !== undefined &&
-      runnerName(checker, sibling)
-    )
-      return inert(call);
-    const rest = call.arguments.slice(1);
-
-    return (
-      HOOKS.some((hook) => named(call.expression, hook)) &&
-      bareCallback(call.arguments[0]) &&
-      rest.length <= 1 &&
-      rest.every((argument) => ts.isNumericLiteral(argument))
-    );
-  };
-  // Placed as a statement at the top of the file, or in a suite's callback
-  // with no early exit, that suite placed the same way all the way up, and
-  // every statement beside it on the way quiet.
-  const placed = (call: ts.Node): boolean => {
-    const statement = call.parent;
-    if (!ts.isExpressionStatement(statement) || statement.expression !== call) return false;
-    const block = statement.parent;
-    if (ts.isSourceFile(block)) return block.statements.every(quiet);
-    if (!ts.isBlock(block) || leaves(block) || !block.statements.every(quiet)) return false;
-    const holder = block.parent;
-    const parent = holder.parent;
-
-    return suite(parent) && parent.arguments[1] === holder && placed(parent);
-  };
-  const shape = new RegExp(`^(${TEST_ID}):`);
-  // An `only` anywhere in the file makes the runner skip every test that does
-  // not carry one, so no landing in such a file is credited.
-  let only = false;
-  const findOnly = (node: ts.Node): void => {
-    if (only) return;
-    if (
-      (ts.isPropertyAccessExpression(node) && node.name.text === 'only') ||
-      ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
-        (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)) &&
-        node.name.text === 'only')
-    )
-      only = true;
-    else ts.forEachChild(node, findOnly);
-  };
-  findOnly(tree);
-  const disabled: string[] = [];
   const unreadable: string[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
-      const at = `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
+      const callee = node.expression;
+      const root = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
+          ? callee.expression.text
+          : undefined;
       const title = node.arguments[0];
-      const text = title !== undefined && ts.isStringLiteralLike(title) ? title.text : undefined;
-      const id = text === undefined ? undefined : shape.exec(text)?.[1];
-      if (
-        rootOf(node.expression) === 'it' &&
-        id !== undefined &&
-        (landings === undefined || landings.has(id))
-      ) {
-        if (only) disabled.push(`${at} (the file holds an \`only\`)`);
-        else if (!(arm(node) && placed(node)))
-          disabled.push(`${at} (not in the shape this bridge credits)`);
-      }
       // Only a title that means to be an id — one with a digit in it — is
       // held to the id shape; `it('rejects: an empty filter', …)` is prose.
-      const root = ts.isIdentifier(node.expression)
-        ? node.expression.text
-        : ts.isPropertyAccessExpression(node.expression) &&
-            ts.isIdentifier(node.expression.expression)
-          ? node.expression.expression.text
+      const id =
+        title !== undefined && ts.isStringLiteralLike(title)
+          ? /^(\S*\d\S*):/.exec(title.text)?.[1]
           : undefined;
-      const idLike = text === undefined ? undefined : /^(\S*\d\S*):/.exec(text)?.[1];
-      if ((root === 'it' || root === 'test') && idLike !== undefined && !declared.has(idLike))
+      if ((root === 'it' || root === 'test') && id !== undefined && !declared.has(id)) {
+        const at = tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1;
         unreadable.push(
-          `${at} — this bridge cannot read "${idLike}" as an arm id` +
+          `${file}:${at} — this bridge cannot read "${id}" as an arm id` +
             `${root === 'test' ? ', and it reads only `it(`' : ''}`
         );
+      }
     }
     ts.forEachChild(node, visit);
   };
   visit(tree);
 
-  return { disabled, unreadable };
+  return unreadable;
 };
 
 export interface Landings {
@@ -543,15 +281,13 @@ export interface Landings {
   readonly files: Map<string, string>;
   readonly duplicates: string[];
   readonly assertionless: string[];
-  readonly disabled: string[];
   readonly unreadable: string[];
 }
 
 /** Read a directory of contract tests. A root that is not there is empty rather than an error. */
 export const collectFrom = (root: string): Landings => {
   const files: Array<{ file: string; source: string }> = [];
-  if (!existsSync(root))
-    return { ...mergeDeclarations(files), assertionless: [], disabled: [], unreadable: [] };
+  if (!existsSync(root)) return { ...mergeDeclarations(files), assertionless: [], unreadable: [] };
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
@@ -564,22 +300,14 @@ export const collectFrom = (root: string): Landings => {
   const merged = mergeDeclarations(files);
   const unreadable: string[] = [];
   const assertionless: string[] = [];
-  const disabled: string[] = [];
   for (const { file, source } of files) {
     const parsed = declarationsIn(source);
     for (const [id, body] of parsed.bodies)
       if (!asserts(body)) assertionless.push(`${id} in ${file}`);
-    const found = inspect(
-      source,
-      file,
-      new Set(parsed.rows.keys()),
-      new Set([...parsed.rows].filter(([, rows]) => rows.size > 0).map(([id]) => id))
-    );
-    disabled.push(...found.disabled);
-    unreadable.push(...found.unreadable);
+    unreadable.push(...unreadableIn(source, file, new Set(parsed.rows.keys())));
   }
 
-  return { ...merged, assertionless, disabled, unreadable };
+  return { ...merged, assertionless, unreadable };
 };
 
 export type Roster = ReadonlyMap<string, { readonly route: string; readonly evidence: string }>;
