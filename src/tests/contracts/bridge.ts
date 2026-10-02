@@ -364,26 +364,62 @@ export const inspect = (
   };
   // A statement that runs nothing at collection time beyond registering tests:
   // the list below and nothing else. A hook takes a callback with no
-  // parameter, so it cannot reach the test context; a declaration evaluates
-  // no call, `new`, `await` or tag outside a function body; and nothing is
-  // imported from the runner's internals, through which a context is reachable.
-  const eager = (node: ts.Node): boolean => {
-    let found = false;
-    const look = (inner: ts.Node): void => {
-      if (found || ts.isFunctionLike(inner)) return;
-      if (
-        ts.isCallExpression(inner) ||
-        ts.isNewExpression(inner) ||
-        ts.isAwaitExpression(inner) ||
-        ts.isTaggedTemplateExpression(inner) ||
-        ts.isClassExpression(inner)
-      )
-        found = true;
-      else ts.forEachChild(inner, look);
-    };
-    look(node);
+  // parameter, so it cannot reach the test context; nothing is imported from
+  // the runner's internals, through which a context is reachable; and every
+  // value evaluated while the file is collected is `settled`.
+  //
+  // **`settled` is an allow-list of expressions, not a search for dangerous
+  // ones.** A search missed a computed method name, which is evaluated when
+  // its object is built although it sits on a function; a getter, a spread
+  // or a coercion would each have been the next. So a value counts only when
+  // every part of it is one of these: a literal, a name or a property read, a
+  // function (its body runs later), a type-only wrapper, a sign on a number,
+  // an array of settled elements, or an object of plain settled properties. A
+  // spread, a method, an accessor, a computed key, a template with a hole, an
+  // operator and any call are not on the list.
+  const settled = (value: ts.Node): boolean => {
+    if (
+      ts.isStringLiteral(value) ||
+      ts.isNumericLiteral(value) ||
+      ts.isBigIntLiteral(value) ||
+      ts.isNoSubstitutionTemplateLiteral(value) ||
+      ts.isRegularExpressionLiteral(value) ||
+      value.kind === ts.SyntaxKind.TrueKeyword ||
+      value.kind === ts.SyntaxKind.FalseKeyword ||
+      value.kind === ts.SyntaxKind.NullKeyword ||
+      ts.isIdentifier(value) ||
+      ts.isArrowFunction(value) ||
+      ts.isFunctionExpression(value)
+    )
+      return true;
+    if (
+      ts.isParenthesizedExpression(value) ||
+      ts.isAsExpression(value) ||
+      ts.isSatisfiesExpression(value) ||
+      ts.isNonNullExpression(value) ||
+      ts.isTypeAssertionExpression(value) ||
+      ts.isPropertyAccessExpression(value)
+    )
+      return settled(value.expression);
+    if (ts.isPrefixUnaryExpression(value))
+      return (
+        (value.operator === ts.SyntaxKind.MinusToken ||
+          value.operator === ts.SyntaxKind.PlusToken) &&
+        (ts.isNumericLiteral(value.operand) || ts.isBigIntLiteral(value.operand))
+      );
+    if (ts.isArrayLiteralExpression(value))
+      return value.elements.every((element) => !ts.isSpreadElement(element) && settled(element));
+    if (ts.isObjectLiteralExpression(value))
+      return value.properties.every(
+        (property) =>
+          (ts.isShorthandPropertyAssignment(property) &&
+            property.objectAssignmentInitializer === undefined) ||
+          (ts.isPropertyAssignment(property) &&
+            !ts.isComputedPropertyName(property.name) &&
+            settled(property.initializer))
+      );
 
-    return found;
+    return false;
   };
   const HOOKS = ['beforeEach', 'afterEach', 'beforeAll', 'afterAll'];
   const quiet = (statement: ts.Statement): boolean => {
@@ -405,7 +441,7 @@ export const inspect = (
       return true;
     if (ts.isVariableStatement(statement))
       return statement.declarationList.declarations.every(
-        (declaration) => declaration.initializer === undefined || !eager(declaration.initializer)
+        (declaration) => declaration.initializer === undefined || settled(declaration.initializer)
       );
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression))
       return false;
@@ -416,9 +452,8 @@ export const inspect = (
     // call in its chain, and every tagged template, is inert outside a function
     // body. `it((beforeEach(…), 'x'), …)` registers a hook while it is read.
     const inert = (link: ts.Expression): boolean => {
-      if (ts.isCallExpression(link))
-        return link.arguments.every((argument) => !eager(argument)) && inert(link.expression);
-      if (ts.isTaggedTemplateExpression(link)) return !eager(link.template) && inert(link.tag);
+      if (ts.isCallExpression(link)) return link.arguments.every(settled) && inert(link.expression);
+      if (ts.isTaggedTemplateExpression(link)) return settled(link.template) && inert(link.tag);
       if (ts.isPropertyAccessExpression(link)) return inert(link.expression);
 
       return ts.isIdentifier(link);

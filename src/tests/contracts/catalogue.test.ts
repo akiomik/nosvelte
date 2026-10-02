@@ -542,6 +542,14 @@ describe('the production contract bridge', () => {
       `import { getCurrentTest } from 'vitest/suite'; ${armStatement}`,
       `import * as runner from '@vitest/runner'; ${armStatement}`,
       `${'describe'}('x', () => { helper(); ${armStatement} });`,
+      // A value evaluated at collection time that is not on the settled list.
+      `${'describe'}('x', () => { ${'it'}.each([{ [(beforeEach((ctx) => ctx.skip()), 'noop')]() {} }])('sibling', () => {}); ${armStatement} });`,
+      `const o = { get x() { return 1; } }; ${armStatement}`,
+      `const o = { m() {} }; ${armStatement}`,
+      `const rows = [...table]; ${armStatement}`,
+      `const label = ${'`'}a${'$'}{name}${'`'}; ${armStatement}`,
+      `const total = base + 1; ${armStatement}`,
+      `const o = { ...defaults }; ${armStatement}`,
       // A sibling whose registration evaluates something while it is read.
       `${'describe'}('x', () => { ${'it'}((beforeEach((ctx) => ctx.skip()), 'sibling'), () => {}); ${armStatement} });`,
       `${'describe'}('x', () => { ${'it'}.each([beforeEach((ctx) => ctx.skip())])('sibling', () => {}); ${armStatement} });`,
@@ -570,6 +578,7 @@ describe('the production contract bridge', () => {
       `beforeEach(() => {}, 1000); ${armStatement}`,
       `const websocket = Socket as unknown as Constructor; const make = () => build(); ${armStatement}`,
       `type Row = { a: number }; function helper() { return 1; } ${armStatement}`,
+      `const config = { relays: ['wss://x'], timeout: -1, live: false, empty: null }; const run = () => go(); const pattern = /x/; ${armStatement}`,
       `${'describe'}.skip('other', () => {}); ${armStatement}`,
       `${'it'}.each([1, 2])('sibling %s', () => {}); ${armStatement}`,
       `${'describe'}('sibling', () => { beforeEach((ctx) => ctx.skip()); }); ${armStatement}`
