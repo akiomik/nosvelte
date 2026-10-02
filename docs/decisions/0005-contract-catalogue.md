@@ -1300,7 +1300,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **342 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **23 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **312 are
+Of those, **24 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **311 are
 TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1641,7 +1641,7 @@ C6-C13       public        TBD
 C6-C14       public        TBD
 C6-C15       public        TBD
 C6-C16       public        TBD
-C6-C17       public        TBD
+C6-C17       public        test:SL2
 C6-C5        architecture  TBD
 C6-C6        architecture  TBD
 C6-C7b       architecture  TBD
