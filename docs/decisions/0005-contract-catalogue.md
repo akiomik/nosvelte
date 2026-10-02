@@ -1194,30 +1194,32 @@ So a row carries two fields of its own, in the roster below, and neither is infe
   **How rule 6 is decided, and where it stops.** "Runs" is read from the syntax tree, and what is
   credited is **two shapes and nothing else**. An arm is `it('ID: …', () => { … })`: the runner's
   own `it` — imported from `vitest` under its own name, or global — written directly, a string
-  title, a callback that takes no parameter (and in a `function`, does not read `arguments`), and at
-  most a numeric timeout after it. It is called as a statement of its own, at the top of the file or
-  inside the callback of a suite of the one shape a suite may have:
-  `describe('title', () => { … })`, the runner's own `describe`, a string title and a callback that
-  takes no parameter, placed the same way all the way up, with no `return` or `throw` in any block
-  on the path. **Every statement beside it on that path is quiet too**: an import that is not from
-  `vitest/…` or `@vitest/…`, a type, a function declaration, a declaration whose initializer is
-  settled, another test or suite whose chain's arguments and templates are all settled, or a hook —
-  `beforeEach`, `afterEach`, `beforeAll`, `afterAll` — whose callback takes no parameter, so it
-  cannot reach the test context. **Settled is itself an allow-list of expressions**, because a
-  search for dangerous ones missed a computed method name: a literal, a name or a property read, a
-  function (whose body runs later), a type-only wrapper, a sign on a number, an array of settled
-  elements, or an object of plain settled properties — no spread, method, accessor, computed key,
-  template hole, operator or call. A file that holds an `only` anywhere has no landing credited,
-  because the runner skips everything else in it. Only an arm that declares a row is judged.
-  **Nothing is interpreted** — no modifier, no options object, no table, no test context — so there
-  is nothing to interpret wrongly. This is narrower than it was: for several rounds the check
-  credited more and read what decides whether the extra shapes run, and each round a reviewer found
-  a reading that disagreed with the runner. Two consequences are deliberate. A shape refused
-  although the runner would run it is not a defect: the landing is rewritten into one of the two. A
-  shape inside the two that the check credits although the runner would not run it **is** a defect.
-  What no static read of the file can see — an environment variable, a command-line filter, the
-  runner's own include and exclude, what a module it imports does — is outside rule 6, and a
-  reviewer reading a landing reads it under the configuration CI runs.
+  title, an arrow callback that takes no parameter — only an arrow, which has no `arguments` of its
+  own — and at most a numeric timeout after it. It is called as a statement of its own, at the top
+  of the file or inside the callback of a suite of the one shape a suite may have:
+  `describe('title', () => { … })`, the runner's own `describe`, a string title and an arrow
+  callback that takes no parameter, placed the same way all the way up, with no `return` or `throw`
+  in any block on the path. **Every statement beside it on that path is quiet too**: an import that
+  is not from `vitest/…` or `@vitest/…`, a type, a function declaration, a declaration of a plain
+  name whose initializer is settled — no destructuring, whose defaults and computed keys evaluate on
+  the binding side — another test or suite whose chain's arguments and templates are all settled, or
+  a hook — `beforeEach`, `afterEach`, `beforeAll`, `afterAll` — whose callback is an arrow taking no
+  parameter, so it cannot reach the test context. **Settled is itself an allow-list of
+  expressions**, because a search for dangerous ones missed a computed method name: a literal, a
+  name or a property read, a function (whose body runs later), a type-only wrapper, a sign on a
+  number, an array of settled elements, or an object of plain settled properties — no spread,
+  method, accessor, computed key, template hole, operator or call. A file that holds an `only`
+  anywhere has no landing credited, because the runner skips everything else in it. Only an arm that
+  declares a row is judged. **Nothing is interpreted** — no modifier, no options object, no table,
+  no test context — so there is nothing to interpret wrongly. This is narrower than it was: for
+  several rounds the check credited more and read what decides whether the extra shapes run, and
+  each round a reviewer found a reading that disagreed with the runner. Two consequences are
+  deliberate. A shape refused although the runner would run it is not a defect: the landing is
+  rewritten into one of the two. A shape inside the two that the check credits although the runner
+  would not run it **is** a defect. What no static read of the file can see — an environment
+  variable, a command-line filter, the runner's own include and exclude, what a module it imports
+  does — is outside rule 6, and a reviewer reading a landing reads it under the configuration CI
+  runs.
 
   **What these seven cannot hold, said here rather than found in phase 2.** They are rules about
   _edges_: that a cell names a test, that the test names the row back, that the test exists, runs,

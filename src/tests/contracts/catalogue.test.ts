@@ -542,6 +542,13 @@ describe('the production contract bridge', () => {
       `import { getCurrentTest } from 'vitest/suite'; ${armStatement}`,
       `import * as runner from '@vitest/runner'; ${armStatement}`,
       `${'describe'}('x', () => { helper(); ${armStatement} });`,
+      `${'it'}('CT1: y', async function () { expect(1).toBe(1); });`,
+      `${'describe'}('x', function () { ${inSuite(`${'describe'}('y',`)} });`,
+      // Only arrows, and only plain names in declarations.
+      `${'describe'}('x', () => { beforeEach(function () { ({ [arguments[0].skip()]() {} }); }); ${armStatement} });`,
+      `${'describe'}('x', () => { const { missing = beforeEach((ctx) => ctx.skip()) } = {}; ${armStatement} });`,
+      `${'describe'}('x', () => { const { [String(beforeEach((ctx) => ctx.skip()))]: v } = {}; ${armStatement} });`,
+      `const [first] = rows; ${armStatement}`,
       // A value evaluated at collection time that is not on the settled list.
       `${'describe'}('x', () => { ${'it'}.each([{ [(beforeEach((ctx) => ctx.skip()), 'noop')]() {} }])('sibling', () => {}); ${armStatement} });`,
       `const o = { get x() { return 1; } }; ${armStatement}`,
@@ -568,9 +575,7 @@ describe('the production contract bridge', () => {
     for (const statement of [
       armStatement,
       `${'it'}('CT1: y', () => { expect(1).toBe(1); }, 20_000);`,
-      `${'it'}('CT1: y', async function () { expect(1).toBe(1); });`,
       inSuite(`${'describe'}('x',`),
-      `${'describe'}('x', function () { ${inSuite(`${'describe'}('y',`)} });`,
       `import { ${'describe'}, ${'it'} } from 'vitest'; ${inSuite(`${'describe'}('x',`)}`,
       `${'describe'}('x', () => { beforeEach(() => {}); const n = 1; ${armStatement} });`,
       `${'describe'}('x', () => { ${'it'}('CT2: other', () => { return; }); ${armStatement} });`,

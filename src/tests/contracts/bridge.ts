@@ -259,24 +259,14 @@ const checkerFor = (tree: ts.SourceFile): ts.TypeChecker => {
   return ts.createProgram({ rootNames: [tree.fileName], options, host }).getTypeChecker();
 };
 
-/** A function literal that takes no parameter, and in a `function` does not read `arguments`. */
-const bareCallback = (
-  node: ts.Node | undefined
-): node is ts.ArrowFunction | ts.FunctionExpression => {
-  if (node === undefined || !(ts.isArrowFunction(node) || ts.isFunctionExpression(node)))
-    return false;
-  if (node.parameters.length > 0) return false;
-  if (!ts.isFunctionExpression(node)) return true;
-  let reads = false;
-  const look = (inner: ts.Node): void => {
-    if (reads || (ts.isFunctionLike(inner) && !ts.isArrowFunction(inner))) return;
-    if (ts.isIdentifier(inner) && inner.text === 'arguments') reads = true;
-    else ts.forEachChild(inner, look);
-  };
-  ts.forEachChild(node.body, look);
-
-  return !reads;
-};
+/**
+ * An arrow function that takes no parameter. Only an arrow: it has no
+ * `arguments` of its own, so nothing inside it — a computed method name
+ * included — can reach what the runner passed, and with every callback on the
+ * path an arrow there is no outer `function` whose `arguments` it could reach.
+ */
+const bareCallback = (node: ts.Node | undefined): node is ts.ArrowFunction =>
+  node !== undefined && ts.isArrowFunction(node) && node.parameters.length === 0;
 
 /** Whether a block can end early — a `return` or a `throw` anywhere in it, outside a function of its own. */
 const leaves = (block: ts.Block): boolean => {
@@ -441,7 +431,11 @@ export const inspect = (
       return true;
     if (ts.isVariableStatement(statement))
       return statement.declarationList.declarations.every(
-        (declaration) => declaration.initializer === undefined || settled(declaration.initializer)
+        // A plain name: a destructuring pattern evaluates defaults and
+        // computed keys of its own, on the binding side.
+        (declaration) =>
+          ts.isIdentifier(declaration.name) &&
+          (declaration.initializer === undefined || settled(declaration.initializer))
       );
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression))
       return false;
