@@ -26,18 +26,14 @@
   const context = createNostrContext({ relays, ...(signer === undefined ? {} : { signer }) });
   setNostrContext(context);
 
-  // Applied on every change after the first. The first run would hand the
-  // provider the list it was just created with, and a refused list would then
-  // be refused twice — the second time through the path for a later change,
-  // which C16 decides differently from the first construction.
-  let created = true;
+  // Applied on every run, the first included: `setRelays` reads the list's
+  // entries, so it is the first run that makes a change *inside* the list — a
+  // `push` on a `$state` array, a flag flipped on one entry — rerun this. The
+  // list the provider was constructed with is therefore applied twice; an
+  // accepted one is found equal and moves nothing, and a refused one is the
+  // same refusal and is not published again.
   $effect(() => {
-    const next = relays;
-    if (created) {
-      created = false;
-      return;
-    }
-    context.setRelays(next);
+    context.setRelays(relays);
   });
 </script>
 

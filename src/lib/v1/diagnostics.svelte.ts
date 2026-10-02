@@ -630,10 +630,46 @@ export function createRelayDiagnostics(
     // without going through either verb — which is the point: it is not a
     // caller with nothing to say, it is the end of the thing that was saying.
     refuse(error: RelayConfigurationError) {
+      // **The same refusal again is not a new one.** The provider applies its
+      // list on every run of its effect — the first included, which is how the
+      // list's contents come to be tracked — so the list it was constructed
+      // with is refused a second time on mount, and a parent that re-renders
+      // with an equal new array refuses it again on every render. Each was a
+      // fresh object on a `$state` cell, so a consumer keyed on the refusal
+      // churned for an input that had not changed.
+      if (configurationError !== undefined && sameRefusal(configurationError, error)) return;
       configurationError = error;
     },
     accept() {
       configurationError = undefined;
     }
   };
+}
+
+/**
+ * Whether two refusals say the same thing: one class, and every own field —
+ * the message, the code and the fields each subclass adds — equal. `stack` is
+ * where it was thrown from, not what it says, and is left out.
+ *
+ * Every field these classes carry is a string or a list of strings, frozen
+ * where it is built. A field of any other shape is not compared and makes the
+ * two different, so a field added later republishes rather than collapses.
+ */
+function sameRefusal(a: RelayConfigurationError, b: RelayConfigurationError): boolean {
+  if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+  const keys = Reflect.ownKeys(a).filter((key) => key !== 'stack');
+  const others = Reflect.ownKeys(b).filter((key) => key !== 'stack');
+  if (keys.length !== others.length) return false;
+  return keys.every((key) => {
+    if (!Object.hasOwn(b, key)) return false;
+    const mine: unknown = Reflect.get(a, key);
+    const theirs: unknown = Reflect.get(b, key);
+    if (typeof mine === 'string') return mine === theirs;
+    return (
+      Array.isArray(mine) &&
+      Array.isArray(theirs) &&
+      mine.length === theirs.length &&
+      mine.every((item, at) => typeof item === 'string' && item === theirs[at])
+    );
+  });
 }

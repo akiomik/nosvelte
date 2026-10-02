@@ -23,6 +23,7 @@ import {
 import App from './slice/App.svelte';
 import DiagHost from './slice/DiagHost.svelte';
 import MetadataProbe from './slice/MetadataProbe.svelte';
+import MutableRelays from './slice/MutableRelays.svelte';
 import Poster from './slice/Poster.svelte';
 import ReqHost from './slice/ReqHost.svelte';
 import TwoProviders from './slice/TwoProviders.svelte';
@@ -209,6 +210,19 @@ describe('the walking slice', () => {
       [{ filters, settleTimeoutMs: -1 }, 'invalid-descriptor:settleTimeoutMs'],
       [{ filters, retain: 0 }, 'invalid-descriptor:retain'],
       [{ filters, relays: 'x' }, 'invalid-descriptor:relays'],
+      // A list whose reads throw is refused, not thrown: below the guarded
+      // reads, so under 0004's catch-all code rather than by the field.
+      [
+        {
+          filters,
+          relays: Object.assign(['ws://localhost:9791'], {
+            [Symbol.iterator]: () => {
+              throw new Error('unreadable iterator');
+            }
+          })
+        },
+        'descriptor-unreadable:'
+      ],
       // A field whose read throws is the engine's to refuse, behind its own
       // guard, not the hook's to throw out of the component.
       [
@@ -255,12 +269,92 @@ describe('the walking slice', () => {
     await waitFor(() => expect(text('count')).toBe('1'));
   });
 
-  it('SL5: a refused first relay list is refused once, and the children still mount', async () => {
+  it('SL5: a refused relay list is one refusal until it says something else, and the children still mount', async () => {
     browserLike();
-    render(DiagHost, { relays: ['not a url'] });
-    await waitFor(() => expect(text('code')).not.toBe('none'));
-    // Let any second application of the list land before counting.
+    const view = render(DiagHost, { relays: ['not a url'] });
+    await waitFor(() => expect(text('code')).toBe('invalid-relay-input'));
+    // Let the provider's own first application land before counting.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(text('refusals')).toBe('1');
+
+    // A parent re-rendering with an equal new array is the same refusal.
+    await view.rerender({ relays: ['not a url'] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(text('refusals')).toBe('1');
+    // A list refused for another reason is a new one: the count can move.
+    await view.rerender({ relays: ['still not a url'] });
+    await waitFor(() => expect(text('refusals')).toBe('2'));
+  });
+
+  it('SL6: a change inside a $state relay list reaches the provider', async () => {
+    browserLike();
+    const first = 'ws://localhost:9801';
+    const second = 'ws://localhost:9802';
+    const relays = [new WS(first, { jsonProtocol: true }), new WS(second, { jsonProtocol: true })];
+    render(MutableRelays, {
+      first,
+      second,
+      plan: () => ({ kind: 'request', descriptor: { filters: [{ kinds: [1], limit: 1 }] } })
+    });
+
+    // Write-only at first, so nothing is asked; a flag flipped on the entry
+    // makes it readable, and an entry pushed onto the list is asked too.
+    await fireEvent.click(screen.getByTestId('read'));
+    expect((await nextOf(relays[0] as WS, 'REQ'))[2]).toEqual({ kinds: [1], limit: 1 });
+    await fireEvent.click(screen.getByTestId('push'));
+    expect((await nextOf(relays[1] as WS, 'REQ'))[2]).toEqual({ kinds: [1], limit: 1 });
+  });
+
+  it('SL7: a relay list that cannot be read is refused by name, at construction and on a change', async () => {
+    browserLike();
+    const url = 'ws://localhost:9811';
+    new WS(url, { jsonProtocol: true });
+    const unreadable = (): [string, () => unknown][] => [
+      [
+        'an entry getter',
+        () => {
+          const list = [url];
+          Object.defineProperty(list, 0, {
+            get() {
+              throw new Error('unreadable entry');
+            }
+          });
+          return list;
+        }
+      ],
+      [
+        'an iterator',
+        () => {
+          const list = [url];
+          list[Symbol.iterator] = () => {
+            throw new Error('unreadable iterator');
+          };
+          return list;
+        }
+      ],
+      [
+        'a revoked proxy',
+        () => {
+          const { proxy, revoke } = Proxy.revocable([url], {});
+          revoke();
+          return proxy;
+        }
+      ]
+    ];
+    for (const [name, make] of unreadable()) {
+      // At construction: the empty scope, the refusal published, children mounted.
+      const constructed = render(DiagHost, { relays: make() as string[] });
+      await waitFor(() => expect(text('code'), name).toBe('invalid-relay-input'));
+      expect(text('scope'), name).toBe('');
+      constructed.unmount();
+
+      // On a change: the accepted scope is kept beside the refusal.
+      const changed = render(DiagHost, { relays: [url] });
+      await waitFor(() => expect(text('scope'), name).toBe(url));
+      await changed.rerender({ relays: make() as string[] });
+      await waitFor(() => expect(text('code'), name).toBe('invalid-relay-input'));
+      expect(text('scope'), name).toBe(url);
+      changed.unmount();
+    }
   });
 });

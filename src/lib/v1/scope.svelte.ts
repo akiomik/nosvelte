@@ -1250,7 +1250,28 @@ function scopeOf(entries: readonly RelayInput[], name: (url: string) => string):
   // holed and `for…of` then read `.url` off `undefined`. Filled, the hole is an
   // entry that is not a relay, which is a refusal this boundary already has —
   // the same repair the transport's answer got, applied to the caller's list.
-  if (!Array.isArray(entries)) {
+  //
+  // **The list is read behind the same guard as an entry's fields, and for the
+  // same reason.** `Array.isArray` throws on a revoked proxy, and `Array.from`
+  // runs the caller's iterator and index getters; either throwing left this
+  // function as the caller's exception, which the provider treats as an
+  // internal fault and rethrows — C16's falsifier, reached through the
+  // container a third time. Read once, here, and refused by name if it cannot
+  // be.
+  let isList: boolean;
+  let copied: unknown[] = [];
+  try {
+    isList = Array.isArray(entries);
+    if (isList) copied = Array.from(entries);
+  } catch (thrown) {
+    throw ownedByLibrary(
+      new InvalidRelayInputError(
+        'the relay list',
+        `could not be read: ${saidBy(thrown, describeValue)}`
+      )
+    );
+  }
+  if (!isList) {
     throw ownedByLibrary(
       new InvalidRelayInputError(
         'the relay list',
@@ -1258,7 +1279,7 @@ function scopeOf(entries: readonly RelayInput[], name: (url: string) => string):
       )
     );
   }
-  const checked = Array.from(entries).map(checkedRelayInput);
+  const checked = copied.map((entry) => checkedRelayInput(entry as RelayInput));
   // A plain object rather than a Map, and deliberately not a reactive one: this
   // builds a value that is then assigned to `$state` in one go, so a tracked
   // collection would make the intermediate steps observable for no purpose.

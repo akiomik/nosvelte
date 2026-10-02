@@ -15,3 +15,4 @@
 
 <p data-testid="code">{diagnostics.configurationError?.code ?? 'none'}</p>
 <p data-testid="refusals">{refusals}</p>
+<p data-testid="scope">{Object.keys(diagnostics.relays).join(',')}</p>
