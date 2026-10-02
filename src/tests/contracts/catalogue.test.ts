@@ -485,8 +485,10 @@ describe('the production contract bridge', () => {
     // would run — an ordinary option, a parametrised suite — is refused as
     // surely as one that would not; that is the stated price.
     const refusedIn = (statement: string): boolean =>
-      inspect(statement, 'x.test.ts').disabled.some((why) =>
-        why.endsWith('(not in the shape this bridge credits)')
+      inspect(statement, 'x.test.ts').disabled.some(
+        (why) =>
+          why.endsWith('(not in the shape this bridge credits)') ||
+          why.endsWith('(the file holds an `only`)')
       );
     const armStatement = `${'it'}('CT1: y', () => { expect(1).toBe(1); });`;
     const inSuite = (opening: string): string => `${opening} () => { ${armStatement} });`;
@@ -528,9 +530,29 @@ describe('the production contract bridge', () => {
       `${'describe'}('x', () => { if (flag) return; ${armStatement} });`,
       `${'describe'}('x', () => ${armStatement.replace(/;$/, '')});`,
       `${'describe'}('x', () => { ${'it'}('CT2: outer', () => { ${armStatement} }); });`,
-      `await ${armStatement}`
+      `await ${armStatement}`,
+      // Beside it on the way, only what registers tests and nothing else.
+      `${'describe'}('x', () => { beforeEach((ctx) => ctx.skip()); ${armStatement} });`,
+      `beforeAll((suite) => {}); ${armStatement}`,
+      `beforeEach(function () { arguments[0].skip(); }); ${armStatement}`,
+      `setup(); ${armStatement}`,
+      `const relay = createRelay(); ${armStatement}`,
+      `const ready = await prepare(); ${armStatement}`,
+      `vi.mock('x'); ${armStatement}`,
+      `import { getCurrentTest } from 'vitest/suite'; ${armStatement}`,
+      `import * as runner from '@vitest/runner'; ${armStatement}`,
+      `${'describe'}('x', () => { helper(); ${armStatement} });`,
+      // An only anywhere in the file skips everything else.
+      `${'it'}.only('CT9: other', () => {}); ${armStatement}`,
+      `${'describe'}('y', { only: true }, () => {}); ${armStatement}`
     ])
       expect(refusedIn(statement), `${statement} is not credited`).toBe(true);
+    // Only a landing is judged: an arm that carries no row needs no credit.
+    const conditional = `if (process.env.CI) { ${armStatement} }`;
+    expect(inspect(conditional, 'x.test.ts', new Set(['CT1']), new Set()).disabled).toEqual([]);
+    expect(inspect(conditional, 'x.test.ts', new Set(['CT1']), new Set(['CT1'])).disabled).toEqual([
+      'x.test.ts:1 (not in the shape this bridge credits)'
+    ]);
     for (const statement of [
       armStatement,
       `${'it'}('CT1: y', () => { expect(1).toBe(1); }, 20_000);`,
@@ -539,7 +561,12 @@ describe('the production contract bridge', () => {
       `${'describe'}('x', function () { ${inSuite(`${'describe'}('y',`)} });`,
       `import { ${'describe'}, ${'it'} } from 'vitest'; ${inSuite(`${'describe'}('x',`)}`,
       `${'describe'}('x', () => { beforeEach(() => {}); const n = 1; ${armStatement} });`,
-      `${'describe'}('x', () => { ${'it'}('CT2: other', () => { return; }); ${armStatement} });`
+      `${'describe'}('x', () => { ${'it'}('CT2: other', () => { return; }); ${armStatement} });`,
+      `afterEach(() => cleanUp()); ${armStatement}`,
+      `beforeEach(() => {}, 1000); ${armStatement}`,
+      `const websocket = Socket as unknown as Constructor; const make = () => build(); ${armStatement}`,
+      `type Row = { a: number }; function helper() { return 1; } ${armStatement}`,
+      `${'describe'}.skip('other', () => {}); ${armStatement}`
     ])
       expect(inspect(statement, 'x.test.ts').disabled, `${statement} is credited`).toEqual([]);
 
@@ -567,8 +594,8 @@ describe('the production contract bridge', () => {
       writeFileSync(
         join(sandbox, 'deep', 'skipped.test.ts'),
         [
-          '  // @contracts A3-C1',
           `  ${'describe'}.skip('x', () => {`,
+          '    // @contracts A3-C1',
           `    ${'it'}('CT8: never runs', () => { expect(1).toBe(1); });`,
           '  });'
         ].join('\n')

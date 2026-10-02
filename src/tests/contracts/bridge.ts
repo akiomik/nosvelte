@@ -302,7 +302,9 @@ const leaves = (block: ts.Block): boolean => {
  * or inside the callback of a suite of the one shape a suite may have:
  * `describe('title', () => { … })`, the runner's own `describe`, a string
  * title and a callback that takes no parameter, itself placed the same way,
- * with no `return` or `throw` in any block on the path. Nothing is
+ * with no `return` or `throw` in any block on the path, and every statement
+ * beside it on the way quiet (`quiet`); a file holding an `only` credits
+ * nothing, and only an arm that declares a row is judged. Nothing is
  * interpreted — no modifier, no options object, no table, no test context —
  * so there is nothing to interpret wrongly. Every other shape is refused,
  * including ones the runner would run; that is the price, and a landing in
@@ -311,7 +313,8 @@ const leaves = (block: ts.Block): boolean => {
 export const inspect = (
   source: string,
   file: string,
-  declared: ReadonlySet<string> = new Set()
+  declared: ReadonlySet<string> = new Set(),
+  landings?: ReadonlySet<string>
 ): { disabled: string[]; unreadable: string[] } => {
   const tree = parse(source);
   const checker = checkerFor(tree);
@@ -321,6 +324,26 @@ export const inspect = (
     const title = call.arguments[0];
 
     return title !== undefined && ts.isStringLiteralLike(title);
+  };
+  // The name a chain starts from, through members, calls and tagged
+  // templates: every `it…` call with an id-shaped title is judged, so
+  // `it.skip('CT1: …')` is refused as out of shape rather than passed over.
+  const rootOf = (callee: ts.Expression): string | undefined => {
+    let at: ts.Expression = callee;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(at) || ts.isCallExpression(at)) at = at.expression;
+      else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
+      else return ts.isIdentifier(at) ? at.text : undefined;
+    }
+  };
+  // The root of a chain written directly, for a sibling registration.
+  const directRoot = (callee: ts.Expression): ts.Identifier | undefined => {
+    let at: ts.Expression = callee;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(at) || ts.isCallExpression(at)) at = at.expression;
+      else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
+      else return ts.isIdentifier(at) ? at : undefined;
+    }
   };
   const suite = (call: ts.Node): call is ts.CallExpression =>
     ts.isCallExpression(call) &&
@@ -339,31 +362,101 @@ export const inspect = (
       rest.every((argument) => ts.isNumericLiteral(argument))
     );
   };
+  // A statement that runs nothing at collection time beyond registering tests:
+  // the list below and nothing else. A hook takes a callback with no
+  // parameter, so it cannot reach the test context; a declaration evaluates
+  // no call, `new`, `await` or tag outside a function body; and nothing is
+  // imported from the runner's internals, through which a context is reachable.
+  const eager = (node: ts.Node): boolean => {
+    let found = false;
+    const look = (inner: ts.Node): void => {
+      if (found || ts.isFunctionLike(inner)) return;
+      if (
+        ts.isCallExpression(inner) ||
+        ts.isNewExpression(inner) ||
+        ts.isAwaitExpression(inner) ||
+        ts.isTaggedTemplateExpression(inner) ||
+        ts.isClassExpression(inner)
+      )
+        found = true;
+      else ts.forEachChild(inner, look);
+    };
+    look(node);
+
+    return found;
+  };
+  const HOOKS = ['beforeEach', 'afterEach', 'beforeAll', 'afterAll'];
+  const quiet = (statement: ts.Statement): boolean => {
+    if (ts.isImportDeclaration(statement)) {
+      const from = statement.moduleSpecifier;
+
+      return (
+        ts.isStringLiteral(from) &&
+        !from.text.startsWith('vitest/') &&
+        !from.text.startsWith('@vitest/')
+      );
+    }
+    if (
+      ts.isTypeAliasDeclaration(statement) ||
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isFunctionDeclaration(statement) ||
+      ts.isEmptyStatement(statement)
+    )
+      return true;
+    if (ts.isVariableStatement(statement))
+      return statement.declarationList.declarations.every(
+        (declaration) => declaration.initializer === undefined || !eager(declaration.initializer)
+      );
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression))
+      return false;
+    const call = statement.expression;
+    const root = rootOf(call.expression);
+    // Another test or suite registers its own and decides nothing for this one.
+    if (
+      (root === 'it' || root === 'test' || root === 'describe' || root === 'suite') &&
+      ts.isIdentifier(directRoot(call.expression) ?? call.expression) &&
+      runnerName(checker, directRoot(call.expression) as ts.Identifier)
+    )
+      return true;
+    const rest = call.arguments.slice(1);
+
+    return (
+      HOOKS.some((hook) => named(call.expression, hook)) &&
+      bareCallback(call.arguments[0]) &&
+      rest.length <= 1 &&
+      rest.every((argument) => ts.isNumericLiteral(argument))
+    );
+  };
   // Placed as a statement at the top of the file, or in a suite's callback
-  // with no early exit, that suite placed the same way all the way up.
+  // with no early exit, that suite placed the same way all the way up, and
+  // every statement beside it on the way quiet.
   const placed = (call: ts.Node): boolean => {
     const statement = call.parent;
     if (!ts.isExpressionStatement(statement) || statement.expression !== call) return false;
     const block = statement.parent;
-    if (ts.isSourceFile(block)) return true;
-    if (!ts.isBlock(block) || leaves(block)) return false;
+    if (ts.isSourceFile(block)) return block.statements.every(quiet);
+    if (!ts.isBlock(block) || leaves(block) || !block.statements.every(quiet)) return false;
     const holder = block.parent;
     const parent = holder.parent;
 
     return suite(parent) && parent.arguments[1] === holder && placed(parent);
   };
-  // The name a chain starts from, through members, calls and tagged
-  // templates: every `it…` call with an id-shaped title is judged, so
-  // `it.skip('CT1: …')` is refused as out of shape rather than passed over.
-  const rootOf = (callee: ts.Expression): string | undefined => {
-    let at: ts.Expression = callee;
-    for (;;) {
-      if (ts.isPropertyAccessExpression(at) || ts.isCallExpression(at)) at = at.expression;
-      else if (ts.isTaggedTemplateExpression(at)) at = at.tag;
-      else return ts.isIdentifier(at) ? at.text : undefined;
-    }
-  };
   const shape = new RegExp(`^(${TEST_ID}):`);
+  // An `only` anywhere in the file makes the runner skip every test that does
+  // not carry one, so no landing in such a file is credited.
+  let only = false;
+  const findOnly = (node: ts.Node): void => {
+    if (only) return;
+    if (
+      (ts.isPropertyAccessExpression(node) && node.name.text === 'only') ||
+      ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
+        (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)) &&
+        node.name.text === 'only')
+    )
+      only = true;
+    else ts.forEachChild(node, findOnly);
+  };
+  findOnly(tree);
   const disabled: string[] = [];
   const unreadable: string[] = [];
   const visit = (node: ts.Node): void => {
@@ -371,13 +464,16 @@ export const inspect = (
       const at = `${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`;
       const title = node.arguments[0];
       const text = title !== undefined && ts.isStringLiteralLike(title) ? title.text : undefined;
+      const id = text === undefined ? undefined : shape.exec(text)?.[1];
       if (
         rootOf(node.expression) === 'it' &&
-        text !== undefined &&
-        shape.test(text) &&
-        !(arm(node) && placed(node))
-      )
-        disabled.push(`${at} (not in the shape this bridge credits)`);
+        id !== undefined &&
+        (landings === undefined || landings.has(id))
+      ) {
+        if (only) disabled.push(`${at} (the file holds an \`only\`)`);
+        else if (!(arm(node) && placed(node)))
+          disabled.push(`${at} (not in the shape this bridge credits)`);
+      }
       // Only a title that means to be an id — one with a digit in it — is
       // held to the id shape; `it('rejects: an empty filter', …)` is prose.
       const root = ts.isIdentifier(node.expression)
@@ -386,10 +482,10 @@ export const inspect = (
             ts.isIdentifier(node.expression.expression)
           ? node.expression.expression.text
           : undefined;
-      const id = text === undefined ? undefined : /^(\S*\d\S*):/.exec(text)?.[1];
-      if ((root === 'it' || root === 'test') && id !== undefined && !declared.has(id))
+      const idLike = text === undefined ? undefined : /^(\S*\d\S*):/.exec(text)?.[1];
+      if ((root === 'it' || root === 'test') && idLike !== undefined && !declared.has(idLike))
         unreadable.push(
-          `${at} — this bridge cannot read "${id}" as an arm id` +
+          `${at} — this bridge cannot read "${idLike}" as an arm id` +
             `${root === 'test' ? ', and it reads only `it(`' : ''}`
         );
     }
@@ -430,7 +526,12 @@ export const collectFrom = (root: string): Landings => {
     const parsed = declarationsIn(source);
     for (const [id, body] of parsed.bodies)
       if (!asserts(body)) assertionless.push(`${id} in ${file}`);
-    const found = inspect(source, file, new Set(parsed.rows.keys()));
+    const found = inspect(
+      source,
+      file,
+      new Set(parsed.rows.keys()),
+      new Set([...parsed.rows].filter(([, rows]) => rows.size > 0).map(([id]) => id))
+    );
     disabled.push(...found.disabled);
     unreadable.push(...found.unreadable);
   }
