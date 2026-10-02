@@ -198,7 +198,7 @@ export const declarationsIn = (
 /** Fold test files into one arm → rows map, reporting an id declared twice in a file or by two files. */
 export const mergeDeclarations = (
   files: ReadonlyArray<{ readonly file: string; readonly source: string }>
-): { tests: Map<string, Set<string>>; duplicates: string[] } => {
+): { tests: Map<string, Set<string>>; files: Map<string, string>; duplicates: string[] } => {
   const tests = new Map<string, Set<string>>();
   const owner = new Map<string, string>();
   const duplicates: string[] = [];
@@ -213,7 +213,7 @@ export const mergeDeclarations = (
     }
   }
 
-  return { tests, duplicates };
+  return { tests, files: owner, duplicates };
 };
 
 /**
@@ -539,6 +539,8 @@ export const inspect = (
 
 export interface Landings {
   readonly tests: Map<string, Set<string>>;
+  /** The file each arm is declared in, relative to the root read. */
+  readonly files: Map<string, string>;
   readonly duplicates: string[];
   readonly assertionless: string[];
   readonly disabled: string[];
@@ -628,4 +630,131 @@ export const disagrees = (route: string, evidence: string): boolean => {
     evidence.startsWith('no-test:') ||
     (evidence.startsWith('absent:') && !['internal', 'sentinel'].includes(route))
   );
+};
+
+/**
+ * The port-route roster in 0005: one line per row, its route and its
+ * production evidence, read from the fenced block under the roster heading
+ * and nowhere else. Faults name what could not be read.
+ */
+export const rosterOf = (
+  text: string
+): { roster: Map<string, { route: string; evidence: string }>; faults: string[] } => {
+  const roster = new Map<string, { route: string; evidence: string }>();
+  const faults: string[] = [];
+  const lines = text.split('\n');
+  const heading = lines.findIndex((line) => line.startsWith('#### The port route of a row'));
+  const opens = lines.findIndex((line, at) => at > heading && line.startsWith('```text'));
+  const closes = lines.findIndex((line, at) => at > opens && line.startsWith('```'));
+  if (heading === -1) faults.push('the record no longer has a port-route section');
+  else if (opens === -1) faults.push('the record no longer carries a roster block');
+  else if (closes <= opens) faults.push('the roster fence is never closed');
+  else
+    for (const line of lines.slice(opens + 1, closes)) {
+      const match = /^(\S+)\s+([a-z-]+)\s+(\S.*)$/.exec(line);
+      if (match === null) faults.push(`a roster line that is not id, route, evidence: ${line}`);
+      else if (!(ROUTES as readonly string[]).includes(match[2] as string))
+        faults.push(`an unknown route in the roster: ${match[2] as string}`);
+      else if (roster.has(match[1] as string))
+        faults.push(`${match[1] as string} is rostered twice`);
+      else
+        roster.set(match[1] as string, { route: match[2] as string, evidence: match[3] as string });
+    }
+
+  return { roster, faults };
+};
+
+/** A landing the run must show: the row, the arm that carries it, and the file it is declared in. */
+export interface Expected {
+  readonly row: string;
+  readonly id: string;
+  readonly file: string;
+}
+
+/**
+ * Every landing the roster names, with the file its arm is declared in under
+ * `root`, which is an absolute path. A `test:` that names no declared arm is a
+ * fault here as well as in `CAT33`, so the run is not judged against a list
+ * that silently lost a member.
+ */
+export const expectedLandings = (
+  roster: Roster,
+  files: ReadonlyMap<string, string>,
+  root: string
+): { expected: Expected[]; faults: string[] } => {
+  const expected: Expected[] = [];
+  const faults: string[] = [];
+  for (const [row, { evidence }] of roster) {
+    if (!evidence.startsWith('test:')) continue;
+    const id = evidence.slice('test:'.length).trim();
+    const file = files.get(id);
+    if (file === undefined) faults.push(`${row}: test:${id} is declared nowhere under the root`);
+    else expected.push({ row, id, file: join(root, file) });
+  }
+
+  return { expected, faults };
+};
+
+/**
+ * Whether one run of the suite shows every landing **ran and passed**.
+ *
+ * This is the half of rule 6 a static read cannot settle: what the runner
+ * actually did. It is judged from the report the runner wrote for this very
+ * run — the run's exit status, then the report's presence, shape and start
+ * time — and then each expected landing must appear exactly once, in the file
+ * it is declared in, with the status `passed`. Missing (never collected, or
+ * filtered out), duplicated, `skipped`, `todo` or failed are each a fault. The
+ * run's overall success is not used: a skipped test leaves it `true`.
+ */
+export const checkRun = (run: {
+  readonly status: number | null;
+  readonly report: string | undefined;
+  readonly startedAt: number;
+  readonly expected: readonly Expected[];
+}): string[] => {
+  if (run.status !== 0) return [`the runner exited with ${String(run.status)}`];
+  if (run.report === undefined) return ['the runner wrote no report'];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(run.report);
+  } catch {
+    return ['the report is not JSON'];
+  }
+  const report = parsed as {
+    startTime?: unknown;
+    testResults?: Array<{
+      name?: unknown;
+      assertionResults?: Array<{ title?: unknown; status?: unknown }>;
+    }>;
+  };
+  if (typeof report !== 'object' || report === null || !Array.isArray(report.testResults))
+    return ['the report has no test results'];
+  if (typeof report.startTime !== 'number' || report.startTime < run.startedAt)
+    return ['the report was not written by this run'];
+  const seen = new Map<string, Array<{ file: string; status: string }>>();
+  for (const result of report.testResults) {
+    const file = typeof result.name === 'string' ? result.name : '';
+    for (const assertion of result.assertionResults ?? []) {
+      const id =
+        typeof assertion.title === 'string' ? /^([^:\s]+):/.exec(assertion.title)?.[1] : undefined;
+      if (id === undefined) continue;
+      seen.set(id, [
+        ...(seen.get(id) ?? []),
+        { file, status: typeof assertion.status === 'string' ? assertion.status : 'unknown' }
+      ]);
+    }
+  }
+  const faults: string[] = [];
+  for (const { row, id, file } of run.expected) {
+    const found = seen.get(id) ?? [];
+    if (found.length === 0)
+      faults.push(`${row}: ${id} is not in the report — it was never collected`);
+    else if (found.length > 1) faults.push(`${row}: ${id} is in the report ${found.length} times`);
+    else if ((found[0] as { file: string }).file !== file)
+      faults.push(`${row}: ${id} ran from ${(found[0] as { file: string }).file}, not ${file}`);
+    else if ((found[0] as { status: string }).status !== 'passed')
+      faults.push(`${row}: ${id} is ${(found[0] as { status: string }).status}, not passed`);
+  }
+
+  return faults;
 };

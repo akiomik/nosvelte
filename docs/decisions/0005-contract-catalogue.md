@@ -1182,44 +1182,29 @@ So a row carries two fields of its own, in the roster below, and neither is infe
      name, and a row's `test:` cannot name a test that does not name it back. One test may carry
      several rows;
   5. a row may not be carried by a test that does not exist;
-  6. the test **runs** — which the bridge establishes by crediting two written shapes and nothing
-     else, set out below; a modifier, an options object, a table, a use of the test context or a
-     conditional placement is refused rather than read. A parametrised `describe` is one of the
-     shapes refused: its arms do run once per case, but the table is one more thing to read, so a
-     landing inside one is written as a plain `describe` instead;
+  6. the test **runs and passes**, which is judged from the run and not from the source. `npm test`
+     — the one entrance locally and in both CI workflows — runs the suite with a JSON report written
+     for that run alone, then requires every landing to appear in it exactly once, in the file it is
+     declared in, with the status `passed`. A failed run, a report that is missing, unreadable or
+     not this run's, and a landing that is missing (never collected, excluded by configuration,
+     filtered out), duplicated, skipped or todo each fail the command. The runner's own verdict is
+     not used: a skipped test, or a test inside an empty table, leaves it a success. A landing is
+     declared with `it(`; `it.fails` inverts what passing means, and is not read as one;
   7. the test **asserts** something: a matcher after an `expect(…)`, or `assert`, or `expectTypeOf`.
      A title that contains the word does not count, and neither does `expect(x)` with no matcher —
      both were measured passing the first spelling of this rule.
 
-  **How rule 6 is decided, and where it stops.** "Runs" is read from the syntax tree, and what is
-  credited is **two shapes and nothing else**. An arm is `it('ID: …', () => { … })`: the runner's
-  own `it` — imported from `vitest` under its own name, or global — written directly, a string
-  title, an arrow callback that takes no parameter — only an arrow, which has no `arguments` of its
-  own — and at most a numeric timeout after it. It is called as a statement of its own, at the top
-  of the file or inside the callback of a suite of the one shape a suite may have:
-  `describe('title', () => { … })`, the runner's own `describe`, a string title and an arrow
-  callback that takes no parameter, placed the same way all the way up, with no `return` or `throw`
-  in any block on the path. **Every statement beside it on that path is quiet too**: an import that
-  is not from `vitest/…` or `@vitest/…`, a type, a function declaration, a declaration of a plain
-  name whose initializer is settled — no destructuring, whose defaults and computed keys evaluate on
-  the binding side — another test or suite whose chain's arguments and templates are all settled, or
-  a hook — `beforeEach`, `afterEach`, `beforeAll`, `afterAll` — whose callback is an arrow taking no
-  parameter, so it cannot reach the test context. **Settled is itself an allow-list of
-  expressions**, because a search for dangerous ones missed a computed method name: a literal, a
-  name or a property read, a function (whose body runs later), a type-only wrapper, a sign on a
-  number, an array of settled elements, or an object of plain settled properties — no spread,
-  method, accessor, computed key, template hole, operator or call. A file that holds an `only`
-  anywhere has no landing credited, because the runner skips everything else in it. Only an arm that
-  declares a row is judged. **Nothing is interpreted** — no modifier, no options object, no table,
-  no test context — so there is nothing to interpret wrongly. This is narrower than it was: for
-  several rounds the check credited more and read what decides whether the extra shapes run, and
-  each round a reviewer found a reading that disagreed with the runner. Two consequences are
-  deliberate. A shape refused although the runner would run it is not a defect: the landing is
-  rewritten into one of the two. A shape inside the two that the check credits although the runner
-  would not run it **is** a defect. What no static read of the file can see — an environment
-  variable, a command-line filter, the runner's own include and exclude, what a module it imports
-  does — is outside rule 6, and a reviewer reading a landing reads it under the configuration CI
-  runs.
+  **Which check holds what.** `CAT33` holds what the source says: that a landing is a real
+  declaration in the syntax tree rather than text that looks like one, its id, its `@contracts`
+  marker, duplicates, and the edges both ways between this roster and the tests — rules 1 to 5
+  and 7. Rule 6 is the run's, held by `checkRun` in the bridge and by the two arms beside it:
+  `CAT40` against fabricated reports, and `CAT41` against real runs of the runner over a hook that
+  skips, an empty table, a file the configuration excludes and a filter, each beside a landing that
+  passes. **The source cannot settle rule 6, and it was tried.** For several rounds a static
+  allow-list decided whether a landing would run, and each round a reviewer found an evaluation it
+  read differently from the runner — a modifier, an option, a hook, a value evaluated while the file
+  is collected. The runner's report is the record of what ran, so that question is answered there,
+  and the source check no longer tries.
 
   **What these seven cannot hold, said here rather than found in phase 2.** They are rules about
   _edges_: that a cell names a test, that the test names the row back, that the test exists, runs,
