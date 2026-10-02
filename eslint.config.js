@@ -33,7 +33,9 @@ export default tseslint.config(
     }
   },
   {
-    files: ['**/*.svelte'],
+    // `*.svelte.ts` / `*.svelte.js` are runes modules, not components. They
+    // need the TypeScript parser too, or their type syntax fails to parse.
+    files: ['**/*.svelte', '**/*.svelte.ts', '**/*.svelte.js'],
     languageOptions: {
       parserOptions: {
         parser: tseslint.parser
