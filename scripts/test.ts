@@ -1,12 +1,13 @@
 /**
  * The one entrance to the test suite, locally and in CI: `npm test`.
  *
- * It runs Vitest with its usual reporter and a JSON report written to a
- * directory made for this run alone, then judges that report with `checkRun`:
- * every landing 0005's roster names must have run, in the file it is declared
- * in, and passed. A failed run, a missing or unreadable report, a report that
- * is not this run's, and a landing that is missing, duplicated, skipped or
- * todo all fail the command. Arguments are passed through to Vitest, so a
+ * It runs Vitest with its usual reporter and `landing-reporter.ts`, whose JSON
+ * report goes to a directory made for this run alone, then judges that report
+ * with `checkRun`: every landing 0005's roster names must have run once, at
+ * the place it is declared, not expecting failure, and passed. A failed run, a
+ * missing or unreadable report, a report that is not this run's, and a landing
+ * that is missing, duplicated, misplaced, skipped, pending or expecting
+ * failure all fail the command. Arguments are passed through to Vitest, so a
  * filter that leaves a landing out fails it too — which is the point.
  */
 import { spawnSync } from 'node:child_process';
@@ -31,7 +32,7 @@ const { roster, faults: rosterFaults } = rosterOf(
 );
 const { expected, faults: landingFaults } = expectedLandings(
   roster,
-  collectFrom(CONTRACTS).files,
+  collectFrom(CONTRACTS),
   CONTRACTS
 );
 
@@ -46,11 +47,11 @@ try {
       join(ROOT, 'node_modules/vitest/vitest.mjs'),
       'run',
       '--reporter=default',
-      '--reporter=json',
-      `--outputFile.json=${reportPath}`,
+      `--reporter=${join(ROOT, 'scripts/landing-reporter.ts')}`,
+      '--includeTaskLocation',
       ...process.argv.slice(2)
     ],
-    { cwd: ROOT, stdio: 'inherit' }
+    { cwd: ROOT, stdio: 'inherit', env: { ...process.env, NOSVELTE_RUN_REPORT: reportPath } }
   );
   faults = [
     ...rosterFaults,

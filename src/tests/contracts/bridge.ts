@@ -137,6 +137,31 @@ export function code(raw: string): string {
 const parse = (source: string): ts.SourceFile =>
   ts.createSourceFile('arms.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
+const checkerFor = (tree: ts.SourceFile): ts.TypeChecker => {
+  const options: ts.CompilerOptions = { noLib: true, noResolve: true, types: [] };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = (name) => (name === tree.fileName ? tree : undefined);
+  host.fileExists = (name) => name === tree.fileName;
+
+  return ts.createProgram({ rootNames: [tree.fileName], options, host }).getTypeChecker();
+};
+
+/**
+ * Whether a name is the runner's own: imported from `vitest` under its own
+ * name, or bound to nothing in the file (the runner's global). A local
+ * `function it` or `const it = test.fails` is not, whatever it does.
+ */
+const runnerName = (checker: ts.TypeChecker, name: ts.Identifier): boolean => {
+  const declaration = checker.getSymbolAtLocation(name)?.declarations?.[0];
+  if (declaration === undefined) return true;
+  if (!ts.isImportSpecifier(declaration)) return false;
+  const imported = declaration.propertyName ?? declaration.name;
+  if (imported.text !== name.text) return false;
+  const from = declaration.parent.parent.parent.moduleSpecifier;
+
+  return ts.isStringLiteral(from) && from.text === 'vitest';
+};
+
 /**
  * Whether a callee declares an arm this bridge reads: `it(` and nothing else.
  * `it.fails` inverts what passing means, so its `passed` in a report is not a
@@ -145,10 +170,16 @@ const parse = (source: string): ts.SourceFile =>
 const armCallee = (callee: ts.Expression): boolean =>
   ts.isIdentifier(callee) && callee.text === 'it';
 
+/** Where a test is declared, one-based, as the runner reports it. */
+export interface Position {
+  readonly line: number;
+  readonly column: number;
+}
+
 /**
  * The rows each test arm declares, its call text, and the ids declared twice.
  *
- * An arm is a call in the syntax tree — `it('ID: …', …)` —
+ * An arm is a call in the syntax tree — `it('ID: …', …)`, the runner's own `it` —
  * so text that only looks like one, inside a string or a comment, is not an
  * arm. A marker `@contracts <id> …` belongs to the arm it sits **directly**
  * above: the comment block above the line the call starts on, which a blank
@@ -157,15 +188,26 @@ const armCallee = (callee: ts.Expression): boolean =>
  */
 export const declarationsIn = (
   source: string
-): { rows: Map<string, Set<string>>; twice: string[]; bodies: Map<string, string> } => {
+): {
+  rows: Map<string, Set<string>>;
+  twice: string[];
+  bodies: Map<string, string>;
+  positions: Map<string, Position>;
+} => {
   const rows = new Map<string, Set<string>>();
   const bodies = new Map<string, string>();
+  const positions = new Map<string, Position>();
   const twice: string[] = [];
   const tree = parse(source);
+  const checker = checkerFor(tree);
   const lines = source.split('\n');
   const shape = new RegExp(`^(${TEST_ID}):`);
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && armCallee(node.expression)) {
+    if (
+      ts.isCallExpression(node) &&
+      armCallee(node.expression) &&
+      runnerName(checker, node.expression as ts.Identifier)
+    ) {
       const title = node.arguments[0];
       const id =
         title !== undefined && ts.isStringLiteralLike(title)
@@ -175,7 +217,10 @@ export const declarationsIn = (
         bodies.set(id, node.getText(tree));
         if (rows.has(id)) twice.push(id);
         const declared = new Set<string>();
-        const start = tree.getLineAndCharacterOfPosition(node.getStart(tree)).line;
+        const where = tree.getLineAndCharacterOfPosition(node.getStart(tree));
+        // One-based, as the runner reports a test's location.
+        positions.set(id, { line: where.line + 1, column: where.character + 1 });
+        const start = where.line;
         for (let above = start - 1; above >= 0; above -= 1) {
           const text = (lines[above] as string).trim();
           if (text === '') break;
@@ -192,15 +237,21 @@ export const declarationsIn = (
   };
   visit(tree);
 
-  return { rows, twice, bodies };
+  return { rows, twice, bodies, positions };
 };
 
 /** Fold test files into one arm → rows map, reporting an id declared twice in a file or by two files. */
 export const mergeDeclarations = (
   files: ReadonlyArray<{ readonly file: string; readonly source: string }>
-): { tests: Map<string, Set<string>>; files: Map<string, string>; duplicates: string[] } => {
+): {
+  tests: Map<string, Set<string>>;
+  files: Map<string, string>;
+  positions: Map<string, Position>;
+  duplicates: string[];
+} => {
   const tests = new Map<string, Set<string>>();
   const owner = new Map<string, string>();
+  const positions = new Map<string, Position>();
   const duplicates: string[] = [];
   for (const { file, source } of files) {
     const parsed = declarationsIn(source);
@@ -210,10 +261,12 @@ export const mergeDeclarations = (
       if (previous !== undefined) duplicates.push(`${arm} is declared in ${previous} and ${file}`);
       owner.set(arm, file);
       tests.set(arm, rows);
+      const position = parsed.positions.get(arm);
+      if (position !== undefined) positions.set(arm, position);
     }
   }
 
-  return { tests, files: owner, duplicates };
+  return { tests, files: owner, positions, duplicates };
 };
 
 /**
@@ -279,6 +332,8 @@ export interface Landings {
   readonly tests: Map<string, Set<string>>;
   /** The file each arm is declared in, relative to the root read. */
   readonly files: Map<string, string>;
+  /** Where each arm is declared in its file. */
+  readonly positions: Map<string, Position>;
   readonly duplicates: string[];
   readonly assertionless: string[];
   readonly unreadable: string[];
@@ -397,6 +452,8 @@ export interface Expected {
   readonly row: string;
   readonly id: string;
   readonly file: string;
+  readonly line: number;
+  readonly column: number;
 }
 
 /**
@@ -407,7 +464,7 @@ export interface Expected {
  */
 export const expectedLandings = (
   roster: Roster,
-  files: ReadonlyMap<string, string>,
+  declared: Pick<Landings, 'files' | 'positions'>,
   root: string
 ): { expected: Expected[]; faults: string[] } => {
   const expected: Expected[] = [];
@@ -415,9 +472,11 @@ export const expectedLandings = (
   for (const [row, { evidence }] of roster) {
     if (!evidence.startsWith('test:')) continue;
     const id = evidence.slice('test:'.length).trim();
-    const file = files.get(id);
-    if (file === undefined) faults.push(`${row}: test:${id} is declared nowhere under the root`);
-    else expected.push({ row, id, file: join(root, file) });
+    const file = declared.files.get(id);
+    const position = declared.positions.get(id);
+    if (file === undefined || position === undefined)
+      faults.push(`${row}: test:${id} is declared nowhere under the root`);
+    else expected.push({ row, id, file: join(root, file), ...position });
   }
 
   return { expected, faults };
@@ -427,12 +486,17 @@ export const expectedLandings = (
  * Whether one run of the suite shows every landing **ran and passed**.
  *
  * This is the half of rule 6 a static read cannot settle: what the runner
- * actually did. It is judged from the report the runner wrote for this very
- * run — the run's exit status, then the report's presence, shape and start
- * time — and then each expected landing must appear exactly once, in the file
- * it is declared in, with the status `passed`. Missing (never collected, or
- * filtered out), duplicated, `skipped`, `todo` or failed are each a fault. The
- * run's overall success is not used: a skipped test leaves it `true`.
+ * actually did. It is judged from the report `scripts/landing-reporter.ts`
+ * wrote for this very run — the run's exit status, then the report's
+ * presence, shape and start time — and then each expected landing must appear
+ * exactly once **at its declaration**: the file, the id and the line and
+ * column the arm was declared at, so another test that happens to share the
+ * file and the id does not stand in for one that never registered. It must
+ * have `passed`, and must not have been registered to expect failure, since
+ * such a test passes when its body throws. Missing (never collected, or
+ * filtered out), duplicated, `skipped`, `pending`, failed or failing-expected
+ * are each a fault. The run's overall success is not used: a skipped test
+ * leaves it `true`.
  */
 export const checkRun = (run: {
   readonly status: number | null;
@@ -448,40 +512,38 @@ export const checkRun = (run: {
   } catch {
     return ['the report is not JSON'];
   }
-  const report = parsed as {
-    startTime?: unknown;
-    testResults?: Array<{
-      name?: unknown;
-      assertionResults?: Array<{ title?: unknown; status?: unknown }>;
-    }>;
-  };
-  if (typeof report !== 'object' || report === null || !Array.isArray(report.testResults))
+  const report = parsed as { startTime?: unknown; tests?: unknown };
+  if (typeof report !== 'object' || report === null || !Array.isArray(report.tests))
     return ['the report has no test results'];
   if (typeof report.startTime !== 'number' || report.startTime < run.startedAt)
     return ['the report was not written by this run'];
-  const seen = new Map<string, Array<{ file: string; status: string }>>();
-  for (const result of report.testResults) {
-    const file = typeof result.name === 'string' ? result.name : '';
-    for (const assertion of result.assertionResults ?? []) {
-      const id =
-        typeof assertion.title === 'string' ? /^([^:\s]+):/.exec(assertion.title)?.[1] : undefined;
-      if (id === undefined) continue;
-      seen.set(id, [
-        ...(seen.get(id) ?? []),
-        { file, status: typeof assertion.status === 'string' ? assertion.status : 'unknown' }
-      ]);
-    }
-  }
+  const tests = (report.tests as Array<Record<string, unknown>>).map((test) => ({
+    file: typeof test['file'] === 'string' ? test['file'] : '',
+    name: typeof test['name'] === 'string' ? test['name'] : '',
+    line: typeof test['line'] === 'number' ? test['line'] : undefined,
+    column: typeof test['column'] === 'number' ? test['column'] : undefined,
+    state: typeof test['state'] === 'string' ? test['state'] : 'unknown',
+    fails: test['fails'] === true
+  }));
   const faults: string[] = [];
-  for (const { row, id, file } of run.expected) {
-    const found = seen.get(id) ?? [];
-    if (found.length === 0)
-      faults.push(`${row}: ${id} is not in the report — it was never collected`);
-    else if (found.length > 1) faults.push(`${row}: ${id} is in the report ${found.length} times`);
-    else if ((found[0] as { file: string }).file !== file)
-      faults.push(`${row}: ${id} ran from ${(found[0] as { file: string }).file}, not ${file}`);
-    else if ((found[0] as { status: string }).status !== 'passed')
-      faults.push(`${row}: ${id} is ${(found[0] as { status: string }).status}, not passed`);
+  for (const { row, id, file, line, column } of run.expected) {
+    const named = tests.filter((test) => test.name.startsWith(`${id}:`));
+    const here = named.filter(
+      (test) => test.file === file && test.line === line && test.column === column
+    );
+    if (here.length === 0)
+      faults.push(
+        named.length === 0
+          ? `${row}: ${id} is not in the report — it was never collected`
+          : `${row}: ${id} never ran at ${file}:${line}:${column}; what ran under that id was declared elsewhere`
+      );
+    else if (named.length > 1) faults.push(`${row}: ${id} is in the report ${named.length} times`);
+    else if ((here[0] as { fails: boolean }).fails)
+      faults.push(
+        `${row}: ${id} is registered to expect failure, so its passing means its body failed`
+      );
+    else if ((here[0] as { state: string }).state !== 'passed')
+      faults.push(`${row}: ${id} is ${(here[0] as { state: string }).state}, not passed`);
   }
 
   return faults;

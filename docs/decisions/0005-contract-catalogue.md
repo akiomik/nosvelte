@@ -1183,28 +1183,34 @@ So a row carries two fields of its own, in the roster below, and neither is infe
      several rows;
   5. a row may not be carried by a test that does not exist;
   6. the test **runs and passes**, which is judged from the run and not from the source. `npm test`
-     — the one entrance locally and in both CI workflows — runs the suite with a JSON report written
-     for that run alone, then requires every landing to appear in it exactly once, in the file it is
-     declared in, with the status `passed`. A failed run, a report that is missing, unreadable or
-     not this run's, and a landing that is missing (never collected, excluded by configuration,
-     filtered out), duplicated, skipped or todo each fail the command. The runner's own verdict is
-     not used: a skipped test, or a test inside an empty table, leaves it a success. A landing is
-     declared with `it(`; `it.fails` inverts what passing means, and is not read as one;
+     — the one entrance locally and in both CI workflows — runs the suite with a reporter of the
+     bridge's own writing a JSON report for that run alone, then requires every landing to appear in
+     it exactly once **at its declaration** — the file, the id, and the line and column the arm is
+     declared at — with the status `passed` and not registered to expect failure. A failed run, a
+     report that is missing, unreadable or not this run's, and a landing that is missing (never
+     collected, excluded by configuration, filtered out), duplicated, declared elsewhere, skipped,
+     pending or expecting failure each fail the command. The runner's own verdict is not used: a
+     skipped test, or a test inside an empty table, leaves it a success, and a test expecting
+     failure is reported `passed` when its body throws. A landing is declared with the runner's own
+     `it(` — imported from `vitest` under its own name, or global — and `it.fails` is not read as
+     one;
   7. the test **asserts** something: a matcher after an `expect(…)`, or `assert`, or `expectTypeOf`.
      A title that contains the word does not count, and neither does `expect(x)` with no matcher —
      both were measured passing the first spelling of this rule.
 
   **Which check holds what.** `CAT33` holds what the source says: that a landing is a real
-  declaration in the syntax tree rather than text that looks like one, its id, its `@contracts`
-  marker, duplicates, and the edges both ways between this roster and the tests — rules 1 to 5
-  and 7. Rule 6 is the run's, held by `checkRun` in the bridge and by the two arms beside it:
-  `CAT40` against fabricated reports, and `CAT41` against real runs of the runner over a hook that
-  skips, an empty table, a file the configuration excludes and a filter, each beside a landing that
-  passes. **The source cannot settle rule 6, and it was tried.** For several rounds a static
-  allow-list decided whether a landing would run, and each round a reviewer found an evaluation it
-  read differently from the runner — a modifier, an option, a hook, a value evaluated while the file
-  is collected. The runner's report is the record of what ran, so that question is answered there,
-  and the source check no longer tries.
+  declaration in the syntax tree — a call to the runner's own `it`, rather than text that looks like
+  one or a local function of that name — and where it is declared, its id, its `@contracts` marker,
+  duplicates, and the edges both ways between this roster and the tests — rules 1 to 5 and 7. Rule 6
+  is the run's, held by `checkRun` in the bridge and by the two arms beside it: `CAT40` against
+  fabricated reports, and `CAT41` against real runs of the runner over a hook that skips, an empty
+  table, a file the configuration excludes, a filter, a test registered to expect failure and a
+  local `it` beside a real test under the same id, each beside a landing that passes. **The source
+  cannot settle rule 6, and it was tried.** For several rounds a static allow-list decided whether a
+  landing would run, and each round a reviewer found an evaluation it read differently from the
+  runner — a modifier, an option, a hook, a value evaluated while the file is collected. The
+  runner's report is the record of what ran, so that question is answered there, and the source
+  check no longer tries.
 
   **What these seven cannot hold, said here rather than found in phase 2.** They are rules about
   _edges_: that a cell names a test, that the test names the row back, that the test exists, runs,
