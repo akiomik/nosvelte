@@ -6,15 +6,16 @@
   interface Props {
     left: string;
     right: string;
-    signer: NostrSigner;
+    leftSigner: NostrSigner;
+    rightSigner: NostrSigner;
   }
 
-  let { left, right, signer }: Props = $props();
+  let { left, right, leftSigner, rightSigner }: Props = $props();
 </script>
 
-<NostrApp relays={[left]} {signer}>
+<NostrApp relays={[left]} signer={leftSigner}>
   <Poster label="left" />
 </NostrApp>
-<NostrApp relays={[right]} {signer}>
-  <Poster label="right" />
+<NostrApp relays={[right]} signer={rightSigner}>
+  <Poster label="right" atInit />
 </NostrApp>

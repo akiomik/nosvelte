@@ -26,8 +26,18 @@
   const context = createNostrContext({ relays, ...(signer === undefined ? {} : { signer }) });
   setNostrContext(context);
 
+  // Applied on every change after the first. The first run would hand the
+  // provider the list it was just created with, and a refused list would then
+  // be refused twice — the second time through the path for a later change,
+  // which C16 decides differently from the first construction.
+  let created = true;
   $effect(() => {
-    context.setRelays(relays);
+    const next = relays;
+    if (created) {
+      created = false;
+      return;
+    }
+    context.setRelays(next);
   });
 </script>
 

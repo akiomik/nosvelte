@@ -26,17 +26,37 @@ import { useStreamedReq, type UseStreamedReqOpts } from './useStreamedReq.svelte
  */
 const WIRE_BASE = 'nv';
 
-const optionsOf = (descriptor: ReqDescriptor): UseStreamedReqOpts => ({
-  filters: descriptor.filters,
-  reqIdBase: WIRE_BASE,
-  ...(descriptor.live === undefined ? {} : { live: descriptor.live }),
-  ...(descriptor.namespace === undefined ? {} : { namespace: descriptor.namespace }),
-  ...(descriptor.settleTimeoutMs === undefined
-    ? {}
-    : { settleTimeoutMs: descriptor.settleTimeoutMs }),
-  ...(descriptor.retain === undefined ? {} : { retain: descriptor.retain }),
-  ...(descriptor.relays === undefined ? {} : { relays: descriptor.relays })
-});
+/**
+ * The descriptor's fields, handed on as getters rather than copied.
+ *
+ * A copy reads every field here, unguarded, so a field whose read throws
+ * threw out of the component; the engine reads each field once, behind its
+ * own guard, and refuses one that throws by name (0003, the guarded reads;
+ * 0004's failure table). Reading through to the descriptor keeps that, and
+ * reads each field once rather than once to test it and again to copy it.
+ */
+const optionsOf = (descriptor: ReqDescriptor): UseStreamedReqOpts =>
+  ({
+    reqIdBase: WIRE_BASE,
+    get filters() {
+      return descriptor.filters;
+    },
+    get live() {
+      return descriptor.live;
+    },
+    get namespace() {
+      return descriptor.namespace;
+    },
+    get settleTimeoutMs() {
+      return descriptor.settleTimeoutMs;
+    },
+    get retain() {
+      return descriptor.retain;
+    },
+    get relays() {
+      return descriptor.relays;
+    }
+  }) as UseStreamedReqOpts;
 
 export function useReq(plan: () => ReqPlan): ReqHandle {
   const handle = useStreamedReq(() => {

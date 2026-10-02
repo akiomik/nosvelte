@@ -8,12 +8,5 @@
  */
 export { default as Metadata } from './components/Metadata.svelte';
 export { default as NostrApp } from './components/NostrApp.svelte';
-export type {
-  Event,
-  Events,
-  MetadataProps,
-  Outlets,
-  RequestOutletContext
-} from './components/outlets.js';
 export * from './public-entry.js';
 export { useReq } from './req.svelte.js';
