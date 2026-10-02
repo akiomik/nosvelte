@@ -22,6 +22,7 @@
  * rather than of every component that calls them. A value used once is passed
  * as it is.
  */
+import { filtersForIds } from '../compose.js';
 import type { ReqDescriptor } from '../public-entry.js';
 
 /** The default `UserReactionList` bound, from 0004. */
@@ -37,11 +38,20 @@ export const byId = (id: string, namespace?: string): ReqDescriptor => ({
   ...within(namespace)
 });
 
-/** `EventList`, `UniqueEventList`: those ids and nothing more. */
-export const byIds = (read: () => readonly string[], namespace?: string): ReqDescriptor => {
-  const ids = read();
-  return { filters: [{ ids: [...ids], limit: ids.length }], ...within(namespace) };
-};
+/**
+ * `EventList`, `UniqueEventList`: those ids and nothing more.
+ *
+ * Built by `filtersForIds`, the composition `B4-C9` describes, rather than
+ * here: one guarded read of the source, `length` read once and bounded at
+ * 10 000, a member that is not a string refusing the whole list, duplicates
+ * removed before `limit` counts them, and a source that cannot be read becoming
+ * an `ids`-only filter the descriptor boundary refuses by name — never an empty
+ * list, which is a legal request for nothing and would settle.
+ */
+export const byIds = (read: () => readonly string[], namespace?: string): ReqDescriptor => ({
+  filters: [...filtersForIds(read, {})],
+  ...within(namespace)
+});
 
 /**
  * The replaceable kinds one author publishes once each: `Metadata` (0),
@@ -68,10 +78,15 @@ export const article = (pubkey: string, identifier: string, namespace?: string):
  */
 export const reactions = (
   pubkey: string,
-  read: () => number,
+  read: () => number | undefined,
   namespace?: string
 ): ReqDescriptor => {
-  const limit = read();
+  // The default is applied to the one read, here, rather than by the prop
+  // declaration: a declared fallback makes Svelte read the prop while the
+  // component initialises, outside the request's guard, and a throwing getter
+  // came out of the render path.
+  const given = read();
+  const limit = given === undefined ? DEFAULT_REACTION_LIMIT : given;
   return {
     filters: [{ kinds: [7], authors: [pubkey], limit }],
     retain: limit,

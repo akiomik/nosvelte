@@ -241,6 +241,12 @@ describe('the walking slice', () => {
       view.unmount();
     }
 
+    // A request plan with no descriptor is refused, not taken as deferred: the
+    // engine reads the missing fields and refuses the first.
+    const missing = host(() => ({ kind: 'request' }) as unknown as ReqPlan);
+    await waitFor(() => expect(text('refusal')).toBe('invalid-descriptor:filters'));
+    missing.unmount();
+
     // A deferred plan asks nothing, and says so when asked to refresh.
     const deferred = host(() => ({ kind: 'deferred' }));
     expect(text('status')).toBe('loading');

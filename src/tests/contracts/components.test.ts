@@ -125,6 +125,8 @@ interface Row {
   tags?: string[][];
   /** Props the descriptor boundary refuses. */
   refused: Record<string, unknown>;
+  /** Every prop the component reads to build its request. */
+  reads: string[];
 }
 
 const latest = (name: string, component: RequestComponent, kind: number): Row => ({
@@ -134,7 +136,8 @@ const latest = (name: string, component: RequestComponent, kind: number): Row =>
   props: () => ({ pubkey: PUBKEY }),
   descriptor: () => ({ filters: [{ kinds: [kind], authors: [PUBKEY], limit: 1 }] }),
   kind,
-  refused: { pubkey: 'not-a-pubkey' }
+  refused: { pubkey: 'not-a-pubkey' },
+  reads: ['pubkey', 'namespace']
 });
 const byId = (name: string, component: RequestComponent): Row => ({
   name,
@@ -143,7 +146,8 @@ const byId = (name: string, component: RequestComponent): Row => ({
   props: (event) => ({ id: event.id }),
   descriptor: (event) => ({ filters: [{ ids: [event.id], limit: 1 }] }),
   kind: 1,
-  refused: { id: 'not-an-id' }
+  refused: { id: 'not-an-id' },
+  reads: ['id', 'namespace']
 });
 /**
  * A second id beside the row's own, so a list asks for two: with one, a
@@ -157,7 +161,8 @@ const byIds = (name: string, component: RequestComponent): Row => ({
   props: (event) => ({ ids: [event.id, OTHER_ID] }),
   descriptor: (event) => ({ filters: [{ ids: [event.id, OTHER_ID], limit: 2 }] }),
   kind: 1,
-  refused: { ids: ['not-an-id'] }
+  refused: { ids: ['not-an-id'] },
+  reads: ['ids', 'namespace']
 });
 
 /** The eleven, as 0004's table lists them. */
@@ -181,7 +186,8 @@ const ROWS: Row[] = [
     }),
     kind: 30023,
     tags: [['d', 'an-article']],
-    refused: { pubkey: 'not-a-pubkey', identifier: 'an-article' }
+    refused: { pubkey: 'not-a-pubkey', identifier: 'an-article' },
+    reads: ['pubkey', 'identifier', 'namespace']
   },
   {
     name: 'UserReactionList',
@@ -193,7 +199,8 @@ const ROWS: Row[] = [
       retain: 100
     }),
     kind: 7,
-    refused: { pubkey: 'not-a-pubkey' }
+    refused: { pubkey: 'not-a-pubkey' },
+    reads: ['pubkey', 'limit', 'namespace']
   }
 ];
 
@@ -351,6 +358,22 @@ describe('the request components', () => {
         },
         { timeout: 6_000 }
       );
+    }
+
+    // A clock corrected back before the deadline shows the event again, without
+    // a refresh: the held answer is re-projected the next time the provider
+    // reads its clock, which a relay's message does.
+    const now = Date.now;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => (deadline - 10) * 1000);
+    try {
+      relay.send(['CLOSED', 'unrelated', 'restricted: the clock moved']);
+      for (const [row, event, read] of views) {
+        await waitFor(() => expect(read('outlet'), row.name).toBe('default'));
+        expect(read('shown'), row.name).toBe(`${row.shape}:${event.id}`);
+      }
+    } finally {
+      spy.mockRestore();
+      expect(Date.now).toBe(now);
     }
   }, 15_000);
 
@@ -520,5 +543,178 @@ describe('the request components', () => {
     expect(ROWS.map((row) => row.name).sort()).toEqual(exported.sort());
     for (const row of ROWS) expect(row.component, row.name).toBe(entry[row.name]);
     expect(new Set(ROWS.map((row) => row.component)).size).toBe(ROWS.length);
+  });
+  it('CM7: a list builds its ids the way B4-C9 says: deduplicated, bounded, refused whole', async () => {
+    browserLike();
+    const event = await sign(1);
+    let port = 9901;
+    for (const [name, component] of [
+      ['EventList', EventList],
+      ['UniqueEventList', UniqueEventList]
+    ] as const) {
+      // Two copies of one id ask for it once, under the entry `{ ids: [a],
+      // limit: 1 }` has.
+      {
+        const url = `ws://localhost:${port++}`;
+        const relay = new WS(url, { jsonProtocol: true });
+        let keys = (): string[] => [];
+        const view = render(Twin, {
+          relays: [url],
+          which: component,
+          given: { ids: [event.id, event.id] },
+          descriptor: { filters: [{ ids: [event.id], limit: 1 }] },
+          expose: (read: () => string[]) => (keys = read)
+        });
+        expect((await nextOf(relay, 'REQ'))[2], name).toEqual({ ids: [event.id], limit: 1 });
+        await waitFor(() => expect(keys(), name).toHaveLength(1));
+        view.unmount();
+      }
+
+      // A `length` that grows on every read is read once per evaluation of
+      // the plan, which reads the source once: each evaluation's list is that
+      // answer's copies of one id, deduplicated to it. An implementation that
+      // asks for `length` per step reads it more often than the source; this
+      // one throws past a hundred reads rather than letting that never return.
+      {
+        let lengthReads = 0;
+        let sourceReads = 0;
+        const growing = new Proxy(
+          Array.from({ length: 200 }, () => event.id),
+          {
+            get(target, key, receiver) {
+              if (key !== 'length') return Reflect.get(target, key, receiver) as unknown;
+              lengthReads += 1;
+              if (lengthReads > 100) throw new Error('length read on every step');
+              return lengthReads;
+            }
+          }
+        );
+        const url = `ws://localhost:${port++}`;
+        const relay = new WS(url, { jsonProtocol: true });
+        const view = render(Mounted, {
+          relays: [url],
+          which: component,
+          given: Object.defineProperty({}, 'ids', {
+            enumerable: true,
+            get() {
+              sourceReads += 1;
+              return growing;
+            }
+          })
+        });
+        expect((await nextOf(relay, 'REQ'))[2], name).toEqual({ ids: [event.id], limit: 1 });
+        expect(sourceReads, name).toBeGreaterThan(0);
+        expect(lengthReads, name).toBe(sourceReads);
+        view.unmount();
+      }
+
+      // A source that cannot be read, is not a list, carries something that is
+      // not an id, or is longer than 10 000, is refused by `ids`, whole, and
+      // nothing is asked. A `length` past the bound is refused before any
+      // element is read: the proxy counts element reads, and throws past ten
+      // thousand so that a walk with no bound fails here rather than running.
+      let elementReads = 0;
+      const vast = new Proxy([event.id], {
+        get(target, key, receiver) {
+          if (key === 'length') return 2 ** 40;
+          if (typeof key === 'string' && /^\d+$/.test(key)) {
+            elementReads += 1;
+            if (elementReads > 10_000) throw new Error('walked past the bound');
+          }
+          return Reflect.get(target, key, receiver) as unknown;
+        }
+      });
+      const revoked = Proxy.revocable([event.id], {});
+      revoked.revoke();
+      const sources: [string, () => Record<string, unknown>][] = [
+        [
+          'a throwing getter',
+          () =>
+            Object.defineProperty({}, 'ids', {
+              enumerable: true,
+              get() {
+                throw new Error('unreadable ids');
+              }
+            })
+        ],
+        ['a revoked proxy', () => ({ ids: revoked.proxy })],
+        ['not a list', () => ({ ids: event.id })],
+        ['a member that is not a string', () => ({ ids: [event.id, 42] })],
+        ['10 001 ids', () => ({ ids: Array.from({ length: 10_001 }, () => event.id) })],
+        ['a length past the bound', () => ({ ids: vast })]
+      ];
+      for (const [source, given] of sources) {
+        const label = `${name}, ${source}`;
+        elementReads = 0;
+        const url = `ws://localhost:${port++}`;
+        const relay = new WS(url, { jsonProtocol: true });
+        const controlUrl = `ws://localhost:${port++}`;
+        const controlRelay = new WS(controlUrl, { jsonProtocol: true });
+        let handed: ReqHandle | undefined;
+        const view = render(Mounted, {
+          relays: [url],
+          which: component,
+          given: given(),
+          seen: (_outlet: string, request: ReqHandle) => (handed = request)
+        });
+        const control = render(Mounted, {
+          relays: [controlUrl],
+          which: component,
+          given: { ids: [event.id] }
+        });
+        await waitFor(() => expect(shownIn(view.container)('outlet'), label).toBe('error'));
+        const error = handed?.state.status === 'error' ? handed.state.error : undefined;
+        expect(
+          `${error?.code}:${error !== undefined && 'field' in error ? error.field : ''}`,
+          label
+        ).toBe('unsupported-filter:ids');
+        if (source === 'a length past the bound') expect(elementReads, label).toBe(0);
+        await nextOf(controlRelay, 'REQ');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(requestsTo(relay), label).toHaveLength(0);
+        view.unmount();
+        control.unmount();
+      }
+    }
+  });
+
+  it('CM8: a prop whose read throws is a refusal on the error outlet, never a throw out of render', async () => {
+    browserLike();
+    const url = 'ws://localhost:9931';
+    const relay = new WS(url, { jsonProtocol: true });
+    for (const row of ROWS) {
+      const event = await sign(row.kind, row.tags);
+      for (const prop of row.reads) {
+        const label = `${row.name}.${prop}`;
+        const given = Object.defineProperty({ ...row.props(event) }, prop, {
+          enumerable: true,
+          get() {
+            throw new Error(`${label} could not be read`);
+          }
+        });
+        let handed: ReqHandle | undefined;
+        const before = requestsTo(relay).length;
+        const view = render(Mounted, {
+          relays: [url],
+          which: row.component,
+          given,
+          seen: (_outlet: string, request: ReqHandle) => (handed = request)
+        });
+        await waitFor(() => expect(shownIn(view.container)('outlet'), label).toBe('error'));
+        const error = handed?.state.status === 'error' ? handed.state.error : undefined;
+        // `ids` is B4-C9's: refused by name. Every other prop is the caller's
+        // own code throwing, which 0004 files under `descriptor-unreadable`,
+        // quoting what it said.
+        if (prop === 'ids') {
+          expect(error?.code, label).toBe('unsupported-filter');
+        } else {
+          expect(error?.code, label).toBe('descriptor-unreadable');
+          expect(error?.message, label).toContain(`${label} could not be read`);
+        }
+        expect(shownIn(view.container)('shown'), label).toBe(`${error?.code}:same`);
+        expect(requestsTo(relay).length, label).toBe(before);
+        view.unmount();
+      }
+    }
   });
 });

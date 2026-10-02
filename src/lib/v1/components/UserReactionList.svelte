@@ -11,19 +11,12 @@
    * the retention, and every other one is refused as the filter's `limit`.
    */
   import { useReq } from '../req.svelte.js';
-  import { DEFAULT_REACTION_LIMIT, reactions } from './descriptors.js';
+  import { reactions } from './descriptors.js';
   import type { UserReactionListProps } from './outlets.js';
   import RequestOutlets from './RequestOutlets.svelte';
 
-  let {
-    namespace,
-    pubkey,
-    limit = DEFAULT_REACTION_LIMIT,
-    children,
-    loading,
-    error,
-    nodata
-  }: UserReactionListProps = $props();
+  let { namespace, pubkey, limit, children, loading, error, nodata }: UserReactionListProps =
+    $props();
 
   const request = useReq(() => ({
     kind: 'request',
