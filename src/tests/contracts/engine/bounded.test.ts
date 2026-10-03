@@ -2,14 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { OwnedPacket } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
-import {
-  emptyEventSet,
-  foldEvent,
-  project,
-  replacementKey,
-  retainNewest,
-  selectMany
-} from '$lib/v1/eventset.js';
+import { emptyEventSet, foldEvent, project, retainNewest, selectMany } from '$lib/v1/eventset.js';
 
 import { ownedEventPacket } from './helpers/relay.js';
 
@@ -81,37 +74,29 @@ const foldBoundedAt =
     );
 
 /**
- * The winner per replacement key over the whole input — what B5 says is stored.
+ * Which of the given ids are published at `at`.
  *
- * **Decided here, by the rule written out, not by the library's `laterWins`.**
- * An oracle that calls the function the fold also calls agrees with any
- * mutation of it: with the comparison reversed, the fold published `old` and
- * this helper, asked the same reversed question, named `old` the winner, so
- * `ES6d` stayed green. The rule is B5's: the later `created_at`, and on a tie
- * the lower id.
+ * **The superseded ids are written out per fixture, never derived.** An oracle
+ * that computed them with the library's own functions agreed with every
+ * mutation of those functions, and it was repaired one function at a time:
+ * first `laterWins` — reversed, the fold published `old` and the oracle named
+ * `old` the winner — then `replacementKey` — keyed by id, the fold kept both
+ * revisions and the oracle called each the winner of its own key. What each
+ * fixture supersedes is a fact about the fixture, so it is stated beside it.
  */
-function winners(packets: readonly OwnedPacket[]): Map<string, string> {
-  const later = (held: OwnedPacket, arriving: OwnedPacket): OwnedPacket => {
-    const [a, b] = [held.event, arriving.event];
-    if (a.created_at !== b.created_at) return a.created_at > b.created_at ? held : arriving;
-    return a.id <= b.id ? held : arriving;
-  };
-  const best = new Map<string, OwnedPacket>();
-  for (const packet of packets) {
-    const key = replacementKey(packet.event);
-    const held = best.get(key);
-    best.set(key, held === undefined ? packet : later(held, packet));
-  }
-  return new Map([...best].map(([key, packet]) => [key, packet.event.id]));
+function shownOf(set: CachedEventSet, at: number, superseded: readonly string[]): string[] {
+  return project(set, at)
+    .events.map((event) => event.id)
+    .filter((id) => superseded.includes(id));
 }
 
-/** Ids published that are not the winner for their own replacement key. */
-function supersededPublished(set: CachedEventSet, packets: readonly OwnedPacket[], at: number) {
-  const best = winners(packets);
-  return project(set, at)
-    .events.filter((event) => best.get(replacementKey(event)) !== event.id)
-    .map((event) => event.id);
-}
+/**
+ * The bounds every arm below is run at. One alone cannot see a fold that
+ * keeps both revisions: the bound throws one of them away and hides the
+ * defect, so the larger bounds are where a revision that should have been
+ * replaced shows up beside its replacement.
+ */
+const BOUNDS = [1, 2, 3] as const;
 
 describe('a bounded set that carries a replacement', () => {
   it('ES6i: a set of exactly `retain` entries is returned untouched, and one more is cut', () => {
@@ -151,26 +136,36 @@ describe('a bounded set that carries a replacement', () => {
   it('ES6d: no arrival order of a bounded set publishes a superseded replaceable', () => {
     // Two neighbours for the coordinate to compete with: one older than both
     // revisions, and one between them, so a bound that keeps the oldest entry
-    // rather than the newest evicts the newer revision too.
+    // rather than the newest evicts the newer revision too. And one fixture in
+    // which everything shares a `created_at`, where B5's tie decides which
+    // revision supersedes and the bound's own tie-break decides which entry
+    // keeps the slot: `a` supersedes `c`, and `b` competes for the slot.
     const between = ev({ id: 'between', kind: 1, pubkey: PUBKEY, created_at: 150 });
-    for (const packets of [
-      [OLD, NEW, REGULAR],
-      [OLD, NEW, between]
-    ]) {
-      const offenders = permutations(packets)
-        .map((order) => {
-          const set = foldBoundedAt(1)(order.map((packet) => [packet, NOW] as const));
-          return { order, superseded: supersededPublished(set, packets, NOW) };
-        })
-        .filter(({ superseded }) => superseded.length > 0);
+    const winner = ev({ id: 'a', kind: 10002, pubkey: PUBKEY, created_at: 100 });
+    const competitor = ev({ id: 'b', kind: 1, pubkey: PUBKEY, created_at: 100 });
+    const loser = ev({ id: 'c', kind: 10002, pubkey: PUBKEY, created_at: 100 });
+    for (const [packets, superseded] of [
+      [[OLD, NEW, REGULAR], ['old']],
+      [[OLD, NEW, between], ['old']],
+      [[winner, competitor, loser], ['c']]
+    ] as const) {
+      for (const retain of BOUNDS) {
+        const offenders = permutations(packets)
+          .map((order) => {
+            const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
+            return { order, shown: shownOf(set, NOW, superseded) };
+          })
+          .filter(({ shown }) => shown.length > 0);
 
-      // The bound before this change published `old` — the event `new` supersedes
-      // — in two of the six orders, because evicting `new` deleted the only trace
-      // of the coordinate and the fold then had nothing to compare `old` against.
-      expect(
-        offenders.map(({ order }) => order.map((packet) => packet.event.id).join(' -> ')),
-        'orders publishing a superseded replaceable'
-      ).toEqual([]);
+        // The bound before this change published `old` — the event `new`
+        // supersedes — in two of the six orders, because evicting `new` deleted
+        // the only trace of the coordinate and the fold then had nothing to
+        // compare `old` against.
+        expect(
+          offenders.map(({ order }) => order.map((packet) => packet.event.id).join(' -> ')),
+          `retain ${retain}: orders publishing a superseded replaceable`
+        ).toEqual([]);
+      }
     }
   });
 
@@ -232,24 +227,29 @@ describe('a bounded set that carries a replacement', () => {
     // up, so the slot the coordinate lost is free again at exactly the moment
     // an older event for it arrives.
     const lasting = ev({ id: 'new-plain', kind: 10002, pubkey: PUBKEY, created_at: 200 });
-    const fading = ev({
-      id: 'regular-fading',
-      kind: 1,
-      pubkey: PUBKEY,
-      created_at: 300,
-      tags: [['expiration', '500']]
-    });
-    const packets = [lasting, fading, OLD];
-
-    const set = foldBoundedAt(1)([
-      [lasting, 400],
-      [fading, 400],
-      [OLD, 600]
-    ]);
-
-    expect(
-      supersededPublished(set, packets, 600),
-      'superseded published after the clock moved'
-    ).toEqual([]);
+    const fading = (created_at: number): OwnedPacket =>
+      ev({
+        id: `regular-fading-${created_at}`,
+        kind: 1,
+        pubkey: PUBKEY,
+        created_at,
+        tags: [['expiration', '500']]
+      });
+    // And the other way round: the regular event is older than the newer
+    // revision, so the revision keeps its slot through the clock's move and
+    // `old` arrives to find it still there — the comparison has to be made.
+    for (const competitor of [fading(300), fading(150)]) {
+      for (const retain of BOUNDS) {
+        const set = foldBoundedAt(retain)([
+          [lasting, 400],
+          [competitor, 400],
+          [OLD, 600]
+        ]);
+        expect(
+          shownOf(set, 600, ['old']),
+          `${competitor.event.id}, retain ${retain}: superseded published after the clock moved`
+        ).toEqual([]);
+      }
+    }
   });
 });

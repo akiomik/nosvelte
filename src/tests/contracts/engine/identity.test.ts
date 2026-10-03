@@ -813,6 +813,15 @@ describe('canonical event set', () => {
     expect(foldEvent(set, fromAnotherRelay)).toBe(set);
     const regularElsewhere = { ...a, from: 'wss://other/', event: { ...a.event } };
     expect(foldEvent(set, regularElsewhere)).toBe(set);
+    // From another relay, in every class with a coordinate as well: a tie-break
+    // that let an equal event replace the incumbent for one class alone would
+    // rebuild the set there and nowhere else.
+    for (const kind of [3, 10002, 19999]) {
+      const held = ev({ kind });
+      const holding = foldEvent(set, held);
+      const elsewhere = { ...held, from: 'wss://other/', event: { ...held.event } };
+      expect(foldEvent(holding, elsewhere), `${kind}`).toBe(holding);
+    }
 
     // Every path a replay can take returns what it was given: an addressable
     // event, from either relay, and an ephemeral one once it has been noted.
@@ -907,20 +916,34 @@ describe('canonical event set', () => {
     // Every class that has a coordinate, at the edges of its range and in the
     // middle: the two specials, the replaceable range, and the addressable one.
     // Each with the `d` tag after another tag, so the identifier is the `d`
-    // tag's and not the first tag's. **The newer revision's id sorts after the
-    // older one's**, so the newer winning is recency and not the id tie-break.
+    // tag's and not the first tag's.
     const tags = [
       ['title', 't'],
       ['d', 's']
     ];
     const KINDS = [0, 3, 10000, 10002, 19999, 30000, 30023, 39999];
+    // **Each pair twice, with the ids in both orders**, so the newer winning is
+    // recency and neither id order: a fold that let the lower id win, or the
+    // higher, picks the older revision in one of the two.
+    const ORDERS = [
+      ['a-older', 'b-newer'],
+      ['y-older', 'x-newer']
+    ] as const;
     for (const kind of KINDS) {
-      const older = ev({ kind, created_at: 10, id: `${kind}-a-older`, tags });
-      const newer = ev({ kind, created_at: 20, id: `${kind}-b-newer`, tags });
-      // The newer, whichever revision arrives first.
-      expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-b-newer`]);
-      expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-b-newer`]);
+      for (const [olderId, newerId] of ORDERS) {
+        const older = ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags });
+        const newer = ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags });
+        // The newer, whichever revision arrives first.
+        expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-${newerId}`]);
+        expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-${newerId}`]);
+        // And whichever relay each came from: the relay is not the coordinate.
+        const fromAnother = { ...newer, from: 'wss://another/', event: { ...newer.event } };
+        expect(idsOf(foldAll([older, fromAnother])), `${kind}: another relay`).toEqual([
+          `${kind}-${newerId}`
+        ]);
+      }
       // Another author's revision is another event.
+      const older = ev({ kind, created_at: 10, id: `${kind}-a-older`, tags });
       const theirs = ev({ kind, created_at: 20, id: `${kind}-theirs`, pubkey: 'p2', tags });
       expect(idsOf(foldAll([older, theirs])).sort(), `${kind}: another author`).toEqual(
         [`${kind}-a-older`, `${kind}-theirs`].sort()
@@ -929,17 +952,20 @@ describe('canonical event set', () => {
     // **And every kind's revisions in one set**, so the kind is part of the
     // identity too: one author's lists of two replaceable kinds, or two
     // addressable kinds under one `d`, are two coordinates and not one.
-    const together = KINDS.flatMap((kind) => [
-      ev({ kind, created_at: 10, id: `${kind}-a-older`, tags }),
-      ev({ kind, created_at: 20, id: `${kind}-b-newer`, tags })
-    ]);
-    expect(idsOf(foldAll(together)).sort(), 'one coordinate per kind').toEqual(
-      KINDS.map((kind) => `${kind}-b-newer`).sort()
-    );
+    for (const [olderId, newerId] of ORDERS) {
+      const together = KINDS.flatMap((kind) => [
+        ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags }),
+        ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags })
+      ]);
+      expect(idsOf(foldAll(together)).sort(), 'one coordinate per kind').toEqual(
+        KINDS.map((kind) => `${kind}-${newerId}`).sort()
+      );
+    }
     // Addressable: the `d` tag is part of the coordinate, so a revision under
     // another `d` is another event — with the same first tag, so only the `d`
-    // tells them apart. Replaceable: the `d` tag is not, so a revision that
-    // carries another one is still a revision.
+    // tells them apart — and a revision with no `d` at all is the one whose `d`
+    // is empty. Replaceable: the `d` tag is not, so a revision that carries
+    // another one is still a revision.
     const otherD = [
       ['title', 't'],
       ['d', 'other']
@@ -950,6 +976,11 @@ describe('canonical event set', () => {
       expect(idsOf(foldAll([here, elsewhere])).sort(), `${kind}: another d`).toEqual(
         [`${kind}-elsewhere`, `${kind}-here`].sort()
       );
+      const unnamed = ev({ kind, created_at: 10, id: `${kind}-unnamed`, tags: [] });
+      const emptyD = ev({ kind, created_at: 20, id: `${kind}-empty-d`, tags: [['d', '']] });
+      expect(idsOf(foldAll([unnamed, emptyD])), `${kind}: no d is the empty d`).toEqual([
+        `${kind}-empty-d`
+      ]);
     }
     for (const kind of [0, 10002]) {
       const before = ev({ kind, created_at: 10, id: `${kind}-a-before`, tags });
