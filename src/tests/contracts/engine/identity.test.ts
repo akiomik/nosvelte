@@ -738,7 +738,8 @@ describe('canonical event set', () => {
     expect(classifyKind(30023)).toBe('addressable');
   });
 
-  it('ES1b: every range boundary is pinned', () => {
+  // @contracts B5-C7
+  it('ES1b: every range boundary is pinned, and the two specials beside their neighbours', () => {
     // The ranges are the whole content of the classifier, so an off-by-one at
     // any edge is the failure to guard against. Examples in the middle of a
     // range cannot see one.
@@ -750,15 +751,14 @@ describe('canonical event set', () => {
     expect(classifyKind(30000)).toBe('addressable');
     expect(classifyKind(39999)).toBe('addressable');
     expect(classifyKind(40000)).toBe('regular');
-  });
 
-  it('ES1c: the two specials are exceptions to a range, and their neighbours are not', () => {
     // **`0` and `3` are not explained by any range.** Both sit inside the span
     // the classifier answers `regular` for, and both are `replaceable` by a
-    // clause of their own — NIP-01 names them rather than deriving them. A
-    // witness that only walks the range edges cannot see them: a classifier
-    // that dropped the special line would keep every boundary in `E1b` and
-    // start replacing nothing for a profile or a contact list.
+    // clause of their own — NIP-01 names them rather than deriving them. The
+    // range edges above cannot see them: a classifier that dropped the special
+    // line keeps every one of those assertions green and starts replacing
+    // nothing for a profile or a contact list, which is why they are asserted
+    // here, beside the edges.
     expect(classifyKind(0)).toBe('replaceable');
     expect(classifyKind(3)).toBe('replaceable');
 
@@ -789,6 +789,7 @@ describe('canonical event set', () => {
     expect(replacementKey(ev({ kind: 30023, tags: [] }).event)).toBe('30023:p1:');
   });
 
+  // @contracts B5-C3
   it('ES3: the fold is idempotent, and a replay does not even rebuild the set', () => {
     const a = ev();
     const b = ev({ kind: 0 });
@@ -810,6 +811,21 @@ describe('canonical event set', () => {
     // equality short-circuits it either way.
     const fromAnotherRelay = { ...b, from: 'wss://other/', event: { ...b.event } };
     expect(foldEvent(set, fromAnotherRelay)).toBe(set);
+
+    // Every path a replay can take returns what it was given: an addressable
+    // event, from either relay, and an ephemeral one once it has been noted.
+    const addressable = ev({ kind: 30023, tags: [['d', 's']] });
+    const withIt = foldEvent(set, addressable);
+    expect(foldEvent(withIt, addressable)).toBe(withIt);
+    const addressableElsewhere = {
+      ...addressable,
+      from: 'wss://other/',
+      event: { ...addressable.event }
+    };
+    expect(foldEvent(withIt, addressableElsewhere)).toBe(withIt);
+    const ephemeral = ev({ kind: 20001 });
+    const noted = foldEvent(set, ephemeral);
+    expect(foldEvent(noted, ephemeral)).toBe(noted);
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {
@@ -825,6 +841,7 @@ describe('canonical event set', () => {
     expect(laterWins(tieLow.event, tieHigh.event).id).toBe('aaa');
   });
 
+  // @contracts B5-C2
   it('ES5: randomised — any permutation of the same packets folds to the same set', () => {
     const rand = mulberry32(0xc0ffee);
     const packets = [
@@ -839,16 +856,25 @@ describe('canonical event set', () => {
       ev({ kind: 1, created_at: 2, id: 'n2' }),
       ev({ kind: 30023, created_at: 3, id: 'a1', tags: [['d', 's']] }),
       ev({ kind: 30023, created_at: 4, id: 'a2', tags: [['d', 's']] }),
-      ev({ kind: 30023, created_at: 4, id: 'a3', tags: [['d', 'other']] })
+      ev({ kind: 30023, created_at: 4, id: 'a3', tags: [['d', 'other']] }),
+      // And a tie in each other class with a coordinate: a replaceable kind
+      // from the range, and an addressable one under one `d`. A tie-break
+      // written for one class alone is an order-dependent fold for the rest.
+      ev({ kind: 10002, created_at: 7, id: 'r1' }),
+      ev({ kind: 10002, created_at: 7, id: 'r0' }),
+      ev({ kind: 30023, created_at: 8, id: 'b1', tags: [['d', 'u']] }),
+      ev({ kind: 30023, created_at: 8, id: 'b0', tags: [['d', 'u']] })
     ];
-    const expected = ['m0', 'a2', 'a3', 'n2', 'n1'];
+    const expected = ['b0', 'r0', 'm0', 'a2', 'a3', 'n2', 'n1'];
     // **Written out rather than derived from the fold.** It was
     // `idsOf(foldAll(packets))` — the implementation under test producing its
     // own oracle — so an implementation that stored nothing agreed with itself
     // two hundred times: measured, with `entries.set` removed this arm passed
     // and `E4` died. What the row claims is that every order gives *this* set,
-    // and the tie is what makes the claim non-trivial: `aaa` and `zzz` share a
-    // `created_at`, and the lower id has to win from either direction.
+    // and the ties are what make the claim non-trivial: `m0`/`m1`, `r0`/`r1`
+    // and `b0`/`b1` each share a coordinate and a `created_at`, and the lower
+    // id has to win from either direction. Two hundred seeded shuffles, not
+    // every order of twelve packets.
 
     for (let i = 0; i < 200; i += 1) {
       const shuffled = [...packets];
@@ -872,6 +898,56 @@ describe('canonical event set', () => {
     expect(idsOf(superseded)).toContain('m2');
     expect(idsOf(superseded)).not.toContain('m1');
     expect(idsOf(superseded)).toContain('r1');
+  });
+
+  // @contracts B5-C1
+  it('ES28: two revisions of one replaceable event fold to the newer, under the identity its class dictates', () => {
+    // Every class that has a coordinate, at the edges of its range and in the
+    // middle: the two specials, the replaceable range, and the addressable one.
+    // Each with the `d` tag after another tag, so the identifier is the `d`
+    // tag's and not the first tag's.
+    const tags = [
+      ['title', 't'],
+      ['d', 's']
+    ];
+    for (const kind of [0, 3, 10000, 10002, 19999, 30000, 30023, 39999]) {
+      const older = ev({ kind, created_at: 10, id: `${kind}-older`, tags });
+      const newer = ev({ kind, created_at: 20, id: `${kind}-newer`, tags });
+      // The newer, whichever revision arrives first.
+      expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-newer`]);
+      expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-newer`]);
+      // Another author's revision is another event.
+      const theirs = ev({ kind, created_at: 20, id: `${kind}-theirs`, pubkey: 'p2', tags });
+      expect(idsOf(foldAll([older, theirs])).sort(), `${kind}: another author`).toEqual(
+        [`${kind}-older`, `${kind}-theirs`].sort()
+      );
+    }
+    // Addressable: the `d` tag is part of the coordinate, so a revision under
+    // another `d` is another event — with the same first tag, so only the `d`
+    // tells them apart.
+    for (const kind of [30000, 30023, 39999]) {
+      const here = ev({ kind, created_at: 20, id: `${kind}-here`, tags });
+      const elsewhere = ev({
+        kind,
+        created_at: 10,
+        id: `${kind}-elsewhere`,
+        tags: [
+          ['title', 't'],
+          ['d', 'other']
+        ]
+      });
+      expect(idsOf(foldAll([here, elsewhere])).sort(), `${kind}: another d`).toEqual(
+        [`${kind}-elsewhere`, `${kind}-here`].sort()
+      );
+    }
+    // A regular kind has no revisions: one author and one kind are two events.
+    for (const kind of [1, 9999, 40000]) {
+      const first = ev({ kind, created_at: 10, id: `${kind}-first` });
+      const second = ev({ kind, created_at: 20, id: `${kind}-second` });
+      expect(idsOf(foldAll([first, second])).sort(), `${kind}`).toEqual(
+        [`${kind}-first`, `${kind}-second`].sort()
+      );
+    }
   });
 
   // `E6b` and `E13` are not here any more. Both were written against

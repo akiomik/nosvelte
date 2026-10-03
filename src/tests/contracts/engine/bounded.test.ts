@@ -1,0 +1,249 @@
+import { describe, expect, it } from 'vitest';
+
+import type { OwnedPacket } from '$lib/v1/event.js';
+import type { CachedEventSet } from '$lib/v1/eventset.js';
+import {
+  emptyEventSet,
+  foldEvent,
+  laterWins,
+  project,
+  replacementKey,
+  retainNewest,
+  selectMany
+} from '$lib/v1/eventset.js';
+
+import { ownedEventPacket } from './helpers/relay.js';
+
+/**
+ * A bounded set that carries a replacement (0003 B5, B6), against the fold and
+ * the bound themselves.
+ *
+ * Ported from the spike's bounded-replacement suite onto `src/lib/v1`, with the
+ * arms renamed from `E6<x>` to `ES6<x>`: 0005 records the old names as spike
+ * witnesses, and a production arm carries a name of its own. **The comments
+ * keep the spike's names**, because what they record — which arm a mutation
+ * killed, what a sweep counted — was measured there: `M16`, `P3` and every
+ * other arm name in a comment is the spike's as 0005 records it, not a file in
+ * this repository.
+ *
+ * The axis every existing retention witness holds still.
+ *
+ * `retain` is exercised in sixteen places and every one of them feeds `kind: 1`
+ * only — where `replacementKey(event) === event.id`, so entries and events are
+ * one to one and the bound can never collapse two events into one slot. The two
+ * tests named for this very harm, `M16` ("a replacement arriving in a later
+ * fetch cannot resurrect an older one") and `P3` ("the cache value is the
+ * canonical set, not the arrival order"), both run with `retain` absent. The
+ * property was witnessed; the bound was the one axis never varied against it.
+ *
+ * These are the witnesses for that crossing. Both fail on the bound as it stood
+ * before this change — measured, not assumed.
+ */
+
+const PUBKEY = 'ab'.repeat(32);
+
+const ev = (fields: Parameters<typeof ownedEventPacket>[0]): OwnedPacket =>
+  ownedEventPacket(fields);
+
+/** One replaceable coordinate, superseded; plus a regular event to compete for the slot. */
+const OLD = ev({ id: 'old', kind: 10002, pubkey: PUBKEY, created_at: 100 });
+const NEW = ev({
+  id: 'new',
+  kind: 10002,
+  pubkey: PUBKEY,
+  created_at: 200,
+  tags: [['expiration', '150']]
+});
+const REGULAR = ev({ id: 'regular', kind: 1, pubkey: PUBKEY, created_at: 50 });
+
+const NOW = 1_000;
+
+function permutations<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) return [[...items]];
+  return items.flatMap((item, i) =>
+    permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [item, ...rest])
+  );
+}
+
+/**
+ * Fold and bound each arrival, handing the bound the instant it sampled —
+ * which nothing reads. `RetentionOptions.now` is kept for exactly this: a
+ * change that put expiry back into the ranking would read it from here, and
+ * these arms would see that change rather than a bound that was never offered
+ * a clock. Dropping the instant from this call left all four arms green under
+ * that change, which is the regression they were written for.
+ */
+const foldBoundedAt =
+  (retain: number) =>
+  (arrivals: readonly (readonly [OwnedPacket, number])[]): CachedEventSet =>
+    arrivals.reduce(
+      (acc, [packet, now]) => retainNewest(foldEvent(acc, packet), { retain, now }),
+      emptyEventSet
+    );
+
+/** The winner per replacement key over the whole input — what B5 says is stored. */
+function winners(packets: readonly OwnedPacket[]): Map<string, string> {
+  const best = new Map<string, OwnedPacket>();
+  for (const packet of packets) {
+    const key = replacementKey(packet.event);
+    const held = best.get(key);
+    best.set(
+      key,
+      held === undefined
+        ? packet
+        : laterWins(held.event, packet.event) === held.event
+          ? held
+          : packet
+    );
+  }
+  return new Map([...best].map(([key, packet]) => [key, packet.event.id]));
+}
+
+/** Ids published that are not the winner for their own replacement key. */
+function supersededPublished(set: CachedEventSet, packets: readonly OwnedPacket[], at: number) {
+  const best = winners(packets);
+  return project(set, at)
+    .events.filter((event) => best.get(replacementKey(event)) !== event.id)
+    .map((event) => event.id);
+}
+
+describe('a bounded set that carries a replacement', () => {
+  it('ES6i: a set of exactly `retain` entries is returned untouched, and one more is cut', () => {
+    // **The boundary nobody could move.** `keepNewest` returns early on
+    // `entries.size <= retain`, and that `<=` could be changed to `<` with the
+    // whole spike suite green — found by shifting every comparison operator in
+    // the library one at a time, 355 of them, of which twelve turned nothing
+    // red. B6 contracts "the newest `retain` entries", so a set already at the
+    // bound is not over it, and the identity of what comes back is what says
+    // so: `retainNewest` returns the *same* set object when nothing is cut, and
+    // a caller downstream compares by identity to decide whether anything
+    // moved.
+    // Three entries that stay three: `OLD` and `NEW` are one replaceable and
+    // fold together, so a set built from them is two, not three.
+    const three = [
+      REGULAR,
+      ev({ id: 'second', kind: 1, pubkey: PUBKEY, created_at: 60 }),
+      ev({ id: 'third', kind: 1, pubkey: PUBKEY, created_at: 70 })
+    ];
+    const at = foldBoundedAt(3)(three.map((packet) => [packet, NOW] as const));
+    expect(at.entries.size, 'the fixture is not three entries').toBe(3);
+
+    // Exactly at the bound: the early return, and the same object back.
+    const held = retainNewest(at, { retain: 3 });
+    expect(held, 'a set at the bound was rebuilt rather than returned').toBe(at);
+    expect(held.entries.size).toBe(3);
+
+    // One over it: a different object, and one entry fewer. Both halves,
+    // because the early return passing is satisfied by a function that never
+    // cuts anything at all.
+    const cut = retainNewest(at, { retain: 2 });
+    expect(cut, 'a set over the bound was returned untouched').not.toBe(at);
+    expect(cut.entries.size).toBe(2);
+  });
+
+  // @contracts B5-C4
+  it('ES6d: no arrival order of a bounded set publishes a superseded replaceable', () => {
+    // Two neighbours for the coordinate to compete with: one older than both
+    // revisions, and one between them, so a bound that keeps the oldest entry
+    // rather than the newest evicts the newer revision too.
+    const between = ev({ id: 'between', kind: 1, pubkey: PUBKEY, created_at: 150 });
+    for (const packets of [
+      [OLD, NEW, REGULAR],
+      [OLD, NEW, between]
+    ]) {
+      const offenders = permutations(packets)
+        .map((order) => {
+          const set = foldBoundedAt(1)(order.map((packet) => [packet, NOW] as const));
+          return { order, superseded: supersededPublished(set, packets, NOW) };
+        })
+        .filter(({ superseded }) => superseded.length > 0);
+
+      // The bound before this change published `old` — the event `new` supersedes
+      // — in two of the six orders, because evicting `new` deleted the only trace
+      // of the coordinate and the fold then had nothing to compare `old` against.
+      expect(
+        offenders.map(({ order }) => order.map((packet) => packet.event.id).join(' -> ')),
+        'orders publishing a superseded replaceable'
+      ).toEqual([]);
+    }
+  });
+
+  it('ES6e: one stored set and one published answer, whatever the arrival order', () => {
+    const answers = permutations([OLD, NEW, REGULAR]).map((order) => {
+      const set = foldBoundedAt(1)(order.map((packet) => [packet, NOW] as const));
+      return {
+        stored: selectMany(set)
+          .map((packet) => packet.event.id)
+          .join(','),
+        shown: project(set, NOW)
+          .events.map((event) => event.id)
+          .join(',')
+      };
+    });
+
+    // B6's own words, which name no instant — the bound reads no clock, so the
+    // agreement below holds at any. Three distinct stored sets and three
+    // distinct published answers stood here before this change.
+    // **The value, not the count of distinct values.** `size === 1` says every
+    // order agreed and says nothing about what they agreed on, so a bound that
+    // keeps *nothing* satisfies it — measured: with `keepNewest` returning an
+    // empty map for any numeric bound, this arm and both its neighbours passed.
+    expect([...new Set(answers.map((a) => a.stored))], 'the one stored set').toEqual(['new']);
+    expect([...new Set(answers.map((a) => a.shown))], 'the one published answer').toEqual(['']);
+
+    // And whatever the bound ranks on is bounded by the entries it describes,
+    // so ordering was not bought with a structure that grows. That is the claim
+    // `retain` makes, and it is the one thing such a structure has to promise:
+    // an earlier draft of this repair pruned only on the path that evicts, so a
+    // replacement — same size, different id — left the superseded id behind and
+    // the structure outgrew the entries. That assertion found it on the spike,
+    // in a design that ranked on a separate structure.
+    //
+    // **Neither the spike as it shipped nor this repository has that structure,
+    // so the loop below is never entered here and holds nothing today.** It is
+    // kept as the guard such a design would owe, read through an optional field
+    // on purpose. Which structure the bound
+    // ranks on differs between the designs still under consideration, and the
+    // shape this file exists to pin — a bounded set carrying a replacement,
+    // over every arrival order — is common to all of them. A design that ranks
+    // on nothing extra has nothing to check here and should not fail for it.
+    for (const order of permutations([OLD, NEW, REGULAR])) {
+      const set = foldBoundedAt(1)(order.map((packet) => [packet, NOW] as const));
+      const ranked: Map<string, unknown> | undefined = (set as { standing?: Map<string, unknown> })
+        .standing;
+      if (ranked !== undefined) {
+        expect(ranked.size, 'ranking entries held per stored entry').toBeLessThanOrEqual(
+          set.entries.size
+        );
+      }
+    }
+  });
+
+  // @contracts B5-C5
+  it('ES6f: nor does a clock that moves between arrivals', () => {
+    // The same crossing reached the other way. `new` is evicted by a regular
+    // event that is valid when it arrives and expired by the time `old` shows
+    // up, so the slot the coordinate lost is free again at exactly the moment
+    // an older event for it arrives.
+    const lasting = ev({ id: 'new-plain', kind: 10002, pubkey: PUBKEY, created_at: 200 });
+    const fading = ev({
+      id: 'regular-fading',
+      kind: 1,
+      pubkey: PUBKEY,
+      created_at: 300,
+      tags: [['expiration', '500']]
+    });
+    const packets = [lasting, fading, OLD];
+
+    const set = foldBoundedAt(1)([
+      [lasting, 400],
+      [fading, 400],
+      [OLD, 600]
+    ]);
+
+    expect(
+      supersededPublished(set, packets, 600),
+      'superseded published after the clock moved'
+    ).toEqual([]);
+  });
+});
