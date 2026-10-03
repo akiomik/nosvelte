@@ -21,8 +21,11 @@ vi.unmock('svelte');
  * on any client rx-nostr builds, the provider's own and the ones it asks what
  * a relay is called. This is the transport's input, read where it crosses into
  * the dependency, as the wire is its output; nothing of this library's is
- * replaced. A module-level array because `vi.mock`'s factory is hoisted above
- * every `const` in this file.
+ * replaced. **It is supporting evidence, not a public witness**: what it reads
+ * depends on which transport call the library makes, so it holds the internal
+ * halves of B-α-C17 and B-α-C21, which no published value reflects, and the
+ * catalogue rows say so. A module-level array because `vi.mock`'s factory is
+ * hoisted above every `const` in this file.
  */
 const asked: unknown[][] = [];
 
@@ -248,7 +251,9 @@ describe('the relay list a consumer hands the provider', () => {
     for (const [label, entry] of malformed) {
       asked.length = 0;
       const provider = mounted([entry]);
-      // Refused before the transport was asked about anything at all.
+      // Never handed to the transport's naming: nothing the transport was
+      // handed names a relay. The empty list a provider refused at
+      // construction still writes to its client is the one write this admits.
       expect(asked.flat(), label).toEqual([]);
       const refusal = provider.diagnostics().configurationError;
       expect(refusal?.code, label).toBe('invalid-relay-input');
@@ -368,7 +373,8 @@ describe('the relay list a consumer hands the provider', () => {
       asked.length = 0;
       await provider.rerender(relays);
       // Nothing was written to the transport: not the refused list, and not
-      // an emptied one in its place.
+      // an emptied one in its place. This is the internal half of "the client
+      // standing"; the published half is the refresh below.
       expect(asked, `${label}: the client was not written to`).toEqual([]);
       expect(provider.diagnostics().configurationError?.code, label).toBe('invalid-relay-input');
       expect(provider.diagnostics().relays, `${label}: the generation stands`).toBe(before);
