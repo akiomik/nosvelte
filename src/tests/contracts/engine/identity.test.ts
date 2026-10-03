@@ -299,12 +299,23 @@ describe('canonical key', () => {
     expect(hashed('a', 'S', unsupported)).not.toBe(hashed('a', 'S', { kinds: [1], until: 0 }));
     // What does **not** split it, stated rather than left to be found: two
     // different filters refused for the same reason under one namespace and
-    // scope share the entry (0003 B1 — it holds an error and no data), and so
-    // does a request naming its own relays, whose relays are not on a refused
-    // key the way they are on an accepted one.
+    // scope share the entry (0003 B1 — it holds an error and no data).
     expect(hashed('a', 'S', unsupported)).toBe(hashed('a', 'S', { kinds: [2], search: 'x' }));
-    expect(hashed('a', 'S', unsupported, ['wss://x.example/'])).toBe(
-      hashed('a', 'S', unsupported, ['wss://y.example/'])
+    // Nor does a request's own `relays`. Asked under a real scope and naming
+    // relays that scope reads, so the request reaches the filter check rather
+    // than being refused for its targets: refused for the filter, the two share
+    // an entry; accepted, the same two are two entries — the separation the
+    // accepted key makes and the refused one owes nothing for.
+    const real = createRelayScope(undefined, ['wss://x.example', 'wss://y.example']).current;
+    const keyNaming = (relays: string[], filter: object): unknown[] =>
+      entryKeyOf({ filters: [filter as Nostr.Filter], relays, scope: real }) as unknown[];
+    const naming = (relays: string[], filter: object): string => hashKey(keyNaming(relays, filter));
+    const [, refusedPath, , , refusedFor] = keyNaming(['wss://x.example'], unsupported);
+    expect(refusedPath).toBe('refused');
+    expect(refusedFor).toContain('"search"');
+    expect(naming(['wss://x.example'], unsupported)).toBe(naming(['wss://y.example'], unsupported));
+    expect(naming(['wss://x.example'], { kinds: [1] })).not.toBe(
+      naming(['wss://y.example'], { kinds: [1] })
     );
 
     // And the scope identity does not separate two providers configured
