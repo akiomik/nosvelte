@@ -1300,7 +1300,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **342 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **44 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **291 are
+Of those, **55 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **280 are
 TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1442,14 +1442,14 @@ B1-C1        internal      test:KI6
 B1-C2        public        test:CK1
 B2-C1        internal      test:KI4
 B2-C2        public        test:CK2
-B3-C1        internal      TBD
-B3-C2        internal      TBD
-B3-C3        public        TBD
-B3-C4        internal      TBD
-B3-C5        internal      TBD
-B3-C6        internal      TBD
-B3-C7        internal      TBD
-B3-C8        internal      TBD
+B3-C1        internal      test:SG2
+B3-C2        internal      test:SG11
+B3-C3        public        test:RS1
+B3-C4        internal      test:SG13
+B3-C5        internal      test:SG14
+B3-C6        internal      test:RG1
+B3-C7        internal      test:RG3
+B3-C8        internal      test:RG4
 B3-S1        sentinel      test:DS17
 B3-S2        sentinel      test:DS18
 B4-C1        public        test:DN1
@@ -1489,8 +1489,8 @@ B-η-C3       internal      TBD
 B-η-C4       internal      TBD
 B-η-C5       public        TBD
 B-η-C6       public        TBD
-B-α-C1       internal      TBD
-B-α-C5       internal      TBD
+B-α-C1       internal      test:SG1
+B-α-C5       internal      test:SG7
 B-α-C22      public        TBD
 B-α-C3       public        TBD
 B-α-C7       public        TBD
@@ -1508,7 +1508,7 @@ B-α-C18      internal      TBD
 B-α-C19      public        TBD
 B-α-C20      internal      TBD
 B-α-C21      public        TBD
-B-α-C6       public        TBD
+B-α-C6       public        test:RS2
 B-α-C4       public        TBD
 B-α-C23      public        TBD
 B-α-C2       public        TBD
