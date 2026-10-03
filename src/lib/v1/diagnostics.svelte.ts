@@ -657,8 +657,8 @@ export function createRelayDiagnostics(
  * the message, the code and the fields each subclass adds — equal. `stack` is
  * where it was thrown from, not what it says, and is left out.
  *
- * Every field these classes carry is a string or a list of strings, frozen
- * where it is built. A field of any other shape is not compared and makes the
+ * Every field these classes carry is a string, a list of strings, or an
+ * optional one left `undefined`, frozen where it is built. A field of any other shape is not compared and makes the
  * two different, so a field added later republishes rather than collapses.
  */
 function sameRefusal(a: RelayConfigurationError, b: RelayConfigurationError): boolean {
@@ -670,6 +670,10 @@ function sameRefusal(a: RelayConfigurationError, b: RelayConfigurationError): bo
     if (!Object.hasOwn(b, key)) return false;
     const mine: unknown = Reflect.get(a, key);
     const theirs: unknown = Reflect.get(b, key);
+    // An optional field this refusal leaves unset is the same as the other's
+    // leaving it unset — `TransportIncompatibleError.earlier` on anything but a
+    // contradiction.
+    if (mine === undefined) return theirs === undefined;
     if (typeof mine === 'string') return mine === theirs;
     return (
       Array.isArray(mine) &&

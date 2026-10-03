@@ -367,6 +367,21 @@ describe('relay naming, by the transport', () => {
     expect(messages.get('threw')).toContain('it threw');
     expect(messages.get('returned')).toContain('it answered');
     expect(messages.get('threw')).not.toBe(messages.get('returned'));
+    // Refused the same way again, it is the same refusal: a provider
+    // re-applying a list its transport cannot name keeps the refusal it
+    // published, and a different refusal replaces it.
+    const again = provider([A], () => {
+      throw new Error('the transport said why');
+    });
+    const first = again.context.configurationError;
+    expect(first).toBeInstanceOf(TransportIncompatibleError);
+    again.context.setRelays([A]);
+    expect(again.context.configurationError, 'the same refusal is kept').toBe(first);
+    again.context.setRelays(['wss://other.example']);
+    expect(again.context.configurationError).toBeInstanceOf(TransportIncompatibleError);
+    expect(again.context.configurationError, 'a different one replaces it').not.toBe(first);
+    again.unmount();
+
     // A disagreeing set is the other code, with the other remedy.
     const mismatch = expectRefusedConstruction(
       [A, 'wss://b.example'],
@@ -837,6 +852,32 @@ describe('relay naming, by the transport', () => {
     );
     expect(outside.code).toBe('relay-not-in-scope');
     expect(outside.message.length).toBeLessThan(2_000);
+
+    // Two such names that differ only past the bound are two refusals, each
+    // carrying its own relay — under one provider, where a refused request's
+    // entry is keyed by its refusal.
+    const stem = `wss://far.example/${'z'.repeat(300)}`;
+    const longs = [`${stem}/one`, `${stem}/two`];
+    new WS('ws://localhost:9165', { jsonProtocol: true });
+    const refusedPair: (ReqHandle | undefined)[] = [];
+    const pairView = render(KeyedRequest, {
+      relays: ['ws://localhost:9165'],
+      transportKeys: (urls) => [...urls],
+      plans: longs.map((url) => (): ReqPlan => ({
+        kind: 'request',
+        descriptor: { filters: [{ kinds: [5] }], relays: [url] }
+      })),
+      request: (index: number, handed: ReqHandle) => (refusedPair[index] = handed)
+    });
+    await waitFor(() => {
+      for (const handle of refusedPair) expect(handle?.state.status).toBe('error');
+    });
+    const urlsSeen = refusedPair.map((handle) => {
+      const failed = handle?.state;
+      return failed?.status === 'error' && 'url' in failed.error ? failed.error.url : undefined;
+    });
+    expect(urlsSeen).toEqual(longs);
+    pairView.unmount();
 
     // **A naming that fails its fixed point is not recorded either**: asked
     // again, it is refused again and the transport is asked again.

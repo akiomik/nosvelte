@@ -43,6 +43,7 @@ import { InvalidDescriptorError, normalizeDescriptor, relayMessage } from './nor
 import { capture, providerDisposed, safely, terminalFailure } from './own.js';
 import { ownedByLibrary } from './owned.js';
 import type { ReqStateError } from './reqerror.js';
+import { RelayNotInScopeError } from './reqerror.js';
 import type { ResumeHints } from './resume.svelte.js';
 import type { RelayScope } from './scope.svelte.js';
 import { resolveTargets, scopeGenerationOf } from './scope.svelte.js';
@@ -719,7 +720,7 @@ function resolveRequest(opts: {
       // "is it one of our classes", so that door is shut. This read is guarded
       // anyway: **a failure path is a second trust boundary**, and the cost of
       // being wrong here is the whole channel going silent.
-      key: refusedKey(opts, relayMessage(safely(() => rejection.message)).text),
+      key: refusedKey(opts, relayMessage(safely(() => rejection.message)).text, relayOf(rejection)),
       deferred: false
     };
   }
@@ -793,15 +794,29 @@ const DEFERRED_KEY: QueryKey = ['nosvelte', 'deferred'];
  */
 const RECOVERY_BACKOFF_SECONDS = [2, 5, 15, 60, 300] as const;
 
+/** The relay a refusal names, if it is one of this library's that names one. */
+const relayOf = (rejection: unknown): string | undefined => {
+  if (!(rejection instanceof RelayNotInScopeError)) return undefined;
+  return rejection.url;
+};
+
 const refusedKey = (
   opts: { namespace?: string | undefined; scope?: RelayScope | undefined },
-  message: string
+  message: string,
+  /**
+   * The relay a refusal names, whole, when it names one. The message renders
+   * it bounded, so two refusals of relays that differ past the bound would
+   * share a message — and the entry, and one request would be handed the
+   * other's `url` — though they did not fail the same way.
+   */
+  relay?: string
 ): QueryKey => [
   'nosvelte',
   'refused',
   keyPartOf(() => opts.namespace),
   keyPartOf(() => scopeGenerationOf(opts.scope)),
-  message
+  message,
+  ...(relay === undefined ? [] : [relay])
 ];
 
 /**
