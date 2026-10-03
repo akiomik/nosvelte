@@ -163,9 +163,12 @@ describe('a bounded set that carries a replacement', () => {
     // revision supersedes and the bound's own tie-break decides which entry
     // keeps the slot: `a` supersedes `c`, and `b` competes for the slot.
     const between = ev({ id: 'between', kind: 1, pubkey: PUBKEY, created_at: 150 });
-    const winner = ev({ id: 'a', kind: 10002, pubkey: PUBKEY, created_at: 100 });
-    const competitor = ev({ id: 'b', kind: 1, pubkey: PUBKEY, created_at: 100 });
-    const loser = ev({ id: 'c', kind: 10002, pubkey: PUBKEY, created_at: 100 });
+    // Their contents run against their ids, so a bound that ranked on content
+    // before id keeps the loser — written out rather than left to the draws
+    // below, which found it in one seeding and lost it in the next.
+    const winner = ev({ id: 'a', kind: 10002, pubkey: PUBKEY, created_at: 100, content: 'z' });
+    const competitor = ev({ id: 'b', kind: 1, pubkey: PUBKEY, created_at: 100, content: 'm' });
+    const loser = ev({ id: 'c', kind: 10002, pubkey: PUBKEY, created_at: 100, content: 'a' });
     for (const [packets, superseded] of [
       [[OLD, NEW, REGULAR], ['old']],
       [[OLD, NEW, between], ['old']],

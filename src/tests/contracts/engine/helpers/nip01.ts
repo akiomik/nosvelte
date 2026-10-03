@@ -96,8 +96,28 @@ const KINDS = [0, 1, 3, 9999, 10000, 10002, 19999, 30000, 30023, 39999, 40000] a
  * reads one way: extra elements after the value, and two `d` tags, of which
  * the first is the identifier even when it is the empty one.
  */
+/**
+ * Strings that read differently under a careless comparison: case, Unicode's
+ * two spellings of one glyph (`é` composed and decomposed — two values NIP-01
+ * keeps apart), surrounding and inner whitespace, a colon, and a character
+ * outside the BMP. Drawn for every free-form string a draw carries: `d`
+ * values, the unrelated tag's value, and content.
+ */
+const TRICKY = [
+  's',
+  'S',
+  '\u00e9',
+  'e\u0301',
+  ' s',
+  's ',
+  's:x',
+  '\u{1F642}',
+  '  indented\n'
+] as const;
+
 const D_TAGS: readonly (readonly string[][])[] = [
   [['d', '']],
+  ...TRICKY.map((value) => [['d', value]]),
   [['d', 's']],
   [['d', 'S']],
   [['d', 't']],
@@ -124,11 +144,12 @@ const D_TAGS: readonly (readonly string[][])[] = [
 /**
  * The `created_at` values a draw takes. Few, so ties are common; spanning a
  * change of digit count, so a comparison that read them as strings — where
- * `'9'` sorts after `'10'` — orders some pair the other way; and spanning the
- * 32-bit boundaries, since NIP-01 bounds them by nothing narrower than a
- * JavaScript number.
+ * `'9'` sorts after `'10'` — orders some pair the other way; starting at `0`,
+ * which a truthiness test mistakes for absent; and spanning the 32-bit
+ * boundaries, since NIP-01 bounds them by nothing narrower than a JavaScript
+ * number.
  */
-const INSTANTS = [9, 10, 99, 100, 1000, 2_147_483_647, 2_147_483_648, 4_294_967_296] as const;
+const INSTANTS = [0, 1, 9, 10, 99, 100, 1000, 2_147_483_647, 2_147_483_648, 4_294_967_296] as const;
 
 /** Whether NIP-01 gives `kind` no coordinate of its own beyond the event. */
 const isRegular = (kind: number): boolean =>
@@ -170,7 +191,9 @@ export function arbitraryEvents(
   return [...ids].map((id) => {
     const kind = pick(rand, kinds);
     const tags: string[][] = [];
-    const title = ['title', pick(rand, ['x', 'y'])];
+    // An unrelated tag whose name is not `d` however it is read — `D` among
+    // them, which a case-folding reader takes for one — and whose value varies.
+    const title = [pick(rand, ['title', 'Title', 'D']), pick(rand, TRICKY)];
     const dTags = rand() < 0.2 ? [] : pick(rand, D_TAGS).map((tag) => [...tag]);
     if (rand() < 0.5) tags.push(title);
     tags.push(...dTags);
@@ -182,7 +205,7 @@ export function arbitraryEvents(
       kind,
       pubkey: pick(rand, authors),
       created_at: pick(rand, INSTANTS),
-      content: `content ${hex(rand, 6)}`,
+      content: `${pick(rand, TRICKY)}${hex(rand, 6)}${pick(rand, TRICKY)}`,
       sig: hex(rand, 128),
       tags
     };
