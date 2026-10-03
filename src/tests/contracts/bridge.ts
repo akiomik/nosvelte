@@ -377,7 +377,8 @@ export const backwardFaults = (rows: Roster, tests: ReadonlyMap<string, Set<stri
         faults.push(`${arm} declares ${row}, which is not a row`);
         continue;
       }
-      if (evidence !== `test:${arm}`)
+      const read = testEvidence(evidence);
+      if (read === undefined || !('landing' in read) || read.landing !== arm)
         faults.push(`${arm} declares ${row}, which points at ${evidence}`);
     }
   }
@@ -470,8 +471,13 @@ export const expectedLandings = (
   const expected: Expected[] = [];
   const faults: string[] = [];
   for (const [row, { evidence }] of roster) {
-    if (!evidence.startsWith('test:')) continue;
-    const id = evidence.slice('test:'.length).trim();
+    const read = testEvidence(evidence);
+    if (read === undefined) continue;
+    if (!('landing' in read)) {
+      faults.push(`${row}: ${read.fault}`);
+      continue;
+    }
+    const id = read.landing;
     const file = declared.files.get(id);
     const position = declared.positions.get(id);
     if (file === undefined || position === undefined)
@@ -498,6 +504,76 @@ export const expectedLandings = (
  * are each a fault. The run's overall success is not used: a skipped test
  * leaves it `true`.
  */
+/**
+ * A `test:` evidence cell, read: the arm that lands the row, and the contract
+ * arms after it, joined by `+`, that this implementation measured to fail
+ * when the row's subject breaks.
+ *
+ * **The supporting arms are production evidence, because they are this
+ * implementation's.** They were first read from the row's prose, which made
+ * them a demand on every port: a port that answered the row with its own test,
+ * or with `absent:`, still failed on arms it never had, and the only way out
+ * was to rewrite a row's text — which phase 2 does not move. On the roster
+ * they move with the evidence they belong to: replaced when the landing is,
+ * and gone when the row is `absent:`.
+ *
+ * **Read strictly**: every `+`-separated part must be an arm id, none twice.
+ * A lenient reader dropped arms silently before, which is a shorter list
+ * nobody asked for; here a cell that cannot be read whole is a fault by name.
+ */
+export const testEvidence = (
+  evidence: string
+): { landing: string; support: string[] } | { fault: string } | undefined => {
+  if (!evidence.startsWith('test:')) return undefined;
+  const cell = evidence.slice('test:'.length).trim();
+  const arms = cell.split('+');
+  const ARM = new RegExp(`^${TEST_ID}$`);
+  const unreadable = arms.filter((arm) => !ARM.test(arm));
+  if (unreadable.length > 0)
+    return {
+      fault: `test:${cell} is not \`test:<arm>\` or \`test:<arm>+<arm>…\` — it holds ${unreadable
+        .map((arm) => JSON.stringify(arm))
+        .join(', ')}`
+    };
+  const twice = arms.filter((arm, at) => arms.indexOf(arm) !== at);
+  if (twice.length > 0) return { fault: `test:${cell} names ${twice.join(', ')} twice` };
+
+  return { landing: arms[0] as string, support: arms.slice(1) };
+};
+
+/** The supporting arms each row's evidence names, for the rows that name any. */
+export const supportingArms = (roster: Roster): Map<string, string[]> => {
+  const arms = new Map<string, string[]>();
+  for (const [row, { evidence }] of roster) {
+    const read = testEvidence(evidence);
+    if (read !== undefined && 'landing' in read && read.support.length > 0)
+      arms.set(row, read.support);
+  }
+
+  return arms;
+};
+
+/** The supporting arms as landings the run must show, labelled by the row whose evidence names them. */
+export const expectedSupport = (
+  arms: ReadonlyMap<string, readonly string[]>,
+  declared: Pick<Landings, 'files' | 'positions'>,
+  root: string
+): { expected: Expected[]; faults: string[] } => {
+  const expected: Expected[] = [];
+  const faults: string[] = [];
+  for (const [row, ids] of arms)
+    for (const id of ids) {
+      const label = `${row} (supporting)`;
+      const file = declared.files.get(id);
+      const position = declared.positions.get(id);
+      if (file === undefined || position === undefined)
+        faults.push(`${label}: ${id} is declared nowhere under the root`);
+      else expected.push({ row: label, id, file: join(root, file), ...position });
+    }
+
+  return { expected, faults };
+};
+
 export const checkRun = (run: {
   readonly status: number | null;
   readonly report: string | undefined;

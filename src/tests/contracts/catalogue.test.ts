@@ -30,7 +30,8 @@ import {
   PRODUCTION_ROOT,
   PRODUCTION_ROOT_LEAF,
   ROUTES,
-  TEST_ID
+  TEST_ID,
+  testEvidence
 } from './bridge.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -207,7 +208,12 @@ describe('the production contract bridge', () => {
         if (evidence === 'TBD') return undefined;
         const [kind, ...rest] = evidence.split(':');
         const body = rest.join(':');
-        if (kind === 'test') return faultInLanding(id, body.trim(), landed.tests);
+        if (kind === 'test') {
+          const read = testEvidence(evidence);
+          if (read === undefined || !('landing' in read))
+            return `${id}: ${read?.fault ?? evidence}`;
+          return faultInLanding(id, read.landing, landed.tests);
+        }
         if (kind === 'no-test')
           return substantial(body) ? undefined : `${id}: no-test with no reason`;
         if (kind === 'discharged' || kind === 'absent') {

@@ -20,21 +20,27 @@ import {
   checkRun,
   collectFrom,
   expectedLandings,
+  expectedSupport,
   PRODUCTION_ROOT,
-  rosterOf
+  rosterOf,
+  supportingArms
 } from '../src/tests/contracts/bridge.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTRACTS = join(ROOT, PRODUCTION_ROOT);
 
-const { roster, faults: rosterFaults } = rosterOf(
-  readFileSync(join(ROOT, 'docs/decisions/0005-contract-catalogue.md'), 'utf8')
-);
-const { expected, faults: landingFaults } = expectedLandings(
-  roster,
-  collectFrom(CONTRACTS),
+const record = readFileSync(join(ROOT, 'docs/decisions/0005-contract-catalogue.md'), 'utf8');
+const { roster, faults: rosterFaults } = rosterOf(record);
+const declared = collectFrom(CONTRACTS);
+const { expected: landings, faults: landingFaults } = expectedLandings(roster, declared, CONTRACTS);
+// The contract arms a row's evidence names after its landing, held the way a
+// landing is: declared under the root, run once, passed.
+const { expected: support, faults: supportFaults } = expectedSupport(
+  supportingArms(roster),
+  declared,
   CONTRACTS
 );
+const expected = [...landings, ...support];
 
 const directory = mkdtempSync(join(tmpdir(), 'nosvelte-run-'));
 const reportPath = join(directory, 'report.json');
@@ -56,6 +62,7 @@ try {
   faults = [
     ...rosterFaults,
     ...landingFaults,
+    ...supportFaults,
     ...checkRun({
       status: run.status,
       report: existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : undefined,
@@ -71,4 +78,6 @@ if (faults.length > 0) {
   console.error(`\nThe contract landings did not all run and pass:\n  ${faults.join('\n  ')}`);
   process.exit(1);
 }
-console.log(`\n${expected.length} contract landings ran and passed.`);
+console.log(
+  `\n${landings.length} contract landings and ${support.length} supporting arms ran and passed.`
+);

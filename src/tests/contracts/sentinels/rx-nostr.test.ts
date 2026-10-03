@@ -382,10 +382,8 @@ describe('rx-nostr, exercised directly', () => {
     rxNostr.dispose();
   });
 
-  // `B-α-C9` is measured by this arm, `DS26` and `DS27` together, and a roster
-  // line can credit one test only, so the row stays `TBD` until one arm carries
-  // all three clauses rather than being credited to the first of them.
-  it('DS25: the client rewrites a relay URL, and its own relay list does not say so', async () => {
+  // @contracts B-α-C9
+  it('DS25: the client renames a relay, says so on two of its three accessors, renames its own answer, and does not dial to do it', async () => {
     // The spelling this library has to match, taken from the client rather than
     // read off the dependency's source.
     //
@@ -396,7 +394,7 @@ describe('rx-nostr, exercised directly', () => {
     // writes the transformation out a second time and the two can drift. They
     // had: the query decode below was missing here, and the consequence was not
     // cosmetic, because the machine's per-relay backward table is keyed by our
-    // spelling while `packet.from` carries the client's. `SC15` is where the two
+    // spelling while `packet.from` carries the client's. `SG15` is where the two
     // are compared; this is the half that can be taken without our code.
     //
     // These were taken at rx-nostr 3.7.5 on the spike and re-run at 3.7.6, the
@@ -424,7 +422,7 @@ describe('rx-nostr, exercised directly', () => {
       // right needs the decode, because sorting escapes the `%` to `%25` first.
       ['wss://h.example/?x=%zz', 'wss://h.example/?x=%zz'],
       // The steps this library already had, kept so that a change to any of
-      // them is visible here too rather than only in `SC10`.
+      // them is visible here too rather than only in the library's own spelling arms.
       ['wss://h.example/', 'wss://h.example'],
       ['wss://h.example#fragment', 'wss://h.example'],
       ['wss://h.example./', 'wss://h.example'],
@@ -483,7 +481,9 @@ describe('rx-nostr, exercised directly', () => {
     rxNostr.createAllMessageObservable().subscribe((packet) => {
       if (packet.type === 'EOSE') froms.push(packet.from);
     });
-    rxNostr.use(createRxOneshotReq({ filters: [{ kinds: [1] }], rxReqId: 'sen25' })).subscribe({});
+    rxNostr
+      .use(createRxOneshotReq({ filters: [{ kinds: [1] }], rxReqId: 'ds25-from' }))
+      .subscribe({});
     await server.connected;
     server.send(['EOSE', String(((await server.nextMessage) as unknown[])[1])]);
     await settle(120);
@@ -492,58 +492,28 @@ describe('rx-nostr, exercised directly', () => {
     expect(froms).toEqual([connected]);
     expect(froms).not.toEqual([asked]);
     rxNostr.dispose();
-  });
 
-  // Part of `B-α-C9`'s measurement, with `DS25` — see there.
-  it('DS27: naming a relay is not dialling it, which is what makes a probe cheap', async () => {
-    // The premise the transport-key comparison rests on. That check asks the
-    // resolved transport what it calls a set of relays by configuring a
-    // throwaway client and reading its connection keys — and that is only a
-    // reasonable thing to do on every published scope generation if configuring
-    // a client costs no sockets.
-    //
-    // **The library would still be correct if this stopped being true, and that
-    // is exactly why it needs a sentinel.** An eager transport would make every
-    // provider construction and every relay-list change open a full set of
-    // connections and tear them down again, on the caller's synchronous path.
-    // Nothing in the library's own tests would fail; the network would just be
-    // dialled twice for every relay, and a relay operator would see it before
-    // this repository did.
-    const dialled = nextUrl();
-    const server = new WS(dialled, { jsonProtocol: true });
-    const client = createRxNostr({ websocketCtor, skipVerify: true, skipFetchNip11: true });
+    // **The defaults record says the caller's spelling for every relay the
+    // transport renames**, not only for the escaped query above: a trailing
+    // slash is enough, on the record's key and on its value. Every URL case
+    // the transport rewrote, asked one client each.
+    for (const [input, spelling] of CASES) {
+      if (input === spelling || !URL.canParse(input)) continue;
+      const echoed = createRxNostr({ websocketCtor, skipVerify: true, skipFetchNip11: true });
+      echoed.setDefaultRelays([{ url: input, read: true, write: true }]);
+      expect(Object.keys(echoed.getAllRelayStatus()), input).toEqual([spelling]);
+      expect(Object.keys(echoed.getDefaultRelays()), input).toEqual([input]);
+      expect(
+        Object.values(echoed.getDefaultRelays()).map((relay) => relay.url),
+        input
+      ).toEqual([input]);
+      echoed.dispose();
+    }
 
-    client.setDefaultRelays([dialled]);
-    // The key is readable at once — the other half of what makes a probe work,
-    // and `RD6` is where the library depends on it.
-    expect(Object.keys(client.getAllRelayStatus())).toEqual([dialled]);
-    await settle(200);
-
-    // Named, and not dialled.
-    expect(server.server.clients()).toEqual([]);
-
-    // **The control**, because "no socket appeared" is also what a broken
-    // fixture reports. The same client, the same relay, one REQ: now it dials.
-    // Without this the assertion above would pass against a mock server that
-    // could never have seen anything.
-    const req = createRxForwardReq('sen27');
-    client.use(req).subscribe({ error: () => undefined });
-    req.emit([{ kinds: [1] }]);
-    await server.connected;
-    expect(server.server.clients().length).toBe(1);
-
-    // And disposal takes it away again, which is what the probe's `finally`
-    // relies on.
-    client.dispose();
-    await settle(80);
-    expect(server.server.clients()).toEqual([]);
-  });
-
-  // Part of `B-α-C9`'s measurement, with `DS25` — see there.
-  it('DS26: the rewrite is not idempotent, and this is which shapes it moves twice', () => {
+    // **And the rewrite is not idempotent.**
     // The fact the library's refusal rule rests on, taken where no `$lib` is on
-    // the path (`DS0`). `DS25` records that the transport renames a relay;
-    // this records that renaming it once is not always enough — feed the new
+    // the path (`DS0`). The half above records that the transport renames a
+    // relay; this records that renaming it once is not always enough — feed the new
     // name back and some of them move again.
     //
     // That is what makes it a decision rather than a transcription problem.
@@ -569,7 +539,7 @@ describe('rx-nostr, exercised directly', () => {
       return named;
     };
 
-    const CASES = [
+    const SHAPES = [
       'wss://h.example/?x=%7E',
       'wss://h.example/?x=%257E',
       'wss://h.example/?x=%2526y=1',
@@ -586,7 +556,10 @@ describe('rx-nostr, exercised directly', () => {
       'wss://h.example'
     ];
 
-    const settled = CASES.filter((input) => nameOf(nameOf(input)) === nameOf(input));
+    // The clause is held twice over, and that is measured: a client idempotent
+    // on its own answers fails the first half before it reaches this list,
+    // because `%257E → %7E` beside `%7E → ~` is already a pair that moves twice.
+    const settled = SHAPES.filter((input) => nameOf(nameOf(input)) === nameOf(input));
 
     // The membership list rather than a boolean per case, so a shape that
     // changes class names itself in the failure rather than turning one `true`
@@ -606,7 +579,7 @@ describe('rx-nostr, exercised directly', () => {
     // that rewrote everything or nothing fails here rather than passing one of
     // the two assertions above by emptiness.
     expect(settled.length).toBeGreaterThan(0);
-    expect(settled.length).toBeLessThan(CASES.length);
+    expect(settled.length).toBeLessThan(SHAPES.length);
 
     // And the second pass is a different request, not a tidier spelling of the
     // same one. One query parameter becomes two, which a relay that
@@ -617,6 +590,76 @@ describe('rx-nostr, exercised directly', () => {
       ['x', ''],
       ['y', '1']
     ]);
+
+    // A run of trailing slashes loses two while the query is empty and one
+    // when it is not: `//` settles in one pass while `///` becomes `/`.
+    expect(nameOf('wss://h.example//')).toBe('wss://h.example');
+    expect(nameOf('wss://h.example///')).toBe('wss://h.example/');
+    expect(nameOf('wss://h.example//?a=1')).toBe('wss://h.example/?a=1');
+    // A run of trailing dots on the host and a nested percent-escape each lose
+    // one of themselves per application, and settle only when none is left.
+    const chain = (start: string, steps: number): string[] => {
+      const named = [start];
+      for (let step = 0; step < steps; step += 1) named.push(nameOf(named.at(-1) as string));
+      return named;
+    };
+    expect(chain('wss://h.example.../', 4)).toEqual([
+      'wss://h.example.../',
+      'wss://h.example..',
+      'wss://h.example.',
+      'wss://h.example',
+      'wss://h.example'
+    ]);
+    expect(chain('wss://h.example/?x=%25257E', 4)).toEqual([
+      'wss://h.example/?x=%25257E',
+      'wss://h.example/?x=%257E',
+      'wss://h.example/?x=%7E',
+      'wss://h.example/?x=~',
+      'wss://h.example/?x=~'
+    ]);
+
+    // **And naming a relay is not dialling it.**
+    // The premise the transport-key comparison rests on. That check asks the
+    // resolved transport what it calls a set of relays by configuring a
+    // throwaway client and reading its connection keys — and that is only a
+    // reasonable thing to do on every published scope generation if configuring
+    // a client costs no sockets.
+    //
+    // **The library would still be correct if this stopped being true, and that
+    // is exactly why it needs a sentinel.** An eager transport would make every
+    // provider construction and every relay-list change open a full set of
+    // connections and tear them down again, on the caller's synchronous path.
+    // Nothing in the library's own tests would fail; the network would just be
+    // dialled twice for every relay, and a relay operator would see it before
+    // this repository did.
+    const dialled = nextUrl();
+    const listening = new WS(dialled, { jsonProtocol: true });
+    const client = createRxNostr({ websocketCtor, skipVerify: true, skipFetchNip11: true });
+
+    client.setDefaultRelays([dialled]);
+    // The key is readable at once — the other half of what makes a probe work,
+    // and `probeTransportKeys` is where the library depends on it.
+    expect(Object.keys(client.getAllRelayStatus())).toEqual([dialled]);
+    await settle(200);
+
+    // Named, and not dialled.
+    expect(listening.server.clients()).toEqual([]);
+
+    // **The control**, because "no socket appeared" is also what a broken
+    // fixture reports. The same client, the same relay, one REQ: now it dials.
+    // Without this the assertion above would pass against a mock server that
+    // could never have seen anything.
+    const req = createRxForwardReq('ds25-dial');
+    client.use(req).subscribe({ error: () => undefined });
+    req.emit([{ kinds: [1] }]);
+    await listening.connected;
+    expect(listening.server.clients().length).toBe(1);
+
+    // And disposal takes it away again, which is what the probe's `finally`
+    // relies on.
+    client.dispose();
+    await settle(80);
+    expect(listening.server.clients()).toEqual([]);
   });
 });
 

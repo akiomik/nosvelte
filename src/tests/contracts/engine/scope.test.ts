@@ -35,13 +35,14 @@ import type { ReqHandle } from '$lib/v1/engine.js';
 import { canonicalKey } from '$lib/v1/key.js';
 import type { RawDescriptor } from '$lib/v1/normalize.js';
 import { normalizeDescriptor } from '$lib/v1/normalize.js';
-import type { RelayConfig } from '$lib/v1/scope.svelte.js';
+import type { RelayConfig, RelayInput, TransportKeys } from '$lib/v1/scope.svelte.js';
 import {
   canonicalUrl,
   createRelayScope,
   InvalidRelayInputError,
   InvalidRelayScopeError,
-  NonIdempotentRelayUrlError
+  NonIdempotentRelayUrlError,
+  probeTransportKeys
 } from '$lib/v1/scope.svelte.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
@@ -144,6 +145,45 @@ const keyOf = (raw: RawDescriptor): string => canonicalKey(normalizeDescriptor(r
 let queryClient: QueryClient;
 
 describe('B-α: the scope generation', () => {
+  // @contracts B-α-C24
+  it('SG32: a relay input this library refuses is never handed to the transport to be named', () => {
+    // What the transport is asked, recorded at the seam the scope names relays
+    // through, and answered by the real probe.
+    const asked: string[][] = [];
+    const recording: TransportKeys = (urls) => {
+      asked.push([...urls]);
+      return probeTransportKeys(urls);
+    };
+    const good = 'wss://good.example';
+    for (const [label, malformed] of [
+      ['a number', 42],
+      ['a url that is not a string', { url: 42, read: true, write: true }],
+      ['not a URL', 'not a url'],
+      ['no scheme', 'example.com'],
+      ['the wrong scheme', 'https://a.example'],
+      ['a capability that is not a boolean', { url: 'wss://b.example', read: 'yes', write: true }]
+    ] as const) {
+      asked.length = 0;
+      expect(
+        () => createRelayScope(undefined, [good, malformed as unknown as RelayInput], recording),
+        label
+      ).toThrow(InvalidRelayInputError);
+      // Whatever the transport was asked, it was asked about the good entry
+      // and nothing else: whether a list holding a malformed entry asks about
+      // its well-formed ones is not contracted (`B-α-C17`).
+      expect(
+        asked.flat().filter((url) => url !== good),
+        label
+      ).toEqual([]);
+    }
+
+    // The control: a list that is all relays is asked about, so the record
+    // above can see an ask.
+    asked.length = 0;
+    createRelayScope(undefined, [good, 'wss://b.example'], recording);
+    expect(asked.flat()).toEqual(expect.arrayContaining([good, 'wss://b.example']));
+  });
+
   beforeEach(() => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   });
@@ -600,6 +640,7 @@ describe('B-α: the scope generation', () => {
     });
   });
 
+  // @contracts B-α-C28
   it('SG31: the scope a request is keyed under is frozen, all the way down', () => {
     // **`0003` and `0004` both call it "the immutable `RelayScope`" and nothing
     // read it.** B-α's whole shape rests on the value being immutable per
@@ -796,6 +837,7 @@ describe('B-α: the scope generation', () => {
     mounted.destroy();
   });
 
+  // @contracts B-α-C26
   it('SG4: a request with nowhere to ask recovers when the scope gains a relay', async () => {
     // The point of the whole decision. Compare P19c, which is this without an
     // owned scope: there, the request stays `loading` forever.
@@ -1061,6 +1103,7 @@ describe('B-α: the scope generation', () => {
     destroy();
   });
 
+  // @contracts B-α-C27
   it('SG26: a change that only moves capabilities is still adopted, and reaches the client', async () => {
     // **The conjunct nothing was reading.** `setRelays` returns early when the
     // identity is unchanged *and* the capabilities are unchanged; a reviewer

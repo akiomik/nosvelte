@@ -12,7 +12,17 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { checkRun, collectFrom, type Expected } from './bridge.js';
+import {
+  checkRun,
+  collectFrom,
+  type Expected,
+  expectedLandings,
+  expectedSupport,
+  PRODUCTION_ROOT,
+  rosterOf,
+  supportingArms,
+  testEvidence
+} from './bridge.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -63,6 +73,87 @@ describe('the run-time check of the landings', () => {
       expect(judge(0, report(100, [test({ state })]))).toEqual([
         `A1-C1: CT1 is ${state}, not passed`
       ]);
+  });
+
+  it('CAT42: the arms a row’s evidence names after its landing are held like a landing, and move with it', () => {
+    // The grammar: a landing, and arms after it joined by `+`, read whole or
+    // refused by name.
+    expect(testEvidence('test:CT1')).toEqual({ landing: 'CT1', support: [] });
+    expect(testEvidence('test:CT1+CT2+CT3b')).toEqual({ landing: 'CT1', support: ['CT2', 'CT3b'] });
+    expect(testEvidence('absent:0002 A16 — no seam+none;returns when one exists')).toBeUndefined();
+    expect(testEvidence('TBD')).toBeUndefined();
+    for (const cell of [
+      'test:CT1+',
+      'test:CT1++CT2',
+      'test:CT1 + CT2',
+      'test:CT1,CT2',
+      'test:CT1-CT3',
+      'test:CT1–CT3',
+      'test:CT1+CT2 and CT3',
+      'test:'
+    ])
+      expect(testEvidence(cell), cell).toHaveProperty('fault');
+    expect(testEvidence('test:CT1+CT2+CT1')).toEqual({ fault: 'test:CT1+CT2+CT1 names CT1 twice' });
+
+    // From the roster through to what the run must show, on a fabricated
+    // record: this implementation's evidence, and the two ways a port may
+    // answer the same row instead — its own test, or the decision that the
+    // seam does not exist. Nothing but the evidence cell changes between them.
+    const recordWith = (evidence: string): string =>
+      [
+        '#### The port route of a row',
+        '```text',
+        `X1-C1      internal      ${evidence}`,
+        '```'
+      ].join('\n');
+    const throughTheRun = (
+      evidence: string,
+      declared: readonly string[]
+    ): { landings: string[]; support: string[]; faults: string[] } => {
+      const { roster, faults } = rosterOf(recordWith(evidence));
+      const files = new Map(declared.map((id) => [id, 'a.test.ts']));
+      const positions = new Map(declared.map((id, at) => [id, { line: at + 1, column: 1 }]));
+      const landings = expectedLandings(roster, { files, positions }, '/root');
+      const support = expectedSupport(supportingArms(roster), { files, positions }, '/root');
+      return {
+        landings: landings.expected.map(({ id }) => id),
+        support: support.expected.map(({ id }) => id),
+        faults: [...faults, ...landings.faults, ...support.faults]
+      };
+    };
+    // This implementation: the landing and its supporting arms, all held.
+    expect(throughTheRun('test:SG31+SG27', ['SG31', 'SG27'])).toEqual({
+      landings: ['SG31'],
+      support: ['SG27'],
+      faults: []
+    });
+    // A supporting arm that is not there is a fault, as a landing would be.
+    expect(throughTheRun('test:SG31+SG27', ['SG31']).faults).toEqual([
+      'X1-C1 (supporting): SG27 is declared nowhere under the root'
+    ]);
+    // A port with its own test: the supporting arms went with the evidence.
+    expect(throughTheRun('test:ALT1', ['ALT1'])).toEqual({
+      landings: ['ALT1'],
+      support: [],
+      faults: []
+    });
+    // A port without the seam: nothing to run, and nothing demanded.
+    expect(
+      throughTheRun('absent:0002 A16 — the port has no such seam;returns when one exists', [])
+    ).toEqual({ landings: [], support: [], faults: [] });
+    // And a cell that cannot be read whole is a fault, not a shorter list.
+    expect(throughTheRun('test:SG31+SG27 SG26', ['SG31', 'SG27', 'SG26']).faults).toHaveLength(1);
+
+    // The record itself: every supporting arm its roster names is declared.
+    // Not a snapshot of which arms those are — a port moves them with the
+    // evidence, and a fixed list here would refuse that.
+    const real = rosterOf(
+      readFileSync(join(REPO, 'docs/decisions/0005-contract-catalogue.md'), 'utf8')
+    );
+    expect(real.faults).toEqual([]);
+    const declared = collectFrom(join(REPO, PRODUCTION_ROOT));
+    expect(expectedSupport(supportingArms(real.roster), declared, REPO).faults).toEqual([]);
+    expect(expectedLandings(real.roster, declared, REPO).faults).toEqual([]);
   });
 
   it('CAT41: real runs of the runner — skips, an empty table, the config, a filter, failure expected', () => {
