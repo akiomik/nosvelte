@@ -26,7 +26,7 @@ import { untrack } from 'svelte';
 import { describeValue, InvalidDescriptorError } from './normalize.js';
 import { saidBy } from './own.js';
 import { hardenOwned, ownedByLibrary } from './owned.js';
-import { RelayNotInScopeError } from './reqerror.js';
+import { RelayNotInScopeError, RequestTransportIncompatibleError } from './reqerror.js';
 
 /**
  * The relays a request may read from, as one immutable value.
@@ -135,7 +135,8 @@ export type RelayInput = string | RelayConfig;
  *   repair is to pin the resolved rx-nostr, or to write a set whose members it
  *   names one at a time;
  * - `transport-incompatible` — asked about a relay, or about the whole list at
- *   once, the transport does not give back one usable name per relay, and no
+ *   once, the transport does not give back one usable name per relay, or gives
+ *   one input two different names, and no
  *   relay list answers that: the repair is to pin or upgrade, or to report what
  *   it answered.
  *
@@ -165,7 +166,8 @@ export type RelayConfigurationErrorCode =
   //   rewrites the list so each entry is a relay the transport names on its own.
   // - `transport-incompatible` — the transport does not yield exactly one
   //   usable name per relay, asked about one of them or about the configured
-  //   list as a set. Nothing in the relay list fixes that: the remedy is
+  //   list as a set, or answers one input with a name it contradicts later in
+  //   the same generation. Nothing in the relay list fixes that: the remedy is
   //   pinning or upgrading rx-nostr or this library, or reporting what was
   //   answered.
   //
@@ -658,6 +660,15 @@ export class TransportIncompatibleError extends RelayConfigurationError {
    * describe, and that is what the message is for.
    */
   readonly answered: string;
+  /** What the transport was asked about, as this library asked it. */
+  readonly asked: readonly string[];
+  /** Whether it answered or threw. */
+  readonly how: 'answered' | 'threw';
+  /**
+   * What it answered before for the same question, rendered, when this is a
+   * contradiction; `undefined` for a malformed answer.
+   */
+  readonly earlier: string | undefined;
 
   /**
    * @param wrote — the relays **the consumer configured**, which is what `urls`
@@ -677,22 +688,35 @@ export class TransportIncompatibleError extends RelayConfigurationError {
     wrote: readonly [string, ...string[]],
     asked: readonly string[],
     answered: unknown,
-    how: 'answered' | 'threw' = 'answered'
+    how: 'answered' | 'threw' = 'answered',
+    /**
+     * What the transport answered **earlier** for the same question, when this
+     * refusal is a contradiction rather than a malformed answer: one input,
+     * two names. Rendered by the same bounded renderer as the answer.
+     */
+    earlier?: string
   ) {
     const rendered = describeValue(answered);
     super(
       'transport-incompatible',
       wrote,
       `nosvelte: the resolved rx-nostr transport is not one this version of nosvelte can use. ` +
-        `${askedAbout(asked, wrote)} it ${how} ${rendered}, and ` +
-        `this library needs exactly one name back per relay: every request is keyed, routed ` +
-        `and attributed by that name, and the name is written back to the transport. Pin or ` +
+        `${askedAbout(asked, wrote)} it ${how} ${rendered}` +
+        (earlier === undefined
+          ? ', and '
+          : `, having answered ${describeValue(earlier)} when asked the same question before, and `) +
+        `this library needs exactly one name back per relay, the same one each time it asks: ` +
+        `every request is keyed, routed and attributed by that name, and the name is written ` +
+        `back to the transport. Pin or ` +
         `upgrade rx-nostr, or upgrade nosvelte, or report what it said above; nothing about the ` +
         `relay list changes it.`
     );
     (this as { name: string }).name = 'TransportIncompatibleError';
     hardenOwned(this);
     this.answered = rendered;
+    this.asked = Object.freeze([...asked]);
+    this.how = how;
+    this.earlier = earlier === undefined ? undefined : describeValue(earlier);
     if (new.target === TransportIncompatibleError) Object.freeze(this);
   }
 }
@@ -806,11 +830,13 @@ function sameNames(expected: readonly string[], actual: readonly string[]): bool
  * **A scope does not use it, and has not since r31.** {@link createRelayScope}
  * takes every name from {@link TransportKeys}, asked about the caller's own
  * string; this is a second copy of the same decision, and a second copy is only
- * ever a *belief* about the version a consumer resolved. Two callers are left,
- * and neither is a scope: `requestTargets`'s scope-less branch, which is a
- * spike-only internal fallback with no transport answer to hand (see
- * `stream.ts`), and `SC15`, which measures the belief against the rx-nostr this
- * repository resolves. Believing it is fine as a sentinel and was never fine as
+ * ever a *belief* about the version a consumer resolved. **Nor does anything
+ * that resolves a relay against a scope**: a request's and a send's relays are
+ * named by the scope's transport too ({@link resolveRelayName}). What is left
+ * has no scope at all — the scope-less branches of `requestTargets` (see
+ * `stream.ts`) and of `resolveTargets`, a spike-only internal fallback with no
+ * transport answer to hand — and `SC15`, which measures the belief against the
+ * rx-nostr this repository resolves. Believing it is fine as a sentinel and was never fine as
  * an oracle — `TD1` is the counterexample, and it is the one this comment could
  * not have produced, because everything below argues about the *transcription*
  * being right and nothing about the transcription being *asked*.
@@ -918,8 +944,10 @@ function canonicalOnce(url: string): string {
  *
  * **A scope does not go through here. See {@link acceptedRelayName}, which asks
  * the transport the same two questions and gets them answered by the transport
- * a consumer resolved.** What is left for this is the **spike-only internal
- * fallback** in `requestTargets`: `scope` is optional on `UseStreamedReqOpts`
+ * a consumer resolved — nor does a request or a send naming a relay against a
+ * scope (`resolveRelayName`).** What is left for this is the **spike-only
+ * internal fallback** with no scope, in `requestTargets` and in
+ * `resolveTargets`: `scope` is optional on `UseStreamedReqOpts`
  * because the spike drives the engine directly, and on that branch the targets
  * come from the client's own relay list with no scope to have probed. Measured,
  * and it is a live defect on that branch: a client set up with `ws://host/` and
@@ -1098,11 +1126,116 @@ function transportName(transportKeys: TransportKeys, url: string, reportAs = url
  * for a consumer whose rx-nostr normalizes differently it gets both wrong
  * together and cannot notice (`TD1`, `TD4`).
  */
-function acceptedRelayName(transportKeys: TransportKeys, url: string): string {
-  const once = transportName(transportKeys, url);
-  const again = transportName(transportKeys, once, url);
+function acceptedRelayName(
+  transportKeys: TransportKeys,
+  table: NameTable,
+  url: string,
+  reportAs: string = url
+): string {
+  // **What the transport said, checked in three steps and recorded after all
+  // of them** (0003 B-α, B-α-C15): the shape of each answer (`transportName`),
+  // then whether an answer contradicts one already given for the same input —
+  // in this generation's table or earlier in this same naming — and only then
+  // the fixed point. A contradiction is the transport's fault and refused as
+  // `transport-incompatible`; a stable answer that is not a fixed point is the
+  // input's, `non-idempotent-url`. Nothing is written to the table until every
+  // step passed, so a refused naming leaves it as it was and can be asked
+  // again.
+  const pending: NameTable = Object.create(null) as NameTable;
+  const ask = (input: string): string => {
+    const answer = transportName(transportKeys, input, reportAs);
+    const earlier = pending[input] ?? table[input];
+    if (earlier !== undefined && earlier !== answer) {
+      throw ownedByLibrary(
+        new TransportIncompatibleError([reportAs], [input], answer, 'answered', earlier)
+      );
+    }
+    pending[input] = answer;
+    return answer;
+  };
+  const once = ask(url);
+  const again = ask(once);
   if (again !== once) throw ownedByLibrary(new NonIdempotentRelayUrlError({ url, once, again }));
+  for (const [input, answer] of Object.entries(pending)) table[input] = answer;
   return once;
+}
+
+/**
+ * Every answer the transport gave while one generation was named, input to
+ * name: the configured spellings, the names themselves (from the stability
+ * question), and — added as requests and sends resolve against the generation
+ * — the strings they named relays by.
+ *
+ * A plain prototype-less record rather than a `Map`, because it is not state a
+ * template reads: it is a lookup the naming consults and only ever extends.
+ */
+type NameTable = Record<string, string | undefined>;
+
+/**
+ * How a published generation names a string it has not met: the transport it
+ * was named with, and the table that naming filled.
+ *
+ * **Keyed by the snapshot**, not by `id`: the id is the readable set's alone,
+ * so two generations that differ only in a write-only relay or in the
+ * spellings configured share it and must not share a table. A snapshot is
+ * frozen and replaced whenever any of that changes, which makes it the
+ * boundary.
+ */
+const RESOLUTION = new WeakMap<RelayScope, { transportKeys: TransportKeys; table: NameTable }>();
+
+/**
+ * The sentence a request's or a send's refusal says when the transport could
+ * not name a relay it named — built from the refusal's parts, each rendered by
+ * the bounded renderer, rather than from the provider's message, which is
+ * written for a relay list and carries the caller's strings unbounded.
+ */
+export function unnameableRelay(raw: string, fault: TransportIncompatibleError): string {
+  const asked = fault.asked[0] ?? raw;
+  return (
+    `${describeValue(raw)}, which the resolved rx-nostr transport could not name: asked what it ` +
+    `calls ${describeValue(asked)}, it ${fault.how} ${fault.answered}` +
+    (fault.earlier === undefined
+      ? ''
+      : `, having answered ${fault.earlier} when asked the same question before`) +
+    `. This library needs one name back for a relay, the same one each time it asks. Pin or ` +
+    `upgrade rx-nostr, or upgrade nosvelte, or report what it said; naming another relay avoids ` +
+    `this refusal without repairing the transport.`
+  );
+}
+
+/** The relay a string names under a scope, as the transport names it. */
+export interface RelayNameResolution {
+  /** The transport's name for the string. */
+  readonly name: string;
+  /** The scope's relay by that name, of whatever capability, if there is one. */
+  readonly relay: RelayConfig | undefined;
+}
+
+/**
+ * Resolve a string a request or a send names a relay by, the way the scope's
+ * own relays were named (B-α-C15): checked as relay input is, then asked of the
+ * same transport — or found in the generation's table, which already holds
+ * every configured spelling and every name — and matched against **every**
+ * relay of the scope, readable or not. Capability is the caller's to check:
+ * reading for a request, writing for a send.
+ *
+ * Throws `InvalidRelayInputError` for a string that is not relay input,
+ * `NonIdempotentRelayUrlError` for one the transport would rename a second
+ * time, and `TransportIncompatibleError` for an answer of the wrong shape or
+ * one contradicting the table. A refused string is not recorded.
+ *
+ * A scope not built by this module — a hand-made one at a test seam — has no
+ * table and no transport to ask, and resolves by exact name alone.
+ */
+export function resolveRelayName(scope: RelayScope, raw: string): RelayNameResolution {
+  const url = requireRelayUrl('a relay', raw);
+  const resolution = RESOLUTION.get(scope);
+  const name =
+    resolution === undefined
+      ? url
+      : (resolution.table[url] ??
+        acceptedRelayName(resolution.transportKeys, resolution.table, url));
+  return Object.freeze({ name, relay: scope.relays.find((relay) => relay.url === name) });
 }
 
 /**
@@ -1418,8 +1551,8 @@ export function scopeGenerationOf(scope: RelayScope | undefined): string {
  */
 export interface EffectiveTargets {
   /**
-   * The canonical subset this request named, or `undefined` for "the
-   * provider's default readable set".
+   * The transport's names for the relays this request named, or `undefined`
+   * for "the provider's default readable set".
    *
    * Sorted and deduplicated, so the caller's order and repeats carry no
    * meaning — the same discipline `RelayScope.urls` is under, for the same
@@ -1450,21 +1583,6 @@ export function resolveTargets(
   // target checked as one relay and sent to another is the divergence every
   // boundary in this file exists to remove.
   const wrote: unknown[] = [...requested];
-  // Built once per call rather than per element: a scope of *n* relays with a
-  // request naming *m* of them is `n + m` rather than `n * m`.
-  // A plain object with no prototype rather than a `Map`, which
-  // `svelte/prefer-svelte-reactivity` refuses inside a `.svelte.ts`: this is a
-  // lookup built and discarded inside one call, not state. `create(null)` so a
-  // caller who writes `'toString'` looks up nothing rather than a function.
-  const spelledAs: Record<string, string | undefined> = Object.create(null) as Record<
-    string,
-    string | undefined
-  >;
-  if (scope !== undefined) {
-    for (const [name, spellings] of Object.entries(scope.configuredUrls)) {
-      for (const spelling of spellings) spelledAs[spelling] = name;
-    }
-  }
   const resolved: string[] = [];
   for (const raw of wrote) {
     if (typeof raw !== 'string' || raw === '') {
@@ -1475,32 +1593,56 @@ export function resolveTargets(
         )
       );
     }
-    // The caller's own spelling first, and that is the point of
-    // `configuredUrls`: a consumer who configured `wss://A.example/` and asks of
-    // `wss://A.example/` must not be told their own relay is not in the scope.
-    // Falling through to `canonicalUrl` covers the spellings they did not
-    // configure it under — including the transport's own name for it.
-    // **Two refusals with two remedies, and the boundary decides which by what
-    // has to change.** A string that is not a relay URL, or one the transport
-    // would rename a second time, is a *descriptor* fault: the caller fixes the
-    // value, exactly as they would a `retain: 0`. So the relay-list classes are
-    // caught here and re-said on the request's own channel rather than escaping
-    // as a provider-level refusal a request has no place to publish.
+    // **Named the way the scope's relays were named, by the same transport**
+    // (B-α-C15): `resolveRelayName` asks it — or finds the answer in the
+    // generation's table — and matches the name against every relay of the
+    // scope. This library's own canonicalisation is not consulted, so a
+    // spelling is accepted or refused by what the transport calls it rather
+    // than by whether `canonicalUrl` happens to agree.
+    //
+    // **Three refusals, three remedies.** Input that is not relay input, or a
+    // string the transport would rename a second time, is the descriptor's:
+    // `invalid-descriptor`. A transport that threw, answered something that is
+    // not one name, or contradicted an earlier answer is the transport's:
+    // `transport-incompatible`, which no field changes. And a name the scope
+    // does not hold, or holds as write-only, is `relay-not-in-scope`.
+    //
+    // With no scope at all — the standalone seam v1 does not publish — there
+    // is no transport answer to match, and the string is canonicalised as it
+    // always was there.
     let url: string;
-    try {
-      url = spelledAs[raw] ?? canonicalUrl(raw);
-    } catch (thrown) {
-      throw ownedByLibrary(
-        new InvalidDescriptorError(
-          'relays',
-          `must contain relay URLs this library can name: ${saidBy(thrown, describeValue)}`
-        )
-      );
-    }
-    if (scope !== undefined && !scope.urls.includes(url)) {
-      throw ownedByLibrary(
-        new RelayNotInScopeError(url, scope.configuredUrls[url] !== undefined, scope.urls)
-      );
+    if (scope === undefined) {
+      try {
+        url = canonicalUrl(raw);
+      } catch (thrown) {
+        throw ownedByLibrary(
+          new InvalidDescriptorError(
+            'relays',
+            `must contain relay URLs this library can name: ${saidBy(thrown, describeValue)}`
+          )
+        );
+      }
+    } else {
+      let resolution: RelayNameResolution;
+      try {
+        resolution = resolveRelayName(scope, raw);
+      } catch (thrown) {
+        if (thrown instanceof TransportIncompatibleError) {
+          throw ownedByLibrary(new RequestTransportIncompatibleError(unnameableRelay(raw, thrown)));
+        }
+        throw ownedByLibrary(
+          new InvalidDescriptorError(
+            'relays',
+            `must contain relay URLs this library can name: ${saidBy(thrown, describeValue)}`
+          )
+        );
+      }
+      if (resolution.relay === undefined || !resolution.relay.read) {
+        throw ownedByLibrary(
+          new RelayNotInScopeError(resolution.name, resolution.relay !== undefined, scope.urls)
+        );
+      }
+      url = resolution.name;
     }
     resolved.push(url);
   }
@@ -1619,8 +1761,12 @@ export function createRelayScope(
    * suite green, so the inclusion rests on the argument above rather than on a
    * witness.
    */
-  const named = (entries: readonly RelayInput[]): RelayScope =>
-    scopeOf(entries, (url) => acceptedRelayName(transportKeys, url));
+  const named = (entries: readonly RelayInput[]): RelayScope => {
+    const table = Object.create(null) as NameTable;
+    const generation = scopeOf(entries, (url) => acceptedRelayName(transportKeys, table, url));
+    RESOLUTION.set(generation, { transportKeys, table });
+    return generation;
+  };
   const probedAsASet = (next: RelayScope): RelayScope => {
     // What the transport is asked: the scope's names, which are its own answers.
     const expected = next.relays.map((relay) => relay.url);
@@ -1704,7 +1850,12 @@ export function createRelayScope(
   // read that has lost its closure. The value is wanted, not the cell, and
   // there is exactly one moment at which the two are the same thing.
   const initialScope = probedAsASet(named(initial));
-  let scope = $state<RelayScope>(initialScope);
+  // **`$state.raw`, because the snapshot is the identity.** A generation is
+  // frozen and replaced whole, so nothing inside it needs tracking — and a deep
+  // `$state` handed readers a proxy of it rather than it, which is not the
+  // object `RESOLUTION` keys the generation's name table by: a request then
+  // resolved under a generation with no table at all.
+  let scope = $state.raw<RelayScope>(initialScope);
   write(initialScope);
 
   return {

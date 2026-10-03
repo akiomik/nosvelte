@@ -518,7 +518,8 @@ type RelayConfigurationErrorCode =
   //   relay list answers it.
   // - `transport-incompatible` — the transport does not yield exactly one
   //   usable name per relay: none, several, something that is not a string, a
-  //   string that is not a relay URL, or an adapter that gives out. Asked about
+  //   string that is not a relay URL, an adapter that gives out, or one input
+  //   answered with two different names within a generation. Asked about
   //   one relay, or about the configured list as a set — **both**, since the
   //   remedy is the same and the code is named for the remedy. No relay list
   //   answers it; pinning or upgrading rx-nostr or this library, or reporting
@@ -1157,6 +1158,7 @@ type SendRefusalCode =
   | 'signer-failed'
   | 'no-writable-relay'
   | 'relay-outside-scope'
+  | 'transport-incompatible'
   | 'not-in-browser'
   | 'provider-disposed';
 
@@ -1191,11 +1193,15 @@ function useSend(): Send;
   never runs on a value this library has taken. The dependency never signs: it is handed the event
   already checked here, so what goes on the wire is what was checked (`C6-C12`, `C6-C15`).
 - **Where it goes** — the maintainer's ruling. By default to every writable relay in the provider's
-  scope. An explicit `relays` must be a subset of those; a relay outside the scope, or in it and not
-  writable, is refused `'relay-outside-scope'` before anything is signed. The caller's `relays` is
-  read once — the property and the list's iteration both — into a list this library owns, and a
-  getter or iterator that throws is the same refusal. A connection the provider does not own is one
-  its diagnostics cannot see and its teardown cannot close, which is `C6`'s argument (`C6-C14`).
+  scope. An explicit `relays` must be a subset of those, each named by the provider's transport as
+  the provider's own relays are (0003, B-α; since 2026-10-03): a string that is not relay input, one
+  the transport renames a second time, a relay outside the scope, or one in it and not writable, is
+  refused `'relay-outside-scope'` before anything is signed, and a string the transport cannot name
+  at all — it throws, gives not one name, or contradicts an earlier answer — is refused
+  `'transport-incompatible'`. The caller's `relays` is read once — the property and the list's
+  iteration both — into a list this library owns, and a getter or iterator that throws is the same
+  refusal. A connection the provider does not own is one its diagnostics cannot see and its teardown
+  cannot close, which is `C6`'s argument (`C6-C14`).
 - **What comes back** — never a throw, including for input that defeats its own types: every field
   is read once into the library's copy (`C6-C15`). `refused` with a code when nothing went out;
   `settled` with the library's frozen copy of the event and one outcome per target: `accepted` when
@@ -1903,10 +1909,22 @@ type ReqError =
       readonly stack?: string;
       readonly cause?: ReqError | undefined;
       readonly code: 'relay-not-in-scope';
-      /** The target, in this library's canonical spelling. */
+      /** The target, by the name the provider's transport gives it. */
       readonly url: string;
       /** Configured on the provider but not readable, rather than absent. */
       readonly configured: boolean;
+    }
+  // The transport could not name a relay this request asks of — it threw,
+  // answered something that is not one name, or contradicted an answer it gave
+  // before. No field changes it: pin or upgrade rx-nostr or this library, or
+  // report what it said. Added 2026-10-03 (see the revision under the table).
+  | {
+      readonly name: string;
+      readonly message: string;
+      readonly stack?: string;
+      readonly cause?: ReqError | undefined;
+      readonly code: 'transport-incompatible';
+      readonly field: 'relays';
     }
   // **`attempt-abandoned` was a member here and is gone.** It was what
   // `refresh()` rejected with when the thing waiting for the attempt went away —
@@ -1975,6 +1993,7 @@ type ReqStateError = Extract<
       | 'invalid-descriptor'
       | 'unsupported-filter'
       | 'relay-not-in-scope'
+      | 'transport-incompatible'
       | 'descriptor-unreadable'
       | 'missing-provider'
       | 'accumulator-contract'
@@ -2054,15 +2073,15 @@ type RelayLegError = Extract<ReqError, { readonly code: 'relay-failed' }>;
 // type.** A promise's rejection has no place in a TypeScript signature, so an
 // exported alias for it buys a consumer nothing they can hold. The set is
 // **`invalid-descriptor`, `unsupported-filter`, `relay-not-in-scope`,
-// `descriptor-unreadable`, `missing-provider` and `provider-disposed`**, one
-// witness per code: `RM4`, `RM1`, `RM28`, `RM11`, `RM26` and `RM8` in that
-// order; `attempt-abandoned` left it with the lifecycle cancellations. The list
-// used to name four arms for five codes and two of them produced neither —
-// `descriptor-unreadable` had no rejection witness at all. `missing-provider`
-// joined when the code did, and its cell in `0005`'s matrix was `—` for a
-// commit while `RefreshRejection` already listed it: the refusal is built by the
-// seam `refresh()` re-enters, so it reaches this surface as well as the state,
-// and `RM26` drives both.
+// `transport-incompatible`, `descriptor-unreadable`, `missing-provider` and
+// `provider-disposed`**, one witness per code: `RM4`, `RM1`, `RM28`, `NA4`,
+// `RM11`, `RM26` and `RM8` in that order; `attempt-abandoned` left it with the
+// lifecycle cancellations. The list used to name four arms for five codes and
+// two of them produced neither — `descriptor-unreadable` had no rejection
+// witness at all. `missing-provider` joined when the code did, and its cell in
+// `0005`'s matrix was `—` for a commit while `RefreshRejection` already listed
+// it: the refusal is built by the seam `refresh()` re-enters, so it reaches
+// this surface as well as the state, and `RM26` drives both.
 //
 // **What v1 gives up by not publishing it.** A consumer cannot write an
 // exhaustive `switch` over a rejection as a *type*: `catch (value: unknown)` is
@@ -2070,7 +2089,7 @@ type RelayLegError = Extract<ReqError, { readonly code: 'relay-failed' }>;
 // `unknown`, which is an unsafe read this library does not make safe. That is a
 // real usability cost and it is taken deliberately — a parser or a type guard is
 // a second hand-written description of a shape the union already carries, and
-// `isReqError` was removed for being exactly that. The six codes are still a
+// `isReqError` was removed for being exactly that. The seven codes are still a
 // **behaviour** contract: changing which of them a call can reject with is an
 // observable change to a consumer who branches on `code` at run time, and it is
 // governed like any other. If type-safe branching on failures becomes a product
@@ -2133,28 +2152,44 @@ serializer, which this record does not.
 column: if two rows would send a consumer to the same remedy, they share a code. Nothing here is a
 taxonomy of the library's internals.
 
-| Where it enters                                                                                                                                          | `code`                  | Beyond the base                            | Which surfaces carry it                                                              | What a consumer does                                      |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| A descriptor field this library refuses — including, at the internal seam v1 does not publish, an `rxNostr` **the caller owns** and disposed (`C11-C18`) | `invalid-descriptor`    | `field`                                    | `state.error`, `lastError`, the `error` slot, **and what `refresh()` rejects with**  | fix the field it names                                    |
-| A filter field it does not support, or cannot accept as written                                                                                          | `unsupported-filter`    | `field`                                    | the same four                                                                        | change the filter                                         |
-| Anything **thrown** below the seven guarded descriptor reads — a filter element getter, `scope.id`                                                       | `descriptor-unreadable` | the captured four, `source: 'descriptor'`  | the same four                                                                        | their own code threw; the copy quotes what it said        |
-| A descriptor's `relays` names a relay the provider does not read from                                                                                    | `relay-not-in-scope`    | `url`, `configured`                        | the same four                                                                        | name a relay the provider reads, or configure it there    |
-| No provider above the hook                                                                                                                               | `missing-provider`      | —                                          | the same four                                                                        | put the tree under a provider                             |
-| A relay or the transport gave out                                                                                                                        | `relay-failed`          | the captured four, `source: 'relay'`       | **`legEnded.error`, and nothing else**                                               | retry, or look at the relay                               |
-| The answer came back partial                                                                                                                             | `incomplete-result`     | `incompleteCauses`                         | `status: 'incomplete'` and its slot; `lastError` when nothing threw                  | refresh, widen the settle timeout, or render what arrived |
-| An accumulator broke the contract this library folds through                                                                                             | `accumulator-contract`  | —                                          | `state.error`, `lastError`, the slot, **and `RefreshOutcome`'s `{ kind: 'error' }`** | fix the accumulator                                       |
-| A `refresh()` called after the **provider** revoked the transport it owns — a call the revoke lands under resolves `cancelled` instead                   | `provider-disposed`     | —                                          | **only what `refresh()` rejects with**                                               | this handle will not recover; make a new provider         |
-| Anything the query rejected with that is none of the above                                                                                               | `unspecified`           | the captured four, `source: 'unspecified'` | `state.error`, `lastError`, the slot, **and the outcome**                            | read `message`; the library cannot attribute it           |
+| Where it enters                                                                                                                                          | `code`                   | Beyond the base                            | Which surfaces carry it                                                              | What a consumer does                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| A descriptor field this library refuses — including, at the internal seam v1 does not publish, an `rxNostr` **the caller owns** and disposed (`C11-C18`) | `invalid-descriptor`     | `field`                                    | `state.error`, `lastError`, the `error` slot, **and what `refresh()` rejects with**  | fix the field it names                                          |
+| A filter field it does not support, or cannot accept as written                                                                                          | `unsupported-filter`     | `field`                                    | the same four                                                                        | change the filter                                               |
+| Anything **thrown** below the seven guarded descriptor reads — a filter element getter, `scope.id`                                                       | `descriptor-unreadable`  | the captured four, `source: 'descriptor'`  | the same four                                                                        | their own code threw; the copy quotes what it said              |
+| A descriptor's `relays` names a relay the provider does not read from                                                                                    | `relay-not-in-scope`     | `url`, `configured`                        | the same four                                                                        | name a relay the provider reads, or configure it there          |
+| A descriptor's `relays` names a relay its transport cannot name — it threw, gave not one name, or contradicted an earlier answer                         | `transport-incompatible` | `field` (`'relays'`)                       | the same four                                                                        | pin or upgrade rx-nostr or this library, or report what it said |
+| No provider above the hook                                                                                                                               | `missing-provider`       | —                                          | the same four                                                                        | put the tree under a provider                                   |
+| A relay or the transport gave out                                                                                                                        | `relay-failed`           | the captured four, `source: 'relay'`       | **`legEnded.error`, and nothing else**                                               | retry, or look at the relay                                     |
+| The answer came back partial                                                                                                                             | `incomplete-result`      | `incompleteCauses`                         | `status: 'incomplete'` and its slot; `lastError` when nothing threw                  | refresh, widen the settle timeout, or render what arrived       |
+| An accumulator broke the contract this library folds through                                                                                             | `accumulator-contract`   | —                                          | `state.error`, `lastError`, the slot, **and `RefreshOutcome`'s `{ kind: 'error' }`** | fix the accumulator                                             |
+| A `refresh()` called after the **provider** revoked the transport it owns — a call the revoke lands under resolves `cancelled` instead                   | `provider-disposed`      | —                                          | **only what `refresh()` rejects with**                                               | this handle will not recover; make a new provider               |
+| Anything the query rejected with that is none of the above                                                                                               | `unspecified`            | the captured four, `source: 'unspecified'` | `state.error`, `lastError`, the slot, **and the outcome**                            | read `message`; the library cannot attribute it                 |
 
-**This table and the six surface aliases are the fixed v1 contract.** Six, and the count said seven:
-the seventh column — what `refresh()` rejects with — has no published alias, which is a decision
-this same record now states two paragraphs up. A count written beside the decision that falsified
-it. A port implements _this_ matrix — the same reachable cells, the same empty ones, the same
-exported aliases — rather than measuring its own. The aliases are exported, so they are API and not
-a description of one implementation's paths, and a published union whose membership depends on who
-implemented it is one a consumer cannot write a `switch` against. What a port is free to choose is
-how it gets there; `0005` carries the two contracts that make the freedom safe — `A11`'s
+**This table and the six public surface aliases are the accepted v1 contract, as revised by the
+rulings recorded below; a change to them before v1 is first published needs an explicit ruling, and
+after it a change to the membership of a closed union is a breaking change.** Six, and the count
+said seven: the seventh column — what `refresh()` rejects with — has no published alias, which is a
+decision this same record now states two paragraphs up. A count written beside the decision that
+falsified it. A port implements _this_ matrix — the same reachable cells, the same empty ones, the
+same exported aliases — rather than measuring its own. The aliases are exported, so they are API and
+not a description of one implementation's paths, and a published union whose membership depends on
+who implemented it is one a consumer cannot write a `switch` against. What a port is free to choose
+is how it gets there; `0005` carries the two contracts that make the freedom safe — `A11`'s
 postcondition on accumulators, and the disposal linearisation the provider owes.
+
+**Revision, 2026-10-03: `transport-incompatible` joins `ReqError` and `SendRefusalCode`.** A request
+or a send that names a relay is now resolved by the provider's transport, as the provider's own
+relays are (0003, B-α), and the transport can fail to name the string — throw, answer something that
+is not one relay URL, or contradict an answer it gave before. That fault was folded into
+`invalid-descriptor`, whose remedy is to fix a field; this one's is to pin or upgrade rx-nostr or
+this library, or to report what it said, so by this table's own rule it is a code of its own. On a
+request it reaches `state.error`, `lastError`, the `error` slot and what `refresh()` rejects with —
+not `status: 'incomplete'`, not `RefreshOutcome`'s `{ kind: 'error' }`, and not a leg end's
+`legEnded.error`; on a send it is `status: 'refused'`. The provider's relay-configuration refusal of
+the same name is unchanged and stays on `configurationError`; the two share the literal and not the
+channel. The surface aliases are still six; `ReqStateError` and every alias built from it gain the
+member, and the set `refresh()` rejects with is seven codes.
 
 **Two remedies are the library's rather than the consumer's in v1, and the column says so rather
 than pretending.** "Fix the accumulator" and the clause about a caller-owned `rxNostr` are both
@@ -2533,8 +2568,8 @@ interface ReqDescriptor {
   settleTimeoutMs?: number;
   retain?: Retention;
   // The relays *this request* is asked of, as a subset of what the provider
-  // reads from. The consumer's spelling is taken and the same canonicalization
-  // applies; order and duplicates do not affect identity; a target outside the
+  // reads from. The consumer's spelling is taken and named by the provider's
+  // transport, as the provider's own relays are; order and duplicates do not affect identity; a target outside the
   // provider's readable set — unconfigured, or configured write-only — is a
   // **typed refusal before the wire** (`relay-not-in-scope`) rather than a
   // request that quietly goes to the rest.
@@ -3387,14 +3422,15 @@ here. **Owner: this reviewer.**
 the shape below, `resolveTargets` is the boundary, and `B3-C6`, `B3-C8`, `C3-C2` and `C3-C3` are the
 contracts (`RT1`, `RT4`, `RM27`, `RM28`, `RT2`). `C3`'s falsifier is met, so the gap cannot stay as
 an omission that reads like support. The contract: `relays?: readonly string[]` takes the consumer's
-spelling; the same canonicalization applies; it resolves as a **subset of the readable universe the
-provider accepted**; order and duplicates do not affect identity; a target outside the scope,
-write-only, or not canonicalizable is a typed refusal **before the wire**; absent means the
-provider's default readable set; an empty effective set is `not-started / no-readable-relay` rather
-than `nodata`. This is not a low-level entry — the caller says _where to ask_, and the socket,
-lease, retry and diagnostics stay the provider's — so `C9` and `A16` are intact. **What it does not
-buy**: connecting to an unconfigured relay hint. That needs a request-scoped lease, diagnostics
-membership and a release rule, and is not v1.
+spelling, which the provider's transport names as it named the provider's own relays (since
+2026-10-03; it was this library's canonicalization before); it resolves as a **subset of the
+readable universe the provider accepted**; order and duplicates do not affect identity; a target
+outside the scope, write-only, or one the transport cannot name is a typed refusal **before the
+wire**; absent means the provider's default readable set; an empty effective set is
+`not-started / no-readable-relay` rather than `nodata`. This is not a low-level entry — the caller
+says _where to ask_, and the socket, lease, retry and diagnostics stay the provider's — so `C9` and
+`A16` are intact. **What it does not buy**: connecting to an unconfigured relay hint. That needs a
+request-scoped lease, diagnostics membership and a release rule, and is not v1.
 
 ### 4. There is no way to say "not yet", and the natural encoding asserts a falsehood
 

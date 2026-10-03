@@ -76,7 +76,7 @@ import type {
   ReqError,
   ReqStateError
 } from './reqerror.js';
-import { DOOR_OF, REQ_ERROR_CODES } from './reqerror.js';
+import { DOOR_OF, REQ_ERROR_CODES, REQUEST_TRANSPORT_REFUSALS } from './reqerror.js';
 
 /**
  * Is this one of *this channel's* values?
@@ -96,7 +96,13 @@ import { DOOR_OF, REQ_ERROR_CODES } from './reqerror.js';
  */
 function isChannelValue(value: object): value is ReqError {
   const code: unknown = safely(() => (value as { code?: unknown }).code);
-  return typeof code === 'string' && (REQ_ERROR_CODES as readonly string[]).includes(code);
+  if (typeof code !== 'string' || !(REQ_ERROR_CODES as readonly string[]).includes(code)) {
+    return false;
+  }
+  // **A shared literal is not a shared channel.** The provider's relay
+  // configuration refusal is `transport-incompatible` too; only the request's
+  // own refusal, registered where it was built, is a request value.
+  return code !== 'transport-incompatible' || REQUEST_TRANSPORT_REFUSALS.has(value);
 }
 
 /**
@@ -555,6 +561,7 @@ export function recordedFailure(value: ReqError): RefreshOutcomeError {
     case 'invalid-descriptor':
     case 'unsupported-filter':
     case 'relay-not-in-scope':
+    case 'transport-incompatible':
     case 'descriptor-unreadable':
     case 'missing-provider':
     case 'incomplete-result':
@@ -656,6 +663,7 @@ export function terminalFailure(value: ReqError): ReqStateError {
     case 'invalid-descriptor':
     case 'unsupported-filter':
     case 'relay-not-in-scope':
+    case 'transport-incompatible':
     case 'descriptor-unreadable':
     case 'missing-provider':
     case 'accumulator-contract':

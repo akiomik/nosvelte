@@ -86,8 +86,9 @@ export interface NormalizedDescriptor {
    * The relays this request named, or `undefined` for the provider's default
    * readable set.
    *
-   * Canonical, deduplicated and sorted before it arrives: `resolveTargets`
-   * resolves a caller's spellings against the provider's accepted universe and
+   * Named by the provider's transport, deduplicated and sorted before it
+   * arrives: `resolveTargets` resolves a caller's spellings against the
+   * provider's accepted universe and
    * refuses anything outside it, and this boundary re-checks the shape rather
    * than the membership. Two jobs, in the module that can do each: the scope
    * owns what a relay is called and which ones this provider can read from,

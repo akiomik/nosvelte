@@ -41,7 +41,7 @@ import { getNostrContext } from './context.svelte.js';
 import type { ReqEvent } from './event.js';
 import type { RelayMessage } from './normalize.js';
 import { relayMessage } from './normalize.js';
-import { canonicalUrl } from './scope.svelte.js';
+import { resolveRelayName, TransportIncompatibleError, unnameableRelay } from './scope.svelte.js';
 
 /**
  * What the provider signs with. Structurally the `signEvent` half of NIP-07, so
@@ -90,8 +90,19 @@ export type SendRefusalCode =
   | 'signer-failed'
   /** The scope has no writable relay, or an explicit list was empty. */
   | 'no-writable-relay'
-  /** An explicit relay is not one of the scope's writable relays. */
+  /**
+   * An explicit relay is not one of the scope's writable relays: not relay
+   * input, renamed a second time by the transport, outside the scope, or in it
+   * and not writable.
+   */
   | 'relay-outside-scope'
+  /**
+   * The transport could not name an explicit relay: it threw, answered
+   * something that is not one relay URL, or contradicted an answer it had
+   * given before. No relay list changes it; pin or upgrade rx-nostr or this
+   * library, or report what it said.
+   */
+  | 'transport-incompatible'
   /** The provider is rendering on the server, where there is no connection. */
   | 'not-in-browser'
   /** The provider was destroyed before anything went out. */
@@ -331,12 +342,24 @@ function targetsOf(
   if (requested === 'not-a-list') {
     return refused('relay-outside-scope', '`relays` must be an array of relay URLs.');
   }
+  // **Named as a request's relays are** (B-α-C15): by the scope's transport,
+  // through the generation's table, matched against every relay and then
+  // checked for writing. This library's canonicalisation is not consulted, so a
+  // send is not refused for a spelling the transport accepts, nor routed by one
+  // it does not. A transport that cannot name the string is its own refusal.
   const chosen: string[] = [];
   for (const each of requested) {
     let url: string | undefined;
     try {
-      url = typeof each === 'string' ? canonicalUrl(each) : undefined;
-    } catch {
+      const resolution = typeof each === 'string' ? resolveRelayName(port.scope, each) : undefined;
+      url = resolution?.relay?.write === true ? resolution.name : undefined;
+    } catch (thrown) {
+      if (thrown instanceof TransportIncompatibleError) {
+        return refused(
+          'transport-incompatible',
+          `this send names ${unnameableRelay(each as string, thrown)}`
+        );
+      }
       url = undefined;
     }
     if (url === undefined || !writable.includes(url)) {

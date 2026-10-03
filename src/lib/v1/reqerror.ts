@@ -44,6 +44,7 @@
  * a code with no entrance is a member a consumer can branch on and never reach.
  */
 import type { IncompleteCauses } from './eventset.js';
+import { boundedMessage } from './normalize.js';
 import type { FailureSource } from './own.js';
 import { hardenOwned } from './owned.js';
 
@@ -107,10 +108,26 @@ export type ReqError =
       readonly stack?: string;
       readonly cause?: ReqError | undefined;
       readonly code: 'relay-not-in-scope';
-      /** The target, in this library's canonical spelling. */
+      /** The target, by the name the provider's transport gives it. */
       readonly url: string;
       /** Configured on the provider but not readable, rather than absent. */
       readonly configured: boolean;
+    }
+  /**
+   * The transport could not name a relay this request asks of: it threw, or
+   * answered something that is not one relay URL, or answered differently for
+   * a question it had answered before. Not a descriptor fault — no field
+   * changes it — so not `invalid-descriptor`: the remedy is pinning or
+   * upgrading rx-nostr or this library, or reporting what it said. `field` is
+   * always `relays`, the field whose value was being named.
+   */
+  | {
+      readonly name: string;
+      readonly message: string;
+      readonly stack?: string;
+      readonly cause?: ReqError | undefined;
+      readonly code: 'transport-incompatible';
+      readonly field: 'relays';
     }
   /*
    * **`attempt-abandoned` was the eleventh member and is gone.**
@@ -234,6 +251,7 @@ export type ReqStateError = Extract<
       | 'invalid-descriptor'
       | 'unsupported-filter'
       | 'relay-not-in-scope'
+      | 'transport-incompatible'
       | 'descriptor-unreadable'
       | 'missing-provider'
       | 'accumulator-contract'
@@ -261,7 +279,7 @@ export type RefreshOutcomeError = Extract<
  * What `refresh()` **rejects** with.
  *
  * A promise's rejection has no place in a TypeScript signature, so this is the
- * contract written down: these six codes and nothing else. The reads
+ * contract written down: these seven codes and nothing else. The reads
  * `refresh()` takes of the caller's own seams are guarded for that reason — an
  * unguarded one rejected with an uncoded value and put this set's own promise
  * out of reach.
@@ -273,6 +291,7 @@ export type RefreshRejection = Extract<
       | 'invalid-descriptor'
       | 'unsupported-filter'
       | 'relay-not-in-scope'
+      | 'transport-incompatible'
       | 'descriptor-unreadable'
       | 'missing-provider'
       | 'provider-disposed';
@@ -321,7 +340,8 @@ export const REQ_ERROR_CODES = [
   'unspecified',
   'provider-disposed',
   'missing-provider',
-  'relay-not-in-scope'
+  'relay-not-in-scope',
+  'transport-incompatible'
 ] as const satisfies readonly ReqErrorCode[];
 
 // **Both directions, and the second one was written backwards once.**
@@ -345,6 +365,7 @@ export const DOOR_OF: Readonly<Record<ReqErrorCode, FailureSource>> = Object.fre
   'invalid-descriptor': 'descriptor',
   'unsupported-filter': 'descriptor',
   'relay-not-in-scope': 'descriptor',
+  'transport-incompatible': 'descriptor',
   'descriptor-unreadable': 'descriptor',
   'relay-failed': 'relay',
   'incomplete-result': 'unspecified',
@@ -398,16 +419,20 @@ export type { FailureSource };
  * refusals answer different questions and reach a consumer in different places:
  * a refused relay *list* is the provider's and arrives on the context, a refused
  * relay *target* is this request's and arrives on `state.error` and on
- * `refresh()`'s rejection. So this carries a `ReqErrorCode` — the eleventh, and
+ * `refresh()`'s rejection. So this carries a `ReqErrorCode` — the eleventh when
+ * it was added, and
  * it is here because its remedy is neither `invalid-descriptor`'s (the value is
  * a perfectly good relay URL) nor the provider's: ask of a relay this provider
  * has, or add this one to the provider.
  *
  * **A shape fault in `relays` is *not* this.** A member that is not a string,
- * not a relay URL, or a name the transport would rename is refused as
- * `invalid-descriptor` on the field, with everything else a caller writes
- * wrongly — one remedy, one code. What separates them is whether the descriptor
- * or the provider has to change.
+ * not a relay URL, or a name the transport would rename a second time is
+ * refused as `invalid-descriptor` on the field, with everything else a caller
+ * writes wrongly — one remedy, one code. **Nor is a transport that cannot name
+ * the member at all** — it threw, answered something that is not one name, or
+ * contradicted an answer it gave before: that is `transport-incompatible`,
+ * whose remedy is rx-nostr or this library rather than the descriptor or the
+ * provider's list. What separates the three is what has to change.
  *
  * `configured` is the distinction a consumer acts on within that: a relay they
  * configured write-only is a capability to change, a relay they never configured
@@ -421,14 +446,16 @@ export class RelayNotInScopeError extends Error {
   declare readonly cause?: ReqError | undefined;
 
   readonly code = 'relay-not-in-scope' as const;
-  /** What the caller asked of, in this library's canonical spelling. */
+  /** What the caller asked of, by the name the provider's transport gives it. */
   readonly url: string;
   /** Was it configured on the provider at all, but not readable? */
   readonly configured: boolean;
 
   constructor(url: string, configured: boolean, readable: readonly string[]) {
     super(
-      `nosvelte: this request asks of ${url}, which ` +
+      // Bounded, as every other value this library renders into a message is:
+      // the name comes from a string the caller wrote.
+      `nosvelte: this request asks of ${boundedMessage(url).text}, which ` +
         (configured
           ? `this provider has configured as write-only. A REQ cannot be sent to a relay ` +
             `that is not readable, so the request is refused rather than sent to the rest.`
@@ -436,13 +463,48 @@ export class RelayNotInScopeError extends Error {
             `to the relays that are, so that a misspelled or unconfigured target is not a ` +
             `quietly narrower request.`) +
         ` The relays this provider can read from are ` +
-        (readable.length === 0 ? 'none' : readable.join(', ')) +
+        (readable.length === 0 ? 'none' : boundedMessage(readable.join(', ')).text) +
         `. Ask of one of those, or add this relay to the provider.`
     );
     (this as { name: string }).name = 'RelayNotInScopeError';
     hardenOwned(this);
     this.url = url;
     this.configured = configured;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * The request values of code `transport-incompatible`, by provenance.
+ *
+ * **The code alone cannot say which channel a value is on**: the provider's
+ * `TransportIncompatibleError` carries the same literal and is a relay
+ * configuration refusal, published on `configurationError`. A request's
+ * refusal is the class below, and only a value its constructor registered here
+ * is the request's.
+ */
+export const REQUEST_TRANSPORT_REFUSALS = new WeakSet<object>();
+
+/**
+ * A request asked of a relay its transport could not name (`transport-
+ * incompatible`). Built where a request resolves its relays, from the
+ * transport's own refusal, which this carries as bounded words rather than as
+ * itself (`unnameableRelay`).
+ */
+export class RequestTransportIncompatibleError extends Error {
+  declare readonly message: string;
+  declare readonly name: string;
+  declare readonly stack?: string;
+  declare readonly cause?: ReqError | undefined;
+
+  readonly code = 'transport-incompatible' as const;
+  readonly field = 'relays' as const;
+
+  constructor(said: string) {
+    super(`nosvelte: this request names ${said}`);
+    (this as { name: string }).name = 'RequestTransportIncompatibleError';
+    hardenOwned(this);
+    REQUEST_TRANSPORT_REFUSALS.add(this);
     Object.freeze(this);
   }
 }
