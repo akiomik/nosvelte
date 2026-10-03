@@ -11,8 +11,9 @@
  * names**, because what they record was measured there: `RT3` in a comment is
  * the arm that is `RG3` here, and every other arm name in a comment is the
  * spike's as 0005 records it, not a file in this repository. Likewise "the
- * ledger" is the spike's mutation ledger, and a function a comment names that
- * `src/lib/v1` does not have is the spike's.
+ * ledger" is the spike's mutation ledger, and a function or a file a comment names
+ * that this repository does not have (`configOf`, `roles.ts`, `context.test.ts`,
+ * …) is the spike's.
  *
  * What the spike's suite said of itself:
  *

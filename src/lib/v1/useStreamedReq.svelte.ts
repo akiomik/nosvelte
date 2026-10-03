@@ -387,8 +387,8 @@ export interface UseStreamedReqOpts {
    * The relays *this request* is asked of, as a subset of what the provider
    * reads from. Absent means the provider's whole readable set.
    *
-   * The consumer's own spelling: `resolveTargets` canonicalizes it and resolves
-   * it against the scope, so a relay this provider cannot read from is a typed
+   * The consumer's own spelling: `resolveTargets` has the provider's transport
+   * name it and resolves the name against the scope, so a relay this provider cannot read from is a typed
    * refusal before any REQ is sent rather than a request that quietly goes to
    * the others. Order and duplicates carry no meaning.
    *

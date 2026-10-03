@@ -205,6 +205,27 @@ says no size is quoted here at all and that the list `TD12` walks dies with the 
 discipline this paragraph was written to state. A sentence about what a record contains elsewhere is
 a copy that nothing checks, and it rotted inside its own section.
 
+**A relay a request or a send names is named the same way** (2026-10-03). The string is checked as
+relay input is, then the scope's transport is asked about it and about its answer: the answer is the
+name, and a second answer that differs from it is the input's fault (`invalid-descriptor` on a
+request; `relay-outside-scope` on a send). The name is matched against **every** relay of the
+generation, readable or not, and the capability is checked after — reading for a request, where a
+write-only relay is `relay-not-in-scope` with `configured: true` and its own name; writing for a
+send. This library's canonicalization is not consulted on this path: resolving through it refused
+the transport's own names, and routed a spelling to a relay the transport would not have named.
+**Each generation keeps what its transport answered, input to name** — the configured spellings and
+the names at construction, and every string a request or a send has since resolved — and that table
+is the cache. It is keyed by the generation's snapshot rather than by its identity, because the
+identity is the readable set alone and a change in a write-only relay or in a configured spelling
+must not share a table. It is extended only by a naming that passed every step; **a refused naming
+is not recorded**, so a later evaluation or an explicit retry asks again. **An answer that
+contradicts a recorded one — the same input, another name — is the transport's fault,
+`transport-incompatible`**: at construction or on a change it refuses the generation before anything
+is applied, and at a request or a send it refuses that operation alone, leaving the published
+generation, its table, its `configurationError` and every other request as they were. Two inputs
+answered with one name are an alias and are accepted. A transport that changes its mind about a
+string nothing asks again is not detected, and nothing here says it is.
+
 **The second question is the one that cannot fail.** After each relay has been named and each name
 checked for stability, the whole set is offered again and compared with the sum of the per-relay
 answers. That comparison is silent by construction rather than by luck, and **the construction is
