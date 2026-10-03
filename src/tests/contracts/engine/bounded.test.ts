@@ -5,7 +5,6 @@ import type { CachedEventSet } from '$lib/v1/eventset.js';
 import {
   emptyEventSet,
   foldEvent,
-  laterWins,
   project,
   replacementKey,
   retainNewest,
@@ -81,20 +80,27 @@ const foldBoundedAt =
       emptyEventSet
     );
 
-/** The winner per replacement key over the whole input — what B5 says is stored. */
+/**
+ * The winner per replacement key over the whole input — what B5 says is stored.
+ *
+ * **Decided here, by the rule written out, not by the library's `laterWins`.**
+ * An oracle that calls the function the fold also calls agrees with any
+ * mutation of it: with the comparison reversed, the fold published `old` and
+ * this helper, asked the same reversed question, named `old` the winner, so
+ * `ES6d` stayed green. The rule is B5's: the later `created_at`, and on a tie
+ * the lower id.
+ */
 function winners(packets: readonly OwnedPacket[]): Map<string, string> {
+  const later = (held: OwnedPacket, arriving: OwnedPacket): OwnedPacket => {
+    const [a, b] = [held.event, arriving.event];
+    if (a.created_at !== b.created_at) return a.created_at > b.created_at ? held : arriving;
+    return a.id <= b.id ? held : arriving;
+  };
   const best = new Map<string, OwnedPacket>();
   for (const packet of packets) {
     const key = replacementKey(packet.event);
     const held = best.get(key);
-    best.set(
-      key,
-      held === undefined
-        ? packet
-        : laterWins(held.event, packet.event) === held.event
-          ? held
-          : packet
-    );
+    best.set(key, held === undefined ? packet : later(held, packet));
   }
   return new Map([...best].map(([key, packet]) => [key, packet.event.id]));
 }

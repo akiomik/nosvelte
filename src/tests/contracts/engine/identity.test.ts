@@ -811,6 +811,8 @@ describe('canonical event set', () => {
     // equality short-circuits it either way.
     const fromAnotherRelay = { ...b, from: 'wss://other/', event: { ...b.event } };
     expect(foldEvent(set, fromAnotherRelay)).toBe(set);
+    const regularElsewhere = { ...a, from: 'wss://other/', event: { ...a.event } };
+    expect(foldEvent(set, regularElsewhere)).toBe(set);
 
     // Every path a replay can take returns what it was given: an addressable
     // event, from either relay, and an ephemeral one once it has been noted.
@@ -905,40 +907,56 @@ describe('canonical event set', () => {
     // Every class that has a coordinate, at the edges of its range and in the
     // middle: the two specials, the replaceable range, and the addressable one.
     // Each with the `d` tag after another tag, so the identifier is the `d`
-    // tag's and not the first tag's.
+    // tag's and not the first tag's. **The newer revision's id sorts after the
+    // older one's**, so the newer winning is recency and not the id tie-break.
     const tags = [
       ['title', 't'],
       ['d', 's']
     ];
-    for (const kind of [0, 3, 10000, 10002, 19999, 30000, 30023, 39999]) {
-      const older = ev({ kind, created_at: 10, id: `${kind}-older`, tags });
-      const newer = ev({ kind, created_at: 20, id: `${kind}-newer`, tags });
+    const KINDS = [0, 3, 10000, 10002, 19999, 30000, 30023, 39999];
+    for (const kind of KINDS) {
+      const older = ev({ kind, created_at: 10, id: `${kind}-a-older`, tags });
+      const newer = ev({ kind, created_at: 20, id: `${kind}-b-newer`, tags });
       // The newer, whichever revision arrives first.
-      expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-newer`]);
-      expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-newer`]);
+      expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-b-newer`]);
+      expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-b-newer`]);
       // Another author's revision is another event.
       const theirs = ev({ kind, created_at: 20, id: `${kind}-theirs`, pubkey: 'p2', tags });
       expect(idsOf(foldAll([older, theirs])).sort(), `${kind}: another author`).toEqual(
-        [`${kind}-older`, `${kind}-theirs`].sort()
+        [`${kind}-a-older`, `${kind}-theirs`].sort()
       );
     }
+    // **And every kind's revisions in one set**, so the kind is part of the
+    // identity too: one author's lists of two replaceable kinds, or two
+    // addressable kinds under one `d`, are two coordinates and not one.
+    const together = KINDS.flatMap((kind) => [
+      ev({ kind, created_at: 10, id: `${kind}-a-older`, tags }),
+      ev({ kind, created_at: 20, id: `${kind}-b-newer`, tags })
+    ]);
+    expect(idsOf(foldAll(together)).sort(), 'one coordinate per kind').toEqual(
+      KINDS.map((kind) => `${kind}-b-newer`).sort()
+    );
     // Addressable: the `d` tag is part of the coordinate, so a revision under
     // another `d` is another event — with the same first tag, so only the `d`
-    // tells them apart.
+    // tells them apart. Replaceable: the `d` tag is not, so a revision that
+    // carries another one is still a revision.
+    const otherD = [
+      ['title', 't'],
+      ['d', 'other']
+    ];
     for (const kind of [30000, 30023, 39999]) {
       const here = ev({ kind, created_at: 20, id: `${kind}-here`, tags });
-      const elsewhere = ev({
-        kind,
-        created_at: 10,
-        id: `${kind}-elsewhere`,
-        tags: [
-          ['title', 't'],
-          ['d', 'other']
-        ]
-      });
+      const elsewhere = ev({ kind, created_at: 10, id: `${kind}-elsewhere`, tags: otherD });
       expect(idsOf(foldAll([here, elsewhere])).sort(), `${kind}: another d`).toEqual(
         [`${kind}-elsewhere`, `${kind}-here`].sort()
       );
+    }
+    for (const kind of [0, 10002]) {
+      const before = ev({ kind, created_at: 10, id: `${kind}-a-before`, tags });
+      const after = ev({ kind, created_at: 20, id: `${kind}-b-after`, tags: otherD });
+      expect(idsOf(foldAll([before, after])), `${kind}: d is not its identity`).toEqual([
+        `${kind}-b-after`
+      ]);
     }
     // A regular kind has no revisions: one author and one kind are two events.
     for (const kind of [1, 9999, 40000]) {
