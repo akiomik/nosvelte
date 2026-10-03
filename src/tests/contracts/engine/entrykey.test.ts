@@ -11,22 +11,18 @@
  * spike's, as 0005 records them; they are history rather than files in this
  * repository.
  *
- * `identity.test.ts` attacks `canonicalKey` and says a great deal about it —
- * including a 2000-case sweep. None of it was about the engine with the cache,
- * because that engine did not call the function: it keyed its entries with the
- * caller's `queryKey` plus the relay scope, so the filters, the settle timeout,
- * the retention bound and `namespace` were all outside cache identity on the
- * only path where an entry is shared at all. Two hooks with one key and
- * different filters shared one entry, which is verbatim the defect 0003 opens
- * with and says the record exists to remove.
+ * Why these exist beside `identity.test.ts`'s key arms: in the spike, the
+ * engine with the cache did not call `canonicalKey` at all — it keyed entries
+ * with the caller's `queryKey` plus the relay scope, so the filters, the settle
+ * timeout, the retention bound and `namespace` were outside cache identity on
+ * the only path where an entry is shared. Two hooks with one key and different
+ * filters shared one entry, which is the defect 0003 opens with.
  *
- * So these are the same claims as K1/K2/K4/K4b, asked of the shipping path
- * rather than of the function. Each is written so a shared entry is visible
- * from outside: the second request either reads an answer it did not ask for,
- * or it does not.
- *
- * They belong here rather than in `identity.test.ts` because they need a relay,
- * a client and two mounted hooks — that file is the pure half, deliberately.
+ * So these are the claims of `KI1`, `KI2`, `KI4` and `KI4b` there, asked of the
+ * shipping path rather than of the function, each written so a shared entry is
+ * visible from outside: the second request either reads an answer it did not
+ * ask for, or it does not. They need a relay, a client and two mounted hooks,
+ * which `identity.test.ts` does not set up.
  */
 import type Nostr from 'nostr-typedef';
 import type { QueryKey } from 'tanstack-svelte-query-v6';
