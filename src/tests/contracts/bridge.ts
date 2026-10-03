@@ -498,6 +498,108 @@ export const expectedLandings = (
  * are each a fault. The run's overall success is not used: a skipped test
  * leaves it `true`.
  */
+/**
+ * The engine arms a row names as holding the half of a clause it reopened
+ * under the route rule — the half no published value reflects.
+ *
+ * **Read from the record because the roster cannot hold them**: a roster line
+ * credits one arm, and that arm is the public one. So the list lives in the
+ * row's own text, after `measured, `, as backticked arm ids joined by `, `,
+ * ` and ` or an en dash for a range of one prefix. Without this a reopened row
+ * named arms nothing checked: renamed, emptied or turned into a `todo`, they
+ * left every check green while the record still said they held the clause.
+ *
+ * **And read strictly, because a lenient reader is the same hole one level
+ * down.** The first version stopped at the first separator it did not know and
+ * said nothing, so a hyphen range, an `or`, a colon after `measured` or a bold
+ * id dropped arms from the run while the record went on naming them. So every
+ * sentence that begins at `measured` is read twice — the grammar above, and
+ * every backticked arm id in it — and the two must agree; and a row that says
+ * it was reopened under the route rule must name at least one arm.
+ *
+ * **Where it reads is the text a reopening wrote**, from `(reopened` to the end
+ * of the row: "measured" is an ordinary word elsewhere in the record, beside
+ * spike ids and arms that hold other clauses, and reading it there would make
+ * every one of those an obligation nobody wrote.
+ */
+export const supportingArms = (
+  record: string
+): { arms: Map<string, string[]>; faults: string[] } => {
+  const ARM = '[A-Za-z]+[0-9]+[a-z]?';
+  const ITEM = `\`${ARM}\`(?:–\`${ARM}\`)?`;
+  const list = new RegExp(`^measured, (${ITEM}(?:(?:, (?:and )?| and )${ITEM})*)`);
+  const arms = new Map<string, string[]>();
+  const faults: string[] = [];
+  for (const line of record.split('\n')) {
+    const row = /^\| `([^`]+)`\s+\|/.exec(line)?.[1];
+    if (row === undefined) continue;
+    const opened = line.indexOf('(reopened');
+    if (opened === -1) continue;
+    const reopened = line.slice(opened);
+    const ids: string[] = [];
+    for (const start of reopened.matchAll(/\bmeasured\b/gi)) {
+      // The sentence from `measured` to its end, or to the end of the cell.
+      const rest = reopened.slice(start.index);
+      const end = rest.search(/\.(?:\s|$)|\s\|/);
+      const sentence = end === -1 ? rest : rest.slice(0, end);
+      const named = [...sentence.matchAll(/`([A-Za-z]+[0-9]+[a-z]*)`/g)].map(
+        (match) => match[1] as string
+      );
+      if (named.length === 0) continue;
+      const read: string[] = [];
+      const strict = list.exec(sentence);
+      if (strict !== null)
+        for (const item of (strict[1] as string).split(/, (?:and )?| and /)) {
+          const [from, to] = item.replaceAll('`', '').split('–') as [string, string | undefined];
+          if (to === undefined) {
+            read.push(from);
+            continue;
+          }
+          const [, prefix, first] = /^([A-Za-z]+)([0-9]+)$/.exec(from) ?? [];
+          const [, toPrefix, last] = /^([A-Za-z]+)([0-9]+)$/.exec(to) ?? [];
+          if (prefix === undefined || prefix !== toPrefix || Number(first) > Number(last))
+            faults.push(`${row}: ${from}–${to} is not a range of one prefix`);
+          else
+            for (let at = Number(first); at <= Number(last); at += 1) read.push(`${prefix}${at}`);
+        }
+      const endpoints = read.length === 0 ? [] : named;
+      const unread = endpoints.filter((id) => !read.includes(id));
+      if (strict === null || unread.length > 0)
+        faults.push(
+          `${row}: the list after "measured" names ${named.join(', ')} and is read as ` +
+            `${read.length === 0 ? 'nothing' : read.join(', ')} — write it as \`measured, \`A\`, \`B\` and \`C\`\``
+        );
+      ids.push(...read);
+    }
+    if (ids.length > 0) arms.set(row, ids);
+    else
+      faults.push(`${row}: reopened under the route rule, and names no arm after \`measured, \``);
+  }
+
+  return { arms, faults };
+};
+
+/** The supporting arms as landings the run must show, labelled by the row whose half they hold. */
+export const expectedSupport = (
+  arms: ReadonlyMap<string, readonly string[]>,
+  declared: Pick<Landings, 'files' | 'positions'>,
+  root: string
+): { expected: Expected[]; faults: string[] } => {
+  const expected: Expected[] = [];
+  const faults: string[] = [];
+  for (const [row, ids] of arms)
+    for (const id of ids) {
+      const label = `${row} (internal half)`;
+      const file = declared.files.get(id);
+      const position = declared.positions.get(id);
+      if (file === undefined || position === undefined)
+        faults.push(`${label}: ${id} is declared nowhere under the root`);
+      else expected.push({ row: label, id, file: join(root, file), ...position });
+    }
+
+  return { expected, faults };
+};
+
 export const checkRun = (run: {
   readonly status: number | null;
   readonly report: string | undefined;

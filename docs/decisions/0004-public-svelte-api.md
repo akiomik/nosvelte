@@ -102,9 +102,10 @@ than one.** The question that went back to the review was whether the relay axis
 relays the consumer configured or the relays the connection actually has; it is not a choice,
 because the facts have different owners. Which relays exist, what each is called, and whether it may
 be read from or written to are the immutable `RelayScope` (B-α, frozen all the way down — `SC31`) —
-the value every request is keyed under, and the only membership a consumer can act on. The
-connection state and the last `NOTICE` are facts about a socket and can only be observed on the
-client the provider owns.
+the value every request is keyed under. What a consumer is handed of it is a copy, frozen all the
+way down on every map the diagnostics hand out (`B-α-C23`), and that copy is the only membership a
+consumer can act on. The connection state and the last `NOTICE` are facts about a socket and can
+only be observed on the client the provider owns.
 
 **That sentence was already here while the implementation did the opposite, and the gap was a
 counterexample rather than an untidiness.** The notice record and the subscription that filled it

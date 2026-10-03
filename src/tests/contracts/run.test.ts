@@ -12,7 +12,14 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { checkRun, collectFrom, type Expected } from './bridge.js';
+import {
+  checkRun,
+  collectFrom,
+  type Expected,
+  expectedSupport,
+  PRODUCTION_ROOT,
+  supportingArms
+} from './bridge.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -63,6 +70,75 @@ describe('the run-time check of the landings', () => {
       expect(judge(0, report(100, [test({ state })]))).toEqual([
         `A1-C1: CT1 is ${state}, not passed`
       ]);
+  });
+
+  it('CAT42: the engine arms a reopened row names are read strictly from its line and held like a landing', () => {
+    const row = (id: string, text: string): string =>
+      `| \`${id}\` | A1 | behavior | given | ${text} | E | P |`;
+    const R = '(reopened 2026-10-03 under the route rule)';
+    // Read: a list, `and`, a range, two lists in one reopening; and nothing
+    // read where nothing was reopened, however it is worded.
+    const record = [
+      row('A1-C1', `held ${R}: the arms that fail are, measured, \`XA1\`, \`XB2\` and \`XC3\``),
+      row('A1-C2', `${R} measured, \`XA1\` and \`XN1\`–\`XN3\`. And measured, \`XD4\``),
+      row('A1-C3', 'not reopened, though measured, `XZ9` and measured: `XZ8`'),
+      'measured, `XZ7` on a line that is not a row'
+    ].join('\n');
+    const { arms, faults } = supportingArms(record);
+    expect([...arms]).toEqual([
+      ['A1-C1', ['XA1', 'XB2', 'XC3']],
+      ['A1-C2', ['XA1', 'XN1', 'XN2', 'XN3', 'XD4']]
+    ]);
+    expect(faults).toEqual([]);
+
+    // Refused, each by name: every spelling a lenient reader dropped arms from
+    // silently, a range across prefixes, and a reopening that names nothing.
+    for (const [label, text] of [
+      ['a hyphen range', `${R} measured, \`XN1\`-\`XN4\``],
+      ['an em dash range', `${R} measured, \`XN1\`—\`XN4\``],
+      ['a spaced en dash', `${R} measured, \`XN1\` – \`XN4\``],
+      ['an or', `${R} measured, \`XA1\`, \`XB2\` or \`XC3\``],
+      ['a parenthesis', `${R} measured, \`XA1\`, \`XB2\` (and \`XC3\`)`],
+      ['a colon', `${R} the arms that fail are, measured: \`XA1\``],
+      ['words before the list', `${R} measured, the engine arms \`XA1\` and \`XB2\``],
+      ['two spaces', `${R} measured,  \`XA1\``],
+      ['a bold id', `${R} measured, **\`XA1\`**`],
+      ['an id after the list', `${R} measured, \`XA1\`, while \`XB2\` stays green`],
+      ['a range across prefixes', `${R} measured, \`XA1\`–\`XB3\``],
+      ['nothing named', `${R} the engine arm that fails is SG4`]
+    ] as const) {
+      const read = supportingArms(row('A1-C9', text));
+      expect(read.faults.length, label).toBeGreaterThan(0);
+      for (const fault of read.faults) expect(fault, label).toMatch(/^A1-C9: /);
+    }
+
+    // Each named arm must be declared; one that is not is a fault, and one that
+    // is becomes a landing the run has to show.
+    const declared = {
+      files: new Map([['XA1', 'a.test.ts']]),
+      positions: new Map([['XA1', { line: 3, column: 1 }]])
+    };
+    const held = expectedSupport(new Map([['A1-C1', ['XA1', 'XB2']]]), declared, '/root');
+    expect(held.expected).toEqual([
+      { row: 'A1-C1 (internal half)', id: 'XA1', file: '/root/a.test.ts', line: 3, column: 1 }
+    ]);
+    expect(held.faults).toEqual(['A1-C1 (internal half): XB2 is declared nowhere under the root']);
+
+    // And the record itself: read without a fault, every list read whole, and
+    // every arm in it declared under the root.
+    const real = supportingArms(
+      readFileSync(join(REPO, 'docs/decisions/0005-contract-catalogue.md'), 'utf8')
+    );
+    expect(real.faults).toEqual([]);
+    expect(Object.fromEntries(real.arms)).toEqual({
+      'B-α-C2': ['SG4', 'SG5', 'SG12', 'SG25', 'RG3', 'RG5'],
+      'B-α-C17': ['TR2', 'TQ3', 'CG11', 'NA3', 'NA4'],
+      'B-α-C21': ['TR7', 'CG4', 'NA1', 'NA2', 'NA3', 'NA4'],
+      'B-α-C22': ['SG26'],
+      'B-α-C23': ['SG27', 'SG31']
+    });
+    const landed = expectedSupport(real.arms, collectFrom(join(REPO, PRODUCTION_ROOT)), REPO);
+    expect(landed.faults).toEqual([]);
   });
 
   it('CAT41: real runs of the runner — skips, an empty table, the config, a filter, failure expected', () => {
