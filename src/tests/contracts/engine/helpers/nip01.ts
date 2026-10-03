@@ -92,12 +92,14 @@ const KINDS = [0, 1, 3, 9999, 10000, 10002, 19999, 30000, 30023, 39999, 40000] a
 /**
  * The `d` tags a draw may carry, beside carrying none. Values that collide
  * under a careless reading — the empty one, one with a colon, ones with
- * surrounding space — and shapes NIP-01 still reads one way: extra elements
- * after the value, and two `d` tags, of which the first is the identifier.
+ * surrounding space, one that differs only in case — and shapes NIP-01 still
+ * reads one way: extra elements after the value, and two `d` tags, of which
+ * the first is the identifier even when it is the empty one.
  */
 const D_TAGS: readonly (readonly string[][])[] = [
   [['d', '']],
   [['d', 's']],
+  [['d', 'S']],
   [['d', 't']],
   [['d', 's:x']],
   [['d', 's:y']],
@@ -112,40 +114,61 @@ const D_TAGS: readonly (readonly string[][])[] = [
   [
     ['d', 't'],
     ['d', 's']
+  ],
+  [
+    ['d', ''],
+    ['d', 's']
   ]
 ];
 
 /**
- * The `created_at` values a draw takes. Few, so ties are common, and spanning
- * a change of digit count, so a comparison that read them as strings — where
- * `'9'` sorts after `'10'` — orders some pair the other way.
+ * The `created_at` values a draw takes. Few, so ties are common; spanning a
+ * change of digit count, so a comparison that read them as strings — where
+ * `'9'` sorts after `'10'` — orders some pair the other way; and spanning the
+ * 32-bit boundaries, since NIP-01 bounds them by nothing narrower than a
+ * JavaScript number.
  */
-const INSTANTS = [9, 10, 99, 100, 1000] as const;
+const INSTANTS = [9, 10, 99, 100, 1000, 2_147_483_647, 2_147_483_648, 4_294_967_296] as const;
 
 /** Whether NIP-01 gives `kind` no coordinate of its own beyond the event. */
 const isRegular = (kind: number): boolean =>
   !(kind === 0 || kind === 3 || (kind >= 10000 && kind < 20000) || (kind >= 30000 && kind < 40000));
 
+/** `length` lowercase hex digits. */
+const hex = (rand: () => number, length: number): string =>
+  Array.from({ length }, () => Math.floor(rand() * 16).toString(16)).join('');
+
 /**
  * `count` events drawn across the dimensions the replacement rule reads, and
- * the ones it must not: kind, author, the `d` tags above or none, an unrelated
- * tag whose value varies and which sits before or after them, content, and a
- * `created_at` from {@link INSTANTS} — with ids distinct and in no relation to
- * recency. `expiries` gives some **regular** events an `expiration` tag, which
- * is the arrangement `B5-C5` names; a revision that expired would leave the
- * published view on its own and hide what the bound kept.
+ * the ones it must not, with each field's value drawn from the domain NIP-01
+ * gives it rather than a short label:
+ *
+ * - ids and authors are full-length hex and share long prefixes, so nothing
+ *   that reads a prefix of either can tell them apart;
+ * - signatures and contents vary independently of ids, so neither an id's
+ *   order nor a predecessor's value can stand in for the event's own;
+ * - kinds and authors are drawn from a few per draw, so revisions of one
+ *   coordinate meet often, under the `d` tags above or none and an unrelated
+ *   tag that varies;
+ * - `created_at` is drawn from {@link INSTANTS}.
+ *
+ * `expiries` gives some **regular** events an `expiration` tag, which is the
+ * arrangement `B5-C5` names; a revision that expired would leave the published
+ * view on its own and hide what the bound kept.
  */
 export function arbitraryEvents(
   rand: () => number,
   count: number,
   { expiries = [] }: { expiries?: readonly number[] } = {}
 ): Partial<Nostr.Event>[] {
-  const ids = shuffled(
-    Array.from({ length: count }, (_, at) => `id${String(at).padStart(2, '0')}`),
-    rand
-  );
-  return ids.map((id) => {
-    const kind = pick(rand, KINDS);
+  const idPrefix = hex(rand, 56);
+  const ids = new Set<string>();
+  while (ids.size < count) ids.add(`${idPrefix}${hex(rand, 8)}`);
+  const authorPrefix = hex(rand, 60);
+  const authors = [`${authorPrefix}0000`, `${authorPrefix}ffff`];
+  const kinds = shuffled(KINDS, rand).slice(0, 1 + Math.floor(rand() * 3));
+  return [...ids].map((id) => {
+    const kind = pick(rand, kinds);
     const tags: string[][] = [];
     const title = ['title', pick(rand, ['x', 'y'])];
     const dTags = rand() < 0.2 ? [] : pick(rand, D_TAGS).map((tag) => [...tag]);
@@ -157,9 +180,10 @@ export function arbitraryEvents(
     return {
       id,
       kind,
-      pubkey: pick(rand, ['p1', 'p2']),
+      pubkey: pick(rand, authors),
       created_at: pick(rand, INSTANTS),
-      content: `content of ${id}`,
+      content: `content ${hex(rand, 6)}`,
+      sig: hex(rand, 128),
       tags
     };
   });

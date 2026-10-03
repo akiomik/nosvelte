@@ -835,9 +835,9 @@ describe('canonical event set', () => {
     // relay: an equal event in a different packet object. Re-folding the
     // identical object proves nothing about the comparison, because reference
     // equality short-circuits it either way.
-    const fromAnotherRelay = { ...b, from: 'wss://other/', event: { ...b.event } };
+    const fromAnotherRelay = { ...b, from: 'wss://other/', event: structuredClone(b.event) };
     expect(foldEvent(set, fromAnotherRelay)).toBe(set);
-    const regularElsewhere = { ...a, from: 'wss://other/', event: { ...a.event } };
+    const regularElsewhere = { ...a, from: 'wss://other/', event: structuredClone(a.event) };
     expect(foldEvent(set, regularElsewhere)).toBe(set);
     // From another relay, in every class with a coordinate as well: a tie-break
     // that let an equal event replace the incumbent for one class alone would
@@ -845,24 +845,28 @@ describe('canonical event set', () => {
     for (const kind of [3, 10002, 19999]) {
       const held = ev({ kind });
       const holding = foldEvent(set, held);
-      const elsewhere = { ...held, from: 'wss://other/', event: { ...held.event } };
+      const elsewhere = { ...held, from: 'wss://other/', event: structuredClone(held.event) };
       expect(foldEvent(holding, elsewhere), `${kind}`).toBe(holding);
     }
 
     // Every path a replay can take returns what it was given: an addressable
     // event, from either relay, and an ephemeral one once it has been noted.
+    // **A replay from another relay is a separate object all the way down** —
+    // `structuredClone`, not a spread — since a relay hands over a parsed copy
+    // and shares nothing with the incumbent, not even its tag arrays.
     const addressable = ev({ kind: 30023, tags: [['d', 's']] });
     const withIt = foldEvent(set, addressable);
     expect(foldEvent(withIt, addressable)).toBe(withIt);
     const addressableElsewhere = {
       ...addressable,
       from: 'wss://other/',
-      event: { ...addressable.event }
+      event: structuredClone(addressable.event)
     };
     expect(foldEvent(withIt, addressableElsewhere)).toBe(withIt);
     const ephemeral = ev({ kind: 20001 });
     const noted = foldEvent(set, ephemeral);
     expect(foldEvent(noted, ephemeral)).toBe(noted);
+    expect(foldEvent(noted, { ...ephemeral, event: structuredClone(ephemeral.event) })).toBe(noted);
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {
