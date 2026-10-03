@@ -4,13 +4,19 @@
    * back to the test as the handle a consumer holds, and, when asked for, the
    * provider's relay diagnostics.
    */
-  import { NostrApp, type ReqHandle, type ReqPlan, useRelayDiagnostics } from '$lib/v1/index.js';
+  import {
+    NostrApp,
+    type RelayInput,
+    type ReqHandle,
+    type ReqPlan,
+    useRelayDiagnostics
+  } from '$lib/v1/index.js';
 
   import Asker from './Asker.svelte';
   import Diagnostics from './Diagnostics.svelte';
 
   interface Props {
-    relays: readonly string[];
+    relays: readonly RelayInput[];
     plans: (() => ReqPlan)[];
     seen?: (index: number, request: ReqHandle) => void;
     diagnostics?: (diagnostics: ReturnType<typeof useRelayDiagnostics>) => void;

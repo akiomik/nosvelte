@@ -255,6 +255,7 @@ describe('B-α: the scope generation', () => {
     ).toThrow(InvalidRelayScopeError);
   });
 
+  // @contracts B-α-C10
   it('SG15: this library’s transcription still agrees with one pass of the resolved client', () => {
     // `SC10` asserts `canonicalOnce`'s output as a written-out literal over a
     // stub, so it measures the transformation and not the agreement — and the
@@ -324,23 +325,33 @@ describe('B-α: the scope generation', () => {
       'wss://h.example//',
       'wss://h.example//?a=1',
       'wss://h.example/path//',
-      '  wss://h.example  '
+      '  wss://h.example  ',
+      // **Whitespace the URL parser keeps and `String.trim` removes.** `new URL`
+      // strips only C0 controls and spaces, so a trailing no-break space parses
+      // into the path as `%C2%A0`; the transport trims it first, and so must the
+      // transcription. Before this row and the padded refusal below, the
+      // transcription's own `trim` could be deleted and this arm stayed green,
+      // because every surrounding space here was one the parser strips by
+      // itself; either row alone now fails it.
+      'wss://h.example/\u00A0'
     ];
 
     /**
-     * Two members that live in the transcription's domain and not in a scope's.
+     * Members that live in the transcription's domain and not in a scope's.
      *
-     * rx-nostr names both of these — `'not a url at all'` after itself and `''`
-     * after itself — so `canonicalUrl` has to agree with it about them or the
-     * scope-less fallback would carry a spelling the client does not. But
-     * neither is a relay URL, and `checkedRelayInput` refuses both at the
-     * entrance, so they cannot reach a scope to be compared through one.
+     * rx-nostr names `'not a url at all'` and `''` after themselves, and the
+     * first with surrounding spaces after the trimmed string — the one `trim`
+     * both branches share, reached here on the branch where the parse fails — so
+     * `canonicalUrl` has to agree with it about them or the scope-less fallback
+     * would carry a spelling the client does not. But none is a relay URL, and
+     * `checkedRelayInput` refuses all three at the entrance, so they cannot
+     * reach a scope to be compared through one.
      *
      * Split out rather than dropped: leaving them in the main corpus would have
      * meant the transcription stopped being measured on the two inputs where
      * the dependency's own error handling is doing the work.
      */
-    const REFUSED_AT_THE_ENTRANCE = ['not a url at all', ''];
+    const REFUSED_AT_THE_ENTRANCE = ['not a url at all', '', ' not a url at all '];
 
     const ours: string[] = [];
     const theirs: string[] = [];
@@ -567,12 +578,13 @@ describe('B-α: the scope generation', () => {
     // still holds is not: flipping `read` after the identity is computed would
     // make the scope and the connection disagree about which relays are in use.
     //
-    // What this establishes is that it does not happen. What it does not
-    // establish is *why*: with the copy removed from `configOf` this still
-    // passes, because the scope lives in `$state` and Svelte does not hand back
-    // the object it was given. The copy is a second line, and the ledger
-    // records that its mutation is undetectable rather than pretending
-    // otherwise.
+    // What this establishes is that it does not happen. The spike's version
+    // of this comment said the arm passed with the copy removed from
+    // `configOf`, because the scope lived in `$state` and Svelte does not hand
+    // back the object it was given. That does not reproduce here: with both
+    // copies removed — `checkedRelayInput`'s and `scopeOf`'s — this arm fails
+    // under `$state` and `$state.raw` alike, because the freeze reaches the
+    // caller's object and the write below throws. Either copy alone is enough.
     const config = { url: 'wss://mut.example', read: true, write: false };
     const scope = createRelayScope(silent(), [config]);
     const before = scope.current.id;
