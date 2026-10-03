@@ -90,11 +90,50 @@ export function shuffled<T>(items: readonly T[], rand: () => number): T[] {
 const KINDS = [0, 1, 3, 9999, 10000, 10002, 19999, 30000, 30023, 39999, 40000] as const;
 
 /**
- * `count` events drawn across every dimension the replacement rule could read
- * — kind, author, `d` absent, empty or named, an unrelated tag that varies and
- * sits before or after `d`, content, and a `created_at` drawn from three values
- * so ties are common — with ids distinct and in no relation to recency.
- * `expiring` gives some events an `expiration` tag drawn from `expiries`.
+ * The `d` tags a draw may carry, beside carrying none. Values that collide
+ * under a careless reading — the empty one, one with a colon, ones with
+ * surrounding space — and shapes NIP-01 still reads one way: extra elements
+ * after the value, and two `d` tags, of which the first is the identifier.
+ */
+const D_TAGS: readonly (readonly string[][])[] = [
+  [['d', '']],
+  [['d', 's']],
+  [['d', 't']],
+  [['d', 's:x']],
+  [['d', 's:y']],
+  [['d', ' s']],
+  [['d', 's ']],
+  [['d', 's', 'metadata one']],
+  [['d', 's', 'metadata two']],
+  [
+    ['d', 's'],
+    ['d', 't']
+  ],
+  [
+    ['d', 't'],
+    ['d', 's']
+  ]
+];
+
+/**
+ * The `created_at` values a draw takes. Few, so ties are common, and spanning
+ * a change of digit count, so a comparison that read them as strings — where
+ * `'9'` sorts after `'10'` — orders some pair the other way.
+ */
+const INSTANTS = [9, 10, 99, 100, 1000] as const;
+
+/** Whether NIP-01 gives `kind` no coordinate of its own beyond the event. */
+const isRegular = (kind: number): boolean =>
+  !(kind === 0 || kind === 3 || (kind >= 10000 && kind < 20000) || (kind >= 30000 && kind < 40000));
+
+/**
+ * `count` events drawn across the dimensions the replacement rule reads, and
+ * the ones it must not: kind, author, the `d` tags above or none, an unrelated
+ * tag whose value varies and which sits before or after them, content, and a
+ * `created_at` from {@link INSTANTS} — with ids distinct and in no relation to
+ * recency. `expiries` gives some **regular** events an `expiration` tag, which
+ * is the arrangement `B5-C5` names; a revision that expired would leave the
+ * published view on its own and hide what the bound kept.
  */
 export function arbitraryEvents(
   rand: () => number,
@@ -106,20 +145,20 @@ export function arbitraryEvents(
     rand
   );
   return ids.map((id) => {
+    const kind = pick(rand, KINDS);
     const tags: string[][] = [];
     const title = ['title', pick(rand, ['x', 'y'])];
-    const d = pick(rand, [undefined, '', 's', 't'] as const);
-    const dTag = d === undefined ? undefined : ['d', d];
+    const dTags = rand() < 0.2 ? [] : pick(rand, D_TAGS).map((tag) => [...tag]);
     if (rand() < 0.5) tags.push(title);
-    if (dTag !== undefined) tags.push(dTag);
+    tags.push(...dTags);
     if (tags.length < 2 && rand() < 0.5) tags.push(title);
-    if (expiries.length > 0 && rand() < 0.4)
+    if (expiries.length > 0 && isRegular(kind) && rand() < 0.6)
       tags.push(['expiration', String(pick(rand, expiries))]);
     return {
       id,
-      kind: pick(rand, KINDS),
+      kind,
       pubkey: pick(rand, ['p1', 'p2']),
-      created_at: pick(rand, [10, 20, 30]),
+      created_at: pick(rand, INSTANTS),
       content: `content of ${id}`,
       tags
     };

@@ -728,10 +728,19 @@ const foldAll = (packets: OwnedPacket[]): CachedEventSet =>
 
 const idsOf = (set: CachedEventSet) => selectMany(set).map((p) => p.event.id);
 
-/** What a set holds, by id, with the payload: an id kept with another revision's content is wrong. */
+/**
+ * What a set holds, each event whole: an id kept with another revision's
+ * content or tags is a different event, so nothing is projected away.
+ */
 const heldOf = (set: CachedEventSet): string[] =>
   selectMany(set)
-    .map(({ event }) => `${event.id} ${event.content}`)
+    .map(({ event }) => JSON.stringify(event))
+    .sort();
+
+/** What NIP-01 keeps of `packets`, each event whole, by `helpers/nip01.ts`. */
+const keptOf = (packets: readonly OwnedPacket[]): string[] =>
+  [...winnersOf(packets.map(({ event }) => event)).values()]
+    .map((event) => JSON.stringify(event))
     .sort();
 
 /** The packets for `events`, half of them from a second relay. */
@@ -927,14 +936,11 @@ describe('canonical event set', () => {
     }
 
     // **And every order of drawn events folds to the one set NIP-01 names**,
-    // payload and all, across every class and with ties common.
+    // each event whole, across every class and with ties common.
     const draws = mulberry32(0xb5c2);
     for (let trial = 0; trial < 100; trial += 1) {
-      const events = arbitraryEvents(draws, 10);
-      const expected = [...winnersOf(events.map((fields) => ev(fields).event)).values()]
-        .map((event) => `${event.id} ${event.content}`)
-        .sort();
-      const packets = packetsOf(events, draws);
+      const packets = packetsOf(arbitraryEvents(draws, 3 + Math.floor(draws() * 8)), draws);
+      const expected = keptOf(packets);
       for (let order = 0; order < 10; order += 1)
         expect(heldOf(foldAll(shuffled(packets, draws))), `trial ${trial}`).toEqual(expected);
     }
@@ -1046,15 +1052,12 @@ describe('canonical event set', () => {
     // time; so events are drawn across every dimension the rule could read —
     // kind, author, `d` absent, empty or named, an unrelated tag that varies,
     // content, a relay, `created_at` ties, ids in no relation to recency — and
-    // what the fold keeps is compared, payload and all, with what NIP-01 keeps
+    // what the fold keeps is compared, each event whole, with what NIP-01 keeps
     // (`helpers/nip01.ts`, which calls nothing of the library's).
     const rand = mulberry32(0xb5c1);
     for (let trial = 0; trial < 300; trial += 1) {
-      const events = arbitraryEvents(rand, 10);
-      const expected = [...winnersOf(events.map((fields) => ev(fields).event)).values()]
-        .map((event) => `${event.id} ${event.content}`)
-        .sort();
-      const packets = packetsOf(events, rand);
+      const packets = packetsOf(arbitraryEvents(rand, 3 + Math.floor(rand() * 8)), rand);
+      const expected = keptOf(packets);
       for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)])
         expect(heldOf(foldAll(order)), `trial ${trial}`).toEqual(expected);
     }

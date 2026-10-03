@@ -99,6 +99,15 @@ function shownOf(set: CachedEventSet, at: number, superseded: readonly string[])
  */
 const BOUNDS = [1, 2, 3] as const;
 
+/** Drawn packets, half of them from a second relay. */
+const drawn = (rand: () => number, options?: { expiries?: readonly number[] }): OwnedPacket[] =>
+  arbitraryEvents(rand, 3 + Math.floor(rand() * 6), options).map((fields) => {
+    const packet = ev(fields);
+    return rand() < 0.5
+      ? packet
+      : ({ ...packet, from: 'wss://elsewhere/', event: { ...packet.event } } as OwnedPacket);
+  });
+
 /**
  * The ids among `events` that NIP-01 supersedes — every revision but the one
  * its coordinate keeps — by `helpers/nip01.ts`, which calls nothing of the
@@ -189,7 +198,7 @@ describe('a bounded set that carries a replacement', () => {
     // broke for another.
     const rand = mulberry32(0xb5c4);
     for (let trial = 0; trial < 300; trial += 1) {
-      const packets = arbitraryEvents(rand, 8).map(ev);
+      const packets = drawn(rand);
       const superseded = supersededAmong(packets);
       for (const retain of BOUNDS)
         for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
@@ -287,7 +296,7 @@ describe('a bounded set that carries a replacement', () => {
     // still arriving, at every bound and in several orders.
     const rand = mulberry32(0xb5c5);
     for (let trial = 0; trial < 300; trial += 1) {
-      const packets = arbitraryEvents(rand, 8, { expiries: [150, 250, 350] }).map(ev);
+      const packets = drawn(rand, { expiries: [150, 250, 350] });
       const superseded = supersededAmong(packets);
       for (const retain of BOUNDS)
         for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
