@@ -33,10 +33,13 @@ const record = readFileSync(join(ROOT, 'docs/decisions/0005-contract-catalogue.m
 const { roster, faults: rosterFaults } = rosterOf(record);
 const declared = collectFrom(CONTRACTS);
 const { expected: landings, faults: landingFaults } = expectedLandings(roster, declared, CONTRACTS);
-// The engine arms a reopened row names for its internal half, held the way a
+// The contract arms a row's evidence names after its landing, held the way a
 // landing is: declared under the root, run once, passed.
-const { arms, faults: armFaults } = supportingArms(record);
-const { expected: support, faults: supportFaults } = expectedSupport(arms, declared, CONTRACTS);
+const { expected: support, faults: supportFaults } = expectedSupport(
+  supportingArms(roster),
+  declared,
+  CONTRACTS
+);
 const expected = [...landings, ...support];
 
 const directory = mkdtempSync(join(tmpdir(), 'nosvelte-run-'));
@@ -59,7 +62,6 @@ try {
   faults = [
     ...rosterFaults,
     ...landingFaults,
-    ...armFaults,
     ...supportFaults,
     ...checkRun({
       status: run.status,

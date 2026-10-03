@@ -377,7 +377,8 @@ export const backwardFaults = (rows: Roster, tests: ReadonlyMap<string, Set<stri
         faults.push(`${arm} declares ${row}, which is not a row`);
         continue;
       }
-      if (evidence !== `test:${arm}`)
+      const read = testEvidence(evidence);
+      if (read === undefined || !('landing' in read) || read.landing !== arm)
         faults.push(`${arm} declares ${row}, which points at ${evidence}`);
     }
   }
@@ -470,8 +471,13 @@ export const expectedLandings = (
   const expected: Expected[] = [];
   const faults: string[] = [];
   for (const [row, { evidence }] of roster) {
-    if (!evidence.startsWith('test:')) continue;
-    const id = evidence.slice('test:'.length).trim();
+    const read = testEvidence(evidence);
+    if (read === undefined) continue;
+    if (!('landing' in read)) {
+      faults.push(`${row}: ${read.fault}`);
+      continue;
+    }
+    const id = read.landing;
     const file = declared.files.get(id);
     const position = declared.positions.get(id);
     if (file === undefined || position === undefined)
@@ -499,86 +505,55 @@ export const expectedLandings = (
  * leaves it `true`.
  */
 /**
- * The engine arms a row names as holding the half of a clause it reopened
- * under the route rule — the half no published value reflects.
+ * A `test:` evidence cell, read: the arm that lands the row, and the contract
+ * arms after it, joined by `+`, that this implementation measured to fail
+ * when the row's subject breaks.
  *
- * **Read from the record because the roster cannot hold them**: a roster line
- * credits one arm, and that arm is the public one. So the list lives in the
- * row's own text, after `measured, `, as backticked arm ids joined by `, `,
- * ` and ` or an en dash for a range of one prefix. Without this a reopened row
- * named arms nothing checked: renamed, emptied or turned into a `todo`, they
- * left every check green while the record still said they held the clause.
+ * **The supporting arms are production evidence, because they are this
+ * implementation's.** They were first read from the row's prose, which made
+ * them a demand on every port: a port that answered the row with its own test,
+ * or with `absent:`, still failed on arms it never had, and the only way out
+ * was to rewrite a row's text — which phase 2 does not move. On the roster
+ * they move with the evidence they belong to: replaced when the landing is,
+ * and gone when the row is `absent:`.
  *
- * **And read strictly, because a lenient reader is the same hole one level
- * down.** The first version stopped at the first separator it did not know and
- * said nothing, so a hyphen range, an `or`, a colon after `measured` or a bold
- * id dropped arms from the run while the record went on naming them. So every
- * sentence that begins at `measured` is read twice — the grammar above, and
- * every backticked arm id in it — and the two must agree.
- *
- * **Where it reads is the text a split wrote**, from `(split out` to the end
- * of the row: "measured" is an ordinary word elsewhere in the record, beside
- * spike ids and arms that hold other clauses, and reading it there would make
- * every one of those an obligation nobody wrote. **The list is optional**: a
- * split-out row is `internal`, so a port may close it with `absent:` and name
- * no arm at all; what is refused is a list that is there and cannot be read.
+ * **Read strictly**: every `+`-separated part must be an arm id, none twice.
+ * A lenient reader dropped arms silently before, which is a shorter list
+ * nobody asked for; here a cell that cannot be read whole is a fault by name.
  */
-export const supportingArms = (
-  record: string
-): { arms: Map<string, string[]>; faults: string[] } => {
-  const ARM = '[A-Za-z]+[0-9]+[a-z]?';
-  const ITEM = `\`${ARM}\`(?:–\`${ARM}\`)?`;
-  const list = new RegExp(`^measured, (${ITEM}(?:(?:, (?:and )?| and )${ITEM})*)`);
-  const arms = new Map<string, string[]>();
-  const faults: string[] = [];
-  for (const line of record.split('\n')) {
-    const row = /^\| `([^`]+)`\s+\|/.exec(line)?.[1];
-    if (row === undefined) continue;
-    const opened = line.indexOf('(split out');
-    if (opened === -1) continue;
-    const split = line.slice(opened);
-    const ids: string[] = [];
-    for (const start of split.matchAll(/\bmeasured\b/gi)) {
-      // The sentence from `measured` to its end, or to the end of the cell.
-      const rest = split.slice(start.index);
-      const end = rest.search(/\.(?:\s|$)|\s\|/);
-      const sentence = end === -1 ? rest : rest.slice(0, end);
-      const named = [...sentence.matchAll(/`([A-Za-z]+[0-9]+[a-z]*)`/g)].map(
-        (match) => match[1] as string
-      );
-      if (named.length === 0) continue;
-      const read: string[] = [];
-      const strict = list.exec(sentence);
-      if (strict !== null)
-        for (const item of (strict[1] as string).split(/, (?:and )?| and /)) {
-          const [from, to] = item.replaceAll('`', '').split('–') as [string, string | undefined];
-          if (to === undefined) {
-            read.push(from);
-            continue;
-          }
-          const [, prefix, first] = /^([A-Za-z]+)([0-9]+)$/.exec(from) ?? [];
-          const [, toPrefix, last] = /^([A-Za-z]+)([0-9]+)$/.exec(to) ?? [];
-          if (prefix === undefined || prefix !== toPrefix || Number(first) > Number(last))
-            faults.push(`${row}: ${from}–${to} is not a range of one prefix`);
-          else
-            for (let at = Number(first); at <= Number(last); at += 1) read.push(`${prefix}${at}`);
-        }
-      const endpoints = read.length === 0 ? [] : named;
-      const unread = endpoints.filter((id) => !read.includes(id));
-      if (strict === null || unread.length > 0)
-        faults.push(
-          `${row}: the list after "measured" names ${named.join(', ')} and is read as ` +
-            `${read.length === 0 ? 'nothing' : read.join(', ')} — write it as \`measured, \`A\`, \`B\` and \`C\`\``
-        );
-      ids.push(...read);
-    }
-    if (ids.length > 0) arms.set(row, ids);
-  }
+export const testEvidence = (
+  evidence: string
+): { landing: string; support: string[] } | { fault: string } | undefined => {
+  if (!evidence.startsWith('test:')) return undefined;
+  const cell = evidence.slice('test:'.length).trim();
+  const arms = cell.split('+');
+  const ARM = new RegExp(`^${TEST_ID}$`);
+  const unreadable = arms.filter((arm) => !ARM.test(arm));
+  if (unreadable.length > 0)
+    return {
+      fault: `test:${cell} is not \`test:<arm>\` or \`test:<arm>+<arm>…\` — it holds ${unreadable
+        .map((arm) => JSON.stringify(arm))
+        .join(', ')}`
+    };
+  const twice = arms.filter((arm, at) => arms.indexOf(arm) !== at);
+  if (twice.length > 0) return { fault: `test:${cell} names ${twice.join(', ')} twice` };
 
-  return { arms, faults };
+  return { landing: arms[0] as string, support: arms.slice(1) };
 };
 
-/** The supporting arms as landings the run must show, labelled by the row whose half they hold. */
+/** The supporting arms each row's evidence names, for the rows that name any. */
+export const supportingArms = (roster: Roster): Map<string, string[]> => {
+  const arms = new Map<string, string[]>();
+  for (const [row, { evidence }] of roster) {
+    const read = testEvidence(evidence);
+    if (read !== undefined && 'landing' in read && read.support.length > 0)
+      arms.set(row, read.support);
+  }
+
+  return arms;
+};
+
+/** The supporting arms as landings the run must show, labelled by the row whose evidence names them. */
 export const expectedSupport = (
   arms: ReadonlyMap<string, readonly string[]>,
   declared: Pick<Landings, 'files' | 'positions'>,
@@ -588,7 +563,7 @@ export const expectedSupport = (
   const faults: string[] = [];
   for (const [row, ids] of arms)
     for (const id of ids) {
-      const label = `${row} (internal half)`;
+      const label = `${row} (supporting)`;
       const file = declared.files.get(id);
       const position = declared.positions.get(id);
       if (file === undefined || position === undefined)
