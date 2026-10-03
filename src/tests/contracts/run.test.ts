@@ -72,16 +72,18 @@ describe('the run-time check of the landings', () => {
       ]);
   });
 
-  it('CAT42: the engine arms a reopened row names are read strictly from its line and held like a landing', () => {
+  it('CAT42: the contract arms a split-out row names are read strictly from its line and held like a landing', () => {
     const row = (id: string, text: string): string =>
       `| \`${id}\` | A1 | behavior | given | ${text} | E | P |`;
-    const R = '(reopened 2026-10-03 under the route rule)';
-    // Read: a list, `and`, a range, two lists in one reopening; and nothing
-    // read where nothing was reopened, however it is worded.
+    const R = '(split out 2026-10-04 from `A1-C0` under the route rule)';
+    // Read: a list, `and`, a range, two lists in one split; nothing read where
+    // nothing was split out, however it is worded; and a split-out row that
+    // names no arm, which is how a port closes one with `absent:`.
     const record = [
       row('A1-C1', `held ${R}: the arms that fail are, measured, \`XA1\`, \`XB2\` and \`XC3\``),
       row('A1-C2', `${R} measured, \`XA1\` and \`XN1\`–\`XN3\`. And measured, \`XD4\``),
-      row('A1-C3', 'not reopened, though measured, `XZ9` and measured: `XZ8`'),
+      row('A1-C3', '(reopened) not split out, though measured, `XZ9` and measured: `XZ8`'),
+      row('A1-C4', `${R} absent here, and nothing is named`),
       'measured, `XZ7` on a line that is not a row'
     ].join('\n');
     const { arms, faults } = supportingArms(record);
@@ -92,7 +94,7 @@ describe('the run-time check of the landings', () => {
     expect(faults).toEqual([]);
 
     // Refused, each by name: every spelling a lenient reader dropped arms from
-    // silently, a range across prefixes, and a reopening that names nothing.
+    // silently, and a range across prefixes.
     for (const [label, text] of [
       ['a hyphen range', `${R} measured, \`XN1\`-\`XN4\``],
       ['an em dash range', `${R} measured, \`XN1\`—\`XN4\``],
@@ -104,8 +106,7 @@ describe('the run-time check of the landings', () => {
       ['two spaces', `${R} measured,  \`XA1\``],
       ['a bold id', `${R} measured, **\`XA1\`**`],
       ['an id after the list', `${R} measured, \`XA1\`, while \`XB2\` stays green`],
-      ['a range across prefixes', `${R} measured, \`XA1\`–\`XB3\``],
-      ['nothing named', `${R} the engine arm that fails is SG4`]
+      ['a range across prefixes', `${R} measured, \`XA1\`–\`XB3\``]
     ] as const) {
       const read = supportingArms(row('A1-C9', text));
       expect(read.faults.length, label).toBeGreaterThan(0);
@@ -131,11 +132,11 @@ describe('the run-time check of the landings', () => {
     );
     expect(real.faults).toEqual([]);
     expect(Object.fromEntries(real.arms)).toEqual({
-      'B-α-C2': ['SG4', 'SG5', 'SG12', 'SG25', 'RG3', 'RG5'],
-      'B-α-C17': ['TR2', 'TQ3', 'CG11', 'NA3', 'NA4'],
-      'B-α-C21': ['TR7', 'CG4', 'NA1', 'NA2', 'NA3', 'NA4'],
-      'B-α-C22': ['SG26'],
-      'B-α-C23': ['SG27', 'SG31']
+      'B-α-C24': ['SG32', 'TR2', 'TQ3', 'CG11', 'NA3', 'NA4', 'RI4', 'RI6'],
+      'B-α-C25': ['CG12', 'CG4', 'TR7', 'NA1', 'NA2', 'NA3', 'NA4', 'RI6'],
+      'B-α-C26': ['SG4', 'SG5', 'SG12', 'SG25', 'RG3', 'RG5'],
+      'B-α-C27': ['SG26'],
+      'B-α-C28': ['SG27', 'SG31']
     });
     const landed = expectedSupport(real.arms, collectFrom(join(REPO, PRODUCTION_ROOT)), REPO);
     expect(landed.faults).toEqual([]);

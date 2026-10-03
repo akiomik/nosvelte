@@ -500,6 +500,46 @@ describe('C16: a refused relay list at the provider’s construction', () => {
 });
 
 describe('C16: a relay list refused after the provider exists', () => {
+  // @contracts B-α-C25
+  it('CG12: a relays prop refused as a change writes nothing to the client', async () => {
+    let context: NostrContext | undefined;
+    const { rerender } = render(RelayProviderHost, {
+      props: {
+        relays: ['wss://a.example'],
+        onready: (found: NostrContext) => (context = found)
+      }
+    });
+    const transport = transportOf(context as NostrContext);
+    const before = transport.getDefaultRelays();
+    // Every write the provider makes to its client from here on.
+    const writes: unknown[] = [];
+    const write = transport.setDefaultRelays.bind(transport);
+    transport.setDefaultRelays = (relays) => {
+      writes.push(relays);
+      write(relays);
+    };
+
+    for (const [label, relays] of [
+      ['one URL string', 'wss://a.example'],
+      ['a Set', new Set(['wss://a.example'])],
+      ['null', null],
+      // eslint-disable-next-line no-sparse-arrays
+      ['an array with a hole', [, 'wss://a.example']]
+    ] as const) {
+      await rerender({ relays: relays as unknown as readonly RelayInput[] });
+      expect(screen.getByTestId('configuration-error'), label).toHaveTextContent(
+        'invalid-relay-input'
+      );
+      // Not the refused list, and not an emptied one in its place.
+      expect(writes, label).toEqual([]);
+      expect(transport.getDefaultRelays(), label).toEqual(before);
+    }
+
+    // The control: an accepted change is written, once.
+    await rerender({ relays: ['wss://a.example', 'wss://b.example'] });
+    expect(writes).toHaveLength(1);
+  });
+
   it('CG4: the prop change is refused without a throw, and the generation stays', async () => {
     let context: NostrContext | undefined;
     const errors: unknown[] = [];

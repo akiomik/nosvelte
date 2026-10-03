@@ -514,13 +514,14 @@ export const expectedLandings = (
  * said nothing, so a hyphen range, an `or`, a colon after `measured` or a bold
  * id dropped arms from the run while the record went on naming them. So every
  * sentence that begins at `measured` is read twice — the grammar above, and
- * every backticked arm id in it — and the two must agree; and a row that says
- * it was reopened under the route rule must name at least one arm.
+ * every backticked arm id in it — and the two must agree.
  *
- * **Where it reads is the text a reopening wrote**, from `(reopened` to the end
+ * **Where it reads is the text a split wrote**, from `(split out` to the end
  * of the row: "measured" is an ordinary word elsewhere in the record, beside
  * spike ids and arms that hold other clauses, and reading it there would make
- * every one of those an obligation nobody wrote.
+ * every one of those an obligation nobody wrote. **The list is optional**: a
+ * split-out row is `internal`, so a port may close it with `absent:` and name
+ * no arm at all; what is refused is a list that is there and cannot be read.
  */
 export const supportingArms = (
   record: string
@@ -533,13 +534,13 @@ export const supportingArms = (
   for (const line of record.split('\n')) {
     const row = /^\| `([^`]+)`\s+\|/.exec(line)?.[1];
     if (row === undefined) continue;
-    const opened = line.indexOf('(reopened');
+    const opened = line.indexOf('(split out');
     if (opened === -1) continue;
-    const reopened = line.slice(opened);
+    const split = line.slice(opened);
     const ids: string[] = [];
-    for (const start of reopened.matchAll(/\bmeasured\b/gi)) {
+    for (const start of split.matchAll(/\bmeasured\b/gi)) {
       // The sentence from `measured` to its end, or to the end of the cell.
-      const rest = reopened.slice(start.index);
+      const rest = split.slice(start.index);
       const end = rest.search(/\.(?:\s|$)|\s\|/);
       const sentence = end === -1 ? rest : rest.slice(0, end);
       const named = [...sentence.matchAll(/`([A-Za-z]+[0-9]+[a-z]*)`/g)].map(
@@ -572,8 +573,6 @@ export const supportingArms = (
       ids.push(...read);
     }
     if (ids.length > 0) arms.set(row, ids);
-    else
-      faults.push(`${row}: reopened under the route rule, and names no arm after \`measured, \``);
   }
 
   return { arms, faults };
