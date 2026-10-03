@@ -56,6 +56,8 @@ import type { ReqError } from '$lib/v1/reqerror.js';
 import { createRelayScope, type RelayScope } from '$lib/v1/scope.svelte.js';
 import { entryKeyOf } from '$lib/v1/useStreamedReq.svelte.js';
 
+import { arbitraryEvents, shuffled, winnersOf } from './helpers/nip01.js';
+
 /**
  * A value from outside, handed to a door whose published type is `ReqError`.
  *
@@ -726,6 +728,21 @@ const foldAll = (packets: OwnedPacket[]): CachedEventSet =>
 
 const idsOf = (set: CachedEventSet) => selectMany(set).map((p) => p.event.id);
 
+/** What a set holds, by id, with the payload: an id kept with another revision's content is wrong. */
+const heldOf = (set: CachedEventSet): string[] =>
+  selectMany(set)
+    .map(({ event }) => `${event.id} ${event.content}`)
+    .sort();
+
+/** The packets for `events`, half of them from a second relay. */
+const packetsOf = (events: readonly Partial<Nostr.Event>[], rand: () => number): OwnedPacket[] =>
+  events.map((fields) => {
+    const packet = ev(fields);
+    return rand() < 0.5
+      ? packet
+      : ({ ...packet, from: 'wss://elsewhere/', event: { ...packet.event } } as OwnedPacket);
+  });
+
 describe('canonical event set', () => {
   it('ES1: kinds are classified by the NIP-01 ranges', () => {
     expect(classifyKind(0)).toBe('replaceable');
@@ -860,21 +877,27 @@ describe('canonical event set', () => {
       // nothing about the tie-break. Previously a third, newer metadata event
       // beat both of these regardless of order, so removing the tie-break left
       // this test passing — the coverage was vacuous.
-      ev({ kind: 0, created_at: 5, id: 'm1' }),
-      ev({ kind: 0, created_at: 5, id: 'm0' }),
-      ev({ kind: 0, created_at: 2, id: 'm2' }),
-      ev({ kind: 1, created_at: 1, id: 'n1' }),
-      ev({ kind: 1, created_at: 2, id: 'n2' }),
-      ev({ kind: 30023, created_at: 3, id: 'a1', tags: [['d', 's']] }),
-      ev({ kind: 30023, created_at: 4, id: 'a2', tags: [['d', 's']] }),
-      ev({ kind: 30023, created_at: 4, id: 'a3', tags: [['d', 'other']] }),
+      ev({ kind: 0, created_at: 5, id: 'm1', content: 'content of m1' }),
+      ev({ kind: 0, created_at: 5, id: 'm0', content: 'content of m0' }),
+      ev({ kind: 0, created_at: 2, id: 'm2', content: 'content of m2' }),
+      ev({ kind: 1, created_at: 1, id: 'n1', content: 'content of n1' }),
+      ev({ kind: 1, created_at: 2, id: 'n2', content: 'content of n2' }),
+      ev({ kind: 30023, created_at: 3, id: 'a1', content: 'content of a1', tags: [['d', 's']] }),
+      ev({ kind: 30023, created_at: 4, id: 'a2', content: 'content of a2', tags: [['d', 's']] }),
+      ev({
+        kind: 30023,
+        created_at: 4,
+        id: 'a3',
+        content: 'content of a3',
+        tags: [['d', 'other']]
+      }),
       // And a tie in each other class with a coordinate: a replaceable kind
       // from the range, and an addressable one under one `d`. A tie-break
       // written for one class alone is an order-dependent fold for the rest.
-      ev({ kind: 10002, created_at: 7, id: 'r1' }),
-      ev({ kind: 10002, created_at: 7, id: 'r0' }),
-      ev({ kind: 30023, created_at: 8, id: 'b1', tags: [['d', 'u']] }),
-      ev({ kind: 30023, created_at: 8, id: 'b0', tags: [['d', 'u']] })
+      ev({ kind: 10002, created_at: 7, id: 'r1', content: 'content of r1' }),
+      ev({ kind: 10002, created_at: 7, id: 'r0', content: 'content of r0' }),
+      ev({ kind: 30023, created_at: 8, id: 'b1', content: 'content of b1', tags: [['d', 'u']] }),
+      ev({ kind: 30023, created_at: 8, id: 'b0', content: 'content of b0', tags: [['d', 'u']] })
     ];
     const expected = ['b0', 'r0', 'm0', 'a2', 'a3', 'n2', 'n1'];
     // **Written out rather than derived from the fold.** It was
@@ -894,6 +917,26 @@ describe('canonical event set', () => {
         [shuffled[j], shuffled[k]] = [shuffled[k] as OwnedPacket, shuffled[j] as OwnedPacket];
       }
       expect(idsOf(foldAll(shuffled))).toEqual(expected);
+      // And the payload: the id kept is kept with its own content.
+      expect(
+        selectMany(foldAll(shuffled)).every(
+          ({ event }) => event.content === `content of ${event.id}`
+        ),
+        'an id kept with another revision’s content'
+      ).toBe(true);
+    }
+
+    // **And every order of drawn events folds to the one set NIP-01 names**,
+    // payload and all, across every class and with ties common.
+    const draws = mulberry32(0xb5c2);
+    for (let trial = 0; trial < 100; trial += 1) {
+      const events = arbitraryEvents(draws, 10);
+      const expected = [...winnersOf(events.map((fields) => ev(fields).event)).values()]
+        .map((event) => `${event.id} ${event.content}`)
+        .sort();
+      const packets = packetsOf(events, draws);
+      for (let order = 0; order < 10; order += 1)
+        expect(heldOf(foldAll(shuffled(packets, draws))), `trial ${trial}`).toEqual(expected);
     }
   });
 
@@ -996,6 +1039,24 @@ describe('canonical event set', () => {
       expect(idsOf(foldAll([first, second])).sort(), `${kind}`).toEqual(
         [`${kind}-first`, `${kind}-second`].sort()
       );
+    }
+
+    // **And the rule over every event, not the events above.** Three reviews
+    // each found a mutation those fixtures let through, one dimension at a
+    // time; so events are drawn across every dimension the rule could read —
+    // kind, author, `d` absent, empty or named, an unrelated tag that varies,
+    // content, a relay, `created_at` ties, ids in no relation to recency — and
+    // what the fold keeps is compared, payload and all, with what NIP-01 keeps
+    // (`helpers/nip01.ts`, which calls nothing of the library's).
+    const rand = mulberry32(0xb5c1);
+    for (let trial = 0; trial < 300; trial += 1) {
+      const events = arbitraryEvents(rand, 10);
+      const expected = [...winnersOf(events.map((fields) => ev(fields).event)).values()]
+        .map((event) => `${event.id} ${event.content}`)
+        .sort();
+      const packets = packetsOf(events, rand);
+      for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)])
+        expect(heldOf(foldAll(order)), `trial ${trial}`).toEqual(expected);
     }
   });
 

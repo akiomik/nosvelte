@@ -4,6 +4,7 @@ import type { OwnedPacket } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
 import { emptyEventSet, foldEvent, project, retainNewest, selectMany } from '$lib/v1/eventset.js';
 
+import { arbitraryEvents, mulberry32, shuffled, winnersOf } from './helpers/nip01.js';
 import { ownedEventPacket } from './helpers/relay.js';
 
 /**
@@ -91,12 +92,24 @@ function shownOf(set: CachedEventSet, at: number, superseded: readonly string[])
 }
 
 /**
- * The bounds every arm below is run at. One alone cannot see a fold that
+ * The bounds both landing arms below are run at. One alone cannot see a fold that
  * keeps both revisions: the bound throws one of them away and hides the
  * defect, so the larger bounds are where a revision that should have been
  * replaced shows up beside its replacement.
  */
 const BOUNDS = [1, 2, 3] as const;
+
+/**
+ * The ids among `events` that NIP-01 supersedes — every revision but the one
+ * its coordinate keeps — by `helpers/nip01.ts`, which calls nothing of the
+ * library's.
+ */
+function supersededAmong(events: readonly OwnedPacket[]): string[] {
+  const kept = new Set(
+    [...winnersOf(events.map(({ event }) => event)).values()].map(({ id }) => id)
+  );
+  return events.map(({ event }) => event.id).filter((id) => !kept.has(id));
+}
 
 describe('a bounded set that carries a replacement', () => {
   it('ES6i: a set of exactly `retain` entries is returned untouched, and one more is cut', () => {
@@ -166,6 +179,23 @@ describe('a bounded set that carries a replacement', () => {
           `retain ${retain}: orders publishing a superseded replaceable`
         ).toEqual([]);
       }
+    }
+
+    // **And over drawn events, not only these.** Every class with a coordinate
+    // — the specials, the range, addressable under each kind of `d` — beside
+    // regular competitors, ties common, at every bound and in several orders,
+    // the instant held still: whatever the bound evicts, no revision NIP-01
+    // supersedes is published. A fixture of one kind could not see a key that
+    // broke for another.
+    const rand = mulberry32(0xb5c4);
+    for (let trial = 0; trial < 300; trial += 1) {
+      const packets = arbitraryEvents(rand, 8).map(ev);
+      const superseded = supersededAmong(packets);
+      for (const retain of BOUNDS)
+        for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
+          const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
+          expect(shownOf(set, NOW, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
+        }
     }
   });
 
@@ -250,6 +280,24 @@ describe('a bounded set that carries a replacement', () => {
           `${competitor.event.id}, retain ${retain}: superseded published after the clock moved`
         ).toEqual([]);
       }
+    }
+
+    // **And over drawn events whose regular members expire between the
+    // arrivals**, so the clock moves across deadlines while revisions are
+    // still arriving, at every bound and in several orders.
+    const rand = mulberry32(0xb5c5);
+    for (let trial = 0; trial < 300; trial += 1) {
+      const packets = arbitraryEvents(rand, 8, { expiries: [150, 250, 350] }).map(ev);
+      const superseded = supersededAmong(packets);
+      for (const retain of BOUNDS)
+        for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
+          const instants = order.map((_, at) => 100 + at * 50);
+          const set = foldBoundedAt(retain)(
+            order.map((packet, at) => [packet, instants[at] as number] as const)
+          );
+          const last = instants.at(-1) as number;
+          expect(shownOf(set, last, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
+        }
     }
   });
 });
