@@ -1226,14 +1226,20 @@ one of them; a port inherits the protocol from NIP-01 and these from here, so ea
   one identifier.
 - **Every string these rules read is compared exactly.** NIP-01 describes tags as "arbitrary string
   arrays" and gives no folding, so case, Unicode form and whitespace all distinguish two values.
-- **Two packets with one id are one event, and the first to arrive is kept whole.** The id is the
+- **Two packets with one id are one event, and the first one folded is kept whole.** The id is the
   hash of every field these rules read, but not of `sig` — BIP-340 admits several valid signatures
-  for one id — nor of `ots` (0002). The fold keeps the first packet of an id and returns the set
-  unchanged for a later one, so a packet that differs only there is a replay (`B5-C3`). The price:
-  which valid signature, and which `ots`, a set shows follows the arrival order, so the order
-  independence `B5-C2` contracts is of everything the id commits to. Choosing one deterministically
-  (the lowest `sig`, say) would make a later packet change a set the replay row says it leaves
-  alone, and would still need a rule for `ots`.
+  for one id — nor of `ots` (0002). The fold keeps the first packet of an id it folds and returns
+  the set unchanged for a later one, so a packet that differs only there is a replay (`B5-C3`). Why:
+  a later packet carries no more authority than the first — a lower signature is not a better one,
+  and `ots` is not covered by the signature at all — so replacing the event would publish a change,
+  and wake every reader, with nothing to show for it. "Folded", not "arrived": verification runs
+  between the wire and the fold and can reorder packets. It is a rule about which packet is held,
+  and promises nothing about an id the set no longer holds. The price: which valid signature and
+  which `ots` a set shows follows the fold order, so the order independence `B5-C2` contracts is of
+  everything the id commits to; and a packet that carries an `ots` proof does not replace one
+  without. NIP-03 now carries attestations as separate kind-1040 events, so a proof store, if one is
+  wanted, belongs beside the event set and keyed by id. All of this assumes the id is the hash of
+  the fields, which admission does not check yet (#138).
 
 The event set's tests carry the same split: their oracle lists each rule with its source, a sentence
 of NIP-01 or this paragraph.

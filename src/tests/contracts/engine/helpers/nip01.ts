@@ -104,7 +104,7 @@ export const RULES: readonly Rule[] = [
     }
   },
   {
-    rule: 'two packets with one id are one event: the first to arrive is kept whole, and a later one changes nothing',
+    rule: 'two packets with one id are one event: the first one folded is kept whole, and a later one changes nothing',
     source: {
       from: '0003',
       decides:
@@ -280,15 +280,16 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: 'Each tag is an array of one or more strings' },
     comparison: 'the first element is the name',
     enumerated:
-      'one-element tags, tags with extra elements up to ten, the `d` tag after two others, two `d` tags in both orders of their values, three whose first is neither the smallest, the largest nor the last, a value-less `d`',
-    swept: 'the same shapes, with zero to three tags before the `d` tags'
+      'one-element tags, tags with extra elements up to ten (an unrelated tag, and the `d` tag after its value), the `d` tag after two others, two `d` tags in both orders of their values, three whose first is neither the smallest, the largest nor the last, a value-less `d`',
+    swept:
+      'zero to three unrelated tags of one, two or three elements, then no `d`, one `d`, one with an extra element, two, an empty then a named one, or a value-less one, and sometimes one more unrelated tag after them — not the ten-element tags nor the three-`d` shape'
   },
   {
     field: 'tag name',
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'exact',
     enumerated:
-      "`d`, and D_LOOKALIKES (another case, padding on either side, the compatibility form, a part after a colon or a NUL, a percent-escape) before and instead of it; every string fold applies to tag names unless NOT_FOR_TAG_NAMES exempts it; and, since a name is carried as well as read, both members of every STRING_PAIRS pair as an unrelated tag's name",
+      "`d`, and D_LOOKALIKES (another case, padding on either side, the compatibility form, a part after a colon or a NUL, a percent-escape, a character outside the BMP after it, it as a JSON string, and it followed by each character NIP-01's serialization escapes) before and instead of it; every string fold applies to tag names unless NOT_FOR_TAG_NAMES exempts it; and, since a name is carried as well as read, both members of every STRING_PAIRS pair as an unrelated tag's name",
     swept: 'D_LOOKALIKES and two unrelated names'
   },
   {
@@ -304,8 +305,8 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'not read by the rules',
     enumerated:
-      "both members of every STRING_PAIRS pair as an unrelated tag's value, the element after it, and the tenth element",
-    swept: 'every string in STRING_PAIRS'
+      "both members of every STRING_PAIRS pair as an unrelated tag's value, the element after it and its tenth element, and as the `d` tag's third and tenth elements",
+    swept: 'every string in STRING_PAIRS, as the second or third element'
   },
   {
     field: 'content',
@@ -315,7 +316,7 @@ export const FIELDS: readonly Field[] = [
     },
     comparison: 'not read by the rules; carried whole',
     enumerated:
-      'both members of every STRING_PAIRS pair, for every kind with a coordinate. Synthetic for kind 0 as for every kind: the fold never parses content, so kind 0 metadata JSON is not used',
+      "both members of every STRING_PAIRS pair, for every kind with a coordinate and every regular kind — JSON strings and objects among them, and each character NIP-01's serialization escapes. Kind 0 gets the same strings as every kind, so its metadata form is represented by the JSON objects, not by metadata documents",
     swept: 'strings from STRING_PAIRS around six hex digits, independent of the id'
   },
   {
@@ -429,7 +430,12 @@ export function arbitraryEvents(
     const placeD = (event: Partial<Nostr.Event>, d: string[][]): void => {
       event.kind = addressable;
       event.pubkey = authors[0] as string;
-      event.tags = [...(event.tags ?? []).filter(([name]) => name !== 'd'), ...d];
+      // An expiry is drawn for regular events only (`B5-C5`), so it goes
+      // with the kind it was drawn for.
+      event.tags = [
+        ...(event.tags ?? []).filter(([name]) => name !== 'd' && name !== 'expiration'),
+        ...d
+      ];
     };
     placeD(drawn[0] as Partial<Nostr.Event>, [['d', focus[0]]]);
     placeD(drawn[1] as Partial<Nostr.Event>, [['d', focus[1]]]);

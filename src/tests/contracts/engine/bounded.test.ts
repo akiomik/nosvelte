@@ -5,7 +5,15 @@ import type { OwnedPacket } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
 import { emptyEventSet, foldEvent, project, retainNewest, selectMany } from '$lib/v1/eventset.js';
 
-import { competitorsFor, minimalPairs, rankingVariants, type Rewrite } from './helpers/design.js';
+import {
+  competitorsFor,
+  CROSSINGS,
+  type Dimension,
+  minimalPairs,
+  PAYLOAD_FIELDS,
+  rankingVariants,
+  type Rewrite
+} from './helpers/design.js';
 import { arbitraryEvents, mulberry32, shuffled, winnersOf } from './helpers/nip01.js';
 import { ownedEventPacket } from './helpers/relay.js';
 
@@ -102,14 +110,33 @@ function shownOf(set: CachedEventSet, at: number, superseded: readonly string[])
 const BOUNDS = [1, 2, 3] as const;
 
 /**
- * Every enumerated case whose two events share a coordinate (`helpers/design.ts`),
- * as the revision the rules keep and the one they supersede — the design's
- * cases change one dimension each, so a bound meets every value and every
- * recency relation the identity arms do. Two packets of one id are left out:
- * they are one event, not a revision and the one it supersedes.
+ * The dimensions a bound's arms take from the design: **selection and
+ * retention, not value preservation.** A bound decides which revision keeps a
+ * slot from the coordinate (`kind`, `author`, `d value`, `d shape`) and the
+ * ranking (`instant`); whether a kept event's payload is carried whole is the
+ * identity arms' question (ES5, ES28), and whether the bound's ranking reads a
+ * payload field is `rankingVariants`' — every payload field, run against the
+ * ids both ways wherever a pair ties. Running every payload string through
+ * every bounded trio multiplied the runs without asking anything new.
+ */
+const BOUNDED_DIMENSIONS: readonly Dimension[] = [
+  'kind',
+  'author',
+  'd value',
+  'd shape',
+  'instant'
+];
+
+/**
+ * Every enumerated case of those dimensions whose two events share a
+ * coordinate (`helpers/design.ts`), as the revision the rules keep and the one
+ * they supersede. Two packets of one id are not among them: they are one
+ * event, not a revision and the one it supersedes.
  */
 const REVISION_PAIRS = minimalPairs()
-  .filter(({ sameCoordinate, dimension }) => sameCoordinate && dimension !== 'same id')
+  .filter(
+    ({ sameCoordinate, dimension }) => sameCoordinate && BOUNDED_DIMENSIONS.includes(dimension)
+  )
   .map(({ label, events }) => {
     const [a, b] = events as [Partial<Nostr.Event>, Partial<Nostr.Event>];
     const keptId = [...winnersOf([ev(a).event, ev(b).event]).values()][0]?.id;
@@ -134,7 +161,7 @@ const variantsFor = (
  * pair, every competitor, every ranking variant, three bounds, six orders.
  * Asserted exactly, so the design's size is a fact the arms state.
  */
-const BOUNDED_RUNS = 6_244_848;
+const BOUNDED_RUNS = 2_784_528;
 
 /** The time the enumerated bounded arms are given; the budget above is what they are held to. */
 const ENUMERATED = 120_000;
@@ -246,6 +273,14 @@ describe('a bounded set that carries a replacement', () => {
       // ties, every ranking variant (each payload field running against the ids
       // both ways), at every bound and in every order, the superseded revision
       // from another relay, the instant held still.
+      // Every dimension of the design is placed: in the bound's, among the
+      // payload fields the ranking variants cover, or neither a revision nor
+      // a coordinate (two packets of one id, regular events). A dimension
+      // added to the design has to be placed here before this passes.
+      expect(
+        [...BOUNDED_DIMENSIONS, ...PAYLOAD_FIELDS, 'same id', 'regular'].sort(),
+        'every dimension placed'
+      ).toEqual(Object.keys(CROSSINGS).sort());
       const offenders: string[] = [];
       let runs = 0;
       for (const { label, winner, superseded } of REVISION_PAIRS)

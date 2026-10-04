@@ -63,6 +63,19 @@ export const HEX_PAIRS: readonly (readonly [string, string])[] = [
 ];
 
 /**
+ * The characters NIP-01's serialization escapes — "A line break (`0x0A`) …
+ * A double quote (`0x22`) … A backslash (`0x5C`) … A carriage return (`0x0D`)
+ * … A tab character (`0x09`) … A backspace, (`0x08`) … A form feed, (`0x0C`)"
+ * — a finite family a reader that handles them carelessly drops or rewrites.
+ * Each gives a pair (it between two letters, and the two letters alone), a
+ * fold that removes it, and a lookalike of `d`.
+ */
+export const SERIALIZATION_ESCAPED = ['\n', '"', '\\', '\r', '\t', '\b', '\f'] as const;
+
+/** A name for an escaped character, for labels. */
+const escapedName = (character: string): string => JSON.stringify(character).slice(1, -1);
+
+/**
  * Strings in pairs that differ by one thing a careless reader folds: case,
  * Unicode's composed and decomposed forms, compatibility forms, surrounding,
  * inner and line-ending whitespace, a prefix, a suffix, the part after a colon,
@@ -90,6 +103,7 @@ export const STRING_PAIRS: readonly (readonly [string, string])[] = [
   ['s😀', 's😁'],
   ['"s"', 's'],
   ['{"a": 1}', '{"a":1}'],
+  ...SERIALIZATION_ESCAPED.map((character) => [`a${character}b`, 'ab'] as const),
   ['', 's']
 ];
 
@@ -109,7 +123,8 @@ export const D_LOOKALIKES = [
   'd\0x',
   '%64',
   'd😀',
-  '"d"'
+  '"d"',
+  ...SERIALIZATION_ESCAPED.map((character) => `d${character}`)
 ] as const;
 
 /**
@@ -140,6 +155,9 @@ export const INSTANTS = [
   2 ** 53,
   2 ** 60
 ] as const;
+
+/** The instants every kind with a coordinate is tied at: negative, zero, small, fractional and 2^53. */
+export const TIE_INSTANTS = [-1, 0, 10, 10.25, 2 ** 53] as const;
 
 /** A transformation a careless reader applies, and the domain it is checked against. */
 export type Fold =
@@ -242,7 +260,11 @@ const STRING_FOLDS: readonly {
     apply: (value: string) => Array.from(value, (point) => point[0]).join('')
   },
   { name: 'JSON-decoded', apply: jsonDecoded },
-  { name: 'JSON re-serialised', apply: jsonReserialised }
+  { name: 'JSON re-serialised', apply: jsonReserialised },
+  ...SERIALIZATION_ESCAPED.map((character) => ({
+    name: `without ${escapedName(character)}`,
+    apply: (value: string) => value.split(character).join('')
+  }))
 ];
 
 /**
@@ -423,10 +445,10 @@ export const CROSSINGS: {
 } = {
   kind: { kinds: COORDINATE_KINDS, relations: RELATIONS },
   author: { kinds: COORDINATE_KINDS, relations: RELATIONS },
-  content: { kinds: COORDINATE_KINDS, relations: RELATIONS },
-  sig: { kinds: COORDINATE_KINDS, relations: RELATIONS },
-  tags: { kinds: COORDINATE_KINDS, relations: RELATIONS },
-  ots: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  content: { kinds: [...COORDINATE_KINDS, ...REGULAR], relations: RELATIONS },
+  sig: { kinds: [...COORDINATE_KINDS, ...REGULAR], relations: RELATIONS },
+  tags: { kinds: [...COORDINATE_KINDS, ...REGULAR], relations: RELATIONS },
+  ots: { kinds: [...COORDINATE_KINDS, ...REGULAR], relations: RELATIONS },
   'd value': { kinds: COORDINATE_KINDS, relations: RELATIONS },
   'd shape': { kinds: COORDINATE_KINDS, relations: RELATIONS },
   instant: { kinds: COORDINATE_KINDS, relations: RELATIONS },
@@ -482,75 +504,57 @@ export const PAYLOAD_DOMAINS = {
 } as const satisfies { readonly [F in (typeof PAYLOAD_FIELDS)[number]]: 'string' | 'hex' };
 
 /**
- * A position in an unrelated tag, added after the event's own tags: `value` at
- * `element`, and placeholders before it.
- */
-function tagPositions<const N extends string>(elements: Readonly<Record<N, number>>) {
-  return Object.fromEntries(
-    Object.entries<number>(elements).map(([name, element]) => [
-      name,
-      {
-        field: 'tags' as const,
-        element,
-        at: (kind: number, value: string) => ({
-          tags: [
-            ...(base(kind).tags ?? []),
-            [...['t', 'v', '2', '3', '4', '5', '6', '7', '8'].slice(0, element), value]
-          ]
-        }),
-        read: (event: Partial<Nostr.Event>) => event.tags?.at(-1)?.[element]
-      }
-    ])
-  ) as Record<
-    N,
-    {
-      readonly field: 'tags';
-      readonly element: number;
-      readonly at: (kind: number, value: string) => Partial<Nostr.Event>;
-      readonly read: (event: Partial<Nostr.Event>) => string | undefined;
-    }
-  >;
-}
-
-/**
- * **Every place a payload string sits** — content, `ots`, and an unrelated
- * tag's name, value, the element after it and one far after it — with how to
- * put a value there and read it back. A tag name is read to
- * find `d` and also carried whole; this is its second role. Each position is
- * crossed with every pair in `STRING_PAIRS`, and `ES29` refuses a position or
- * a pair without a case.
+ * **Every place a payload string sits** — content, `ots`, an unrelated tag's
+ * name, value, the element after it and its tenth, and the `d` tag's elements
+ * after its value — declared, not built: {@link place} is the one function that
+ * puts a value there. A tag name is read to find `d` and also carried whole;
+ * this is its second role. Each position is crossed with every pair in
+ * `STRING_PAIRS`, and `ES29` refuses a position or a pair without a case, and
+ * reads each case's events itself to see the value where the position says.
  */
 export const PAYLOAD_STRING_POSITIONS = {
-  content: {
-    field: 'content',
-    at: (_kind: number, value: string) => ({ content: value }),
-    read: (event: Partial<Nostr.Event>) => event.content
-  },
-  ots: {
-    field: 'ots',
-    at: (_kind: number, value: string) => ({ ots: value }),
-    read: (event: Partial<Nostr.Event>) => event.ots
-  },
-  ...tagPositions({
-    'tag name': 0,
-    'tag value': 1,
-    'tag element after the value': 2,
-    'tag element far after the value': 9
-  })
+  content: { field: 'content' },
+  ots: { field: 'ots' },
+  'tag name': { field: 'tags', tag: 'unrelated', element: 0 },
+  'tag value': { field: 'tags', tag: 'unrelated', element: 1 },
+  'tag element after the value': { field: 'tags', tag: 'unrelated', element: 2 },
+  'tag element far after the value': { field: 'tags', tag: 'unrelated', element: 9 },
+  'd tag element after the value': { field: 'tags', tag: 'd', element: 2 },
+  'd tag element far after the value': { field: 'tags', tag: 'd', element: 9 }
 } as const satisfies Readonly<
   Record<
     string,
-    {
-      readonly field: (typeof PAYLOAD_FIELDS)[number];
-      /** For a tag, which element: NIP-01's name, value, and what follows. */
-      readonly element?: number;
-      readonly at: (kind: number, value: string) => Partial<Nostr.Event>;
-      /** Where the value is read back from an event the position built. */
-      readonly read: (event: Partial<Nostr.Event>) => string | undefined;
-    }
+    | { readonly field: 'content' | 'ots' }
+    | {
+        readonly field: 'tags';
+        /** Which tag: an unrelated one after the event's own, or the `d` tag. */
+        readonly tag: 'unrelated' | 'd';
+        /** Which element: NIP-01's name, value, and what follows. */
+        readonly element: number;
+      }
   >
 >;
 export type PayloadPosition = keyof typeof PAYLOAD_STRING_POSITIONS;
+
+/** What fills a tag before the element a position puts its value at. */
+const FILLER = ['t', 'v', '2', '3', '4', '5', '6', '7', '8'] as const;
+
+/**
+ * The overrides that put `value` at `position` in an event of `kind`: the
+ * field itself; or a tag after the event's own whose `element` is the value;
+ * or, for the `d` tag, one `d` tag whose value is `s` and whose `element` is
+ * the value — the same coordinate as the base event's.
+ */
+export function place(
+  kind: number,
+  position: PayloadPosition,
+  value: string
+): Partial<Nostr.Event> {
+  const where = PAYLOAD_STRING_POSITIONS[position];
+  if (where.field !== 'tags') return { [where.field]: value };
+  if (where.tag === 'd') return { tags: [['d', 's', ...FILLER.slice(2, where.element), value]] };
+  return { tags: [...(base(kind).tags ?? []), [...FILLER.slice(0, where.element), value]] };
+}
 
 /** An id distinct from every other in a case, built from `seed` without relating it to recency. */
 const idFor = (seed: string): string => `${seed}${run('0', 64 - seed.length)}`;
@@ -595,6 +599,53 @@ export function minimalPairs(): Case[] {
         });
       }
   };
+  /**
+   * Fields the coordinate does not read, for an event of `kind`: every payload
+   * string position with every pair of strings, another signature, a tag with
+   * one element or several, and `ots` absent or present. For a kind with a
+   * coordinate they are one coordinate and the winner is kept whole; for a
+   * regular kind they are two events, each kept whole.
+   */
+  const payload = (kind: number, sameCoordinate: boolean) => {
+    for (const position of Object.keys(PAYLOAD_STRING_POSITIONS) as PayloadPosition[])
+      for (const pair of STRING_PAIRS)
+        add(
+          PAYLOAD_STRING_POSITIONS[position].field,
+          `kind ${kind}, ${position} ${JSON.stringify(pair[0])} / ${JSON.stringify(pair[1])}`,
+          [base(kind, place(kind, position, pair[0])), base(kind, place(kind, position, pair[1]))],
+          sameCoordinate,
+          { position, pair }
+        );
+    for (const [at, [x, y]] of HEX_PAIRS.entries())
+      add(
+        'sig',
+        `kind ${kind}, sig from hex pair ${at}`,
+        [base(kind, { sig: `${x}${x}` }), base(kind, { sig: `${y}${y}` })],
+        sameCoordinate
+      );
+    const coordinateTags = base(kind).tags ?? [];
+    add(
+      'tags',
+      `kind ${kind}, a one-element tag`,
+      [base(kind), base(kind, { tags: [...coordinateTags, ['client']] })],
+      sameCoordinate
+    );
+    add(
+      'tags',
+      `kind ${kind}, an unrelated tag with extra elements`,
+      [
+        base(kind, { tags: [...coordinateTags, ['t', 'x']] }),
+        base(kind, { tags: [...coordinateTags, ['t', 'y', 'z']] })
+      ],
+      sameCoordinate
+    );
+    add(
+      'ots',
+      `kind ${kind}, ots absent / present`,
+      [base(kind), base(kind, { ots: 's' })],
+      sameCoordinate
+    );
+  };
   // Kind: two kinds with a coordinate are two coordinates, every pair of them.
   for (const [at, x] of COORDINATE_KINDS.entries())
     for (const y of COORDINATE_KINDS.slice(at + 1))
@@ -608,44 +659,7 @@ export function minimalPairs(): Case[] {
         [base(kind, { pubkey: x }), base(kind, { pubkey: y })],
         false
       );
-    // Fields the coordinate does not read: one coordinate, the winner kept
-    // whole. Every payload string position, with every pair of strings.
-    for (const [position, { field, at }] of Object.entries(PAYLOAD_STRING_POSITIONS) as [
-      PayloadPosition,
-      (typeof PAYLOAD_STRING_POSITIONS)[PayloadPosition]
-    ][])
-      for (const pair of STRING_PAIRS)
-        add(
-          field,
-          `kind ${kind}, ${position} ${JSON.stringify(pair[0])} / ${JSON.stringify(pair[1])}`,
-          [base(kind, at(kind, pair[0])), base(kind, at(kind, pair[1]))],
-          true,
-          { position, pair }
-        );
-    for (const [at, [x, y]] of HEX_PAIRS.entries())
-      add(
-        'sig',
-        `kind ${kind}, sig from hex pair ${at}`,
-        [base(kind, { sig: `${x}${x}` }), base(kind, { sig: `${y}${y}` })],
-        true
-      );
-    const coordinateTags = base(kind).tags ?? [];
-    add(
-      'tags',
-      `kind ${kind}, a one-element tag`,
-      [base(kind), base(kind, { tags: [...coordinateTags, ['client']] })],
-      true
-    );
-    add(
-      'tags',
-      `kind ${kind}, an unrelated tag with extra elements`,
-      [
-        base(kind, { tags: [...coordinateTags, ['t', 'x']] }),
-        base(kind, { tags: [...coordinateTags, ['t', 'y', 'z']] })
-      ],
-      true
-    );
-    add('ots', `kind ${kind}, ots absent / present`, [base(kind), base(kind, { ots: 's' })], true);
+    payload(kind, true);
     // The `d` value: part of an addressable coordinate, read exactly; not part
     // of a replaceable one.
     for (const [x, y] of STRING_PAIRS)
@@ -725,7 +739,9 @@ export function minimalPairs(): Case[] {
         isReplaceableKind(kind) || same
       );
   }
-  // Regular kinds: no coordinate beyond the event, whatever else they share.
+  // Regular kinds: no coordinate beyond the event, whatever else they share,
+  // and every payload value kept whole on each.
+  for (const kind of REGULAR) payload(kind, false);
   for (const kind of REGULAR)
     add('regular', `kind ${kind}, two events`, [base(kind), base(kind)], false);
   // Recency, for every kind with a coordinate: every ordered pair of instants
@@ -749,7 +765,7 @@ export function minimalPairs(): Case[] {
             kinds: [kind],
             relation: 'newer'
           });
-    for (const instant of [-1, 0, 10, 10.25, 2 ** 53] as const)
+    for (const instant of TIE_INSTANTS)
       for (const [at, [x, y]] of HEX_PAIRS.entries())
         cases.push({
           label: `kind ${kind}, tie at ${instant}, ids from hex pair ${at}`,
@@ -766,7 +782,7 @@ export function minimalPairs(): Case[] {
   // **Two packets of one id**, for every kind: everything the id commits to
   // equal, and one field outside it different — another valid signature, or
   // another `ots` — while every other optional field is absent, and present
-  // with one value on both. They are one event, and the first to arrive is
+  // with one value on both. They are one event, and the first one folded is
   // kept (0003). Built from `OUTSIDE_THE_ID` and `OPTIONAL`, so a field given
   // either role is varied, and crossed with the others' presence, here.
   const outside: Readonly<

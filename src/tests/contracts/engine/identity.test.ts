@@ -59,6 +59,7 @@ import { entryKeyOf } from '$lib/v1/useStreamedReq.svelte.js';
 import {
   base,
   type Case,
+  COORDINATE_KINDS,
   CROSSINGS,
   D_LOOKALIKES,
   type Dimension,
@@ -77,10 +78,14 @@ import {
   PAYLOAD_DOMAINS,
   PAYLOAD_FIELDS,
   PAYLOAD_STRING_POSITIONS,
+  type PayloadPosition,
   permutations,
+  place,
   rankingVariants,
   RELATIONS,
-  STRING_PAIRS
+  SERIALIZATION_ESCAPED,
+  STRING_PAIRS,
+  TIE_INSTANTS
 } from './helpers/design.js';
 import {
   arbitraryEvents,
@@ -773,6 +778,18 @@ const heldOf = (set: CachedEventSet): string[] =>
 /** Another 128-digit signature than `sig`. */
 const run128 = (sig: string): string => (sig === 'f'.repeat(128) ? '0' : 'f').repeat(128);
 
+/**
+ * The value an event holds at a payload position, read without `place`: the
+ * field; or the last tag, or the `d` tag, when it is exactly long enough for
+ * the position's element to be its last.
+ */
+const atPosition = (event: Partial<Nostr.Event>, position: PayloadPosition): string | undefined => {
+  const where = PAYLOAD_STRING_POSITIONS[position];
+  if (where.field !== 'tags') return event[where.field];
+  const tag = where.tag === 'd' ? event.tags?.find(([name]) => name === 'd') : event.tags?.at(-1);
+  return tag?.length === where.element + 1 ? tag[where.element] : undefined;
+};
+
 /** Held events with the fields outside the id taken out: what the id commits to. */
 const committedOf = (held: readonly string[]): string[] =>
   held
@@ -816,9 +833,9 @@ const CASES = minimalPairs();
  * design's size is a fact the arms state; and the time they are given, which
  * is not what they are held to.
  */
-const ES3_REPLAYS = 298_560;
-const ES5_FOLDS = 298_560;
-const ES28_FOLDS = 74_640;
+const ES3_REPLAYS = 707_840;
+const ES5_FOLDS = 707_840;
+const ES28_FOLDS = 176_960;
 const ENUMERATED = 120_000;
 
 /** The packets for `events`, half of them from a second relay. */
@@ -1193,13 +1210,55 @@ describe('canonical event set', () => {
           `${field}: a payload string position`
         ).toContain(field);
     // A tag is "an array of one or more strings" whose first is its name, its
-    // second its value, and the rest further elements (NIP-01): each is a place.
-    // NIP-01's own longest example is four elements; one place is beyond it.
-    const elements = Object.values(PAYLOAD_STRING_POSITIONS)
-      .filter((position) => position.field === 'tags')
-      .map((position) => ('element' in position ? position.element : -1));
-    expect(elements.filter((element) => element <= 2).sort()).toEqual([0, 1, 2]);
-    expect(elements.some((element) => element >= 4)).toBe(true);
+    // second its value, and the rest further elements (NIP-01): each is a place,
+    // in an unrelated tag and — after its name and value, which are the
+    // identifier — in the `d` tag. NIP-01's own longest example is four
+    // elements; one place in each is beyond it.
+    for (const [tag, payloadElements] of [
+      ['unrelated', [0, 1, 2]],
+      ['d', [2]]
+    ] as const) {
+      const elements = Object.values(PAYLOAD_STRING_POSITIONS).flatMap((position) =>
+        position.field === 'tags' && position.tag === tag ? [position.element] : []
+      );
+      expect(elements.filter((element) => element <= 2).sort(), tag).toEqual([...payloadElements]);
+      expect(
+        elements.some((element) => element >= 4),
+        `${tag}: beyond four`
+      ).toBe(true);
+    }
+    // NIP-01's escaped characters, written out again by code point: the pairs,
+    // folds and lookalikes are derived from `SERIALIZATION_ESCAPED`, so one
+    // dropped from it would drop all three together and nothing else would see.
+    expect([...SERIALIZATION_ESCAPED]).toEqual([
+      '\u000a',
+      '\u0022',
+      '\u005c',
+      '\u000d',
+      '\u0009',
+      '\u0008',
+      '\u000c'
+    ]);
+    // `place` pinned to events written out by hand, so a materialiser that
+    // drifts — a value at the wrong element — cannot agree with itself.
+    expect(place(30023, 'content', 'X')).toEqual({ content: 'X' });
+    expect(place(0, 'tag name', 'X')).toEqual({ tags: [['X']] });
+    expect(place(30023, 'tag value', 'X')).toEqual({
+      tags: [
+        ['d', 's'],
+        ['t', 'X']
+      ]
+    });
+    expect(place(30023, 'tag element far after the value', 'X')).toEqual({
+      tags: [
+        ['d', 's'],
+        ['t', 'v', '2', '3', '4', '5', '6', '7', '8', 'X']
+      ]
+    });
+    expect(place(0, 'd tag element after the value', 'X')).toEqual({ tags: [['d', 's', 'X']] });
+    expect(place(30023, 'd tag element far after the value', 'X')).toEqual({
+      tags: [['d', 's', '2', '3', '4', '5', '6', '7', '8', 'X']]
+    });
     for (const position of Object.keys(PAYLOAD_STRING_POSITIONS))
       for (const pair of STRING_PAIRS)
         expect(
@@ -1224,10 +1283,10 @@ describe('canonical event set', () => {
         drift.push(`${one.label}: relation`);
       if (one.dimension === 'same id' && a.id !== b.id) drift.push(`${one.label}: one id`);
       if (one.payload !== undefined) {
-        const { read } = PAYLOAD_STRING_POSITIONS[one.payload.position];
         const [x, y] =
           one.direction === 'as built' ? one.payload.pair : [...one.payload.pair].reverse();
-        if (read(a) !== x || read(b) !== y) drift.push(`${one.label}: the pair as built`);
+        if (atPosition(a, one.payload.position) !== x || atPosition(b, one.payload.position) !== y)
+          drift.push(`${one.label}: the pair where its position says`);
       }
       if (one.direction === 'as built') {
         const twin = byLabel.get(`${one.label}, swapped`);
@@ -1240,6 +1299,40 @@ describe('canonical event set', () => {
       }
     }
     expect(drift).toEqual([]);
+
+    // **The instants the recency cases use are the catalogue's, by value**:
+    // for every kind with a coordinate, every ordered pair of `INSTANTS` with
+    // the ids in both orders, and a tie at each of `TIE_INSTANTS` — read from
+    // the events, not from the labels.
+    for (const kind of COORDINATE_KINDS) {
+      const recency = CASES.filter(
+        (one) =>
+          one.dimension === 'instant' && one.direction === 'as built' && one.kinds.includes(kind)
+      ).map(({ events: [a, b] }) => [a?.created_at, b?.created_at, (a?.id ?? '') < (b?.id ?? '')]);
+      const newer = recency.filter(([x, y]) => x !== y).map((row) => JSON.stringify(row));
+      const expected = INSTANTS.flatMap((x, at) =>
+        INSTANTS.slice(at + 1).flatMap((y) => [true, false].map((up) => JSON.stringify([x, y, up])))
+      );
+      expect(newer.sort(), `kind ${kind}: ordered pairs`).toEqual(expected.sort());
+      const tied = [...new Set(recency.filter(([x, y]) => x === y).map(([x]) => x))].sort();
+      expect(tied, `kind ${kind}: ties`).toEqual([...TIE_INSTANTS].sort());
+    }
+
+    // **And each ranking variant orders its field against the ids both ways**:
+    // the winner's value above the competitor's above the superseded one's,
+    // and the reverse — compared as the bound could read them.
+    const probe = base(1, { ots: 'o' });
+    for (const field of PAYLOAD_FIELDS) {
+      const orders = rankingVariants().map((variant) =>
+        variant.map((rewrite) => JSON.stringify(rewrite(probe)[field]))
+      );
+      const above = ([w, l, c]: string[]) =>
+        (w as string) > (c as string) && (c as string) > (l as string);
+      const below = ([w, l, c]: string[]) =>
+        (l as string) > (c as string) && (c as string) > (w as string);
+      expect(orders.some(above), `${field}: winner above`).toBe(true);
+      expect(orders.some(below), `${field}: winner below`).toBe(true);
+    }
 
     // Which fields are outside the id is NIP-01's serialization, not a choice.
     expect([...OUTSIDE_THE_ID].sort()).toEqual(
@@ -1337,8 +1430,8 @@ describe('canonical event set', () => {
       // whole, with the drop noted the same way.
       //
       // **Two packets of one id are the exception, and it is contracted** (0003):
-      // they are one event, the first to arrive is kept whole, and so which
-      // signature and which `ots` the set shows follows the arrival order. The
+      // they are one event, the first one folded is kept whole, and so which
+      // signature and which `ots` the set shows follows the fold order. The
       // set is the same by everything the id commits to, and the kept packet is
       // the first — both halves are compared.
       const offenders: string[] = [];
@@ -1510,8 +1603,8 @@ describe('canonical event set', () => {
         for (const elsewhere of [false, true]) {
           const packets = packetsOfCase(events, elsewhere);
           if (keptOf(packets).length !== (sameCoordinate ? 1 : 2)) offenders.push(`${label}: kept`);
-          // The oracle is given the arrival order: two packets of one id are one
-          // event, and the first to arrive is kept (0003).
+          // The oracle is given the fold order: two packets of one id are one
+          // event, and the first one folded is kept (0003).
           for (const order of [packets, [...packets].reverse()]) {
             folds += 1;
             if (JSON.stringify(heldOf(foldAll(order))) !== JSON.stringify(keptOf(order)))
