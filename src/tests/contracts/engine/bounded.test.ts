@@ -110,58 +110,55 @@ function shownOf(set: CachedEventSet, at: number, superseded: readonly string[])
 const BOUNDS = [1, 2, 3] as const;
 
 /**
- * The dimensions a bound's arms take from the design: **selection and
- * retention, not value preservation.** A bound decides which revision keeps a
- * slot from the coordinate (`kind`, `author`, `d value`, `d shape`) and the
- * ranking (`instant`); whether a kept event's payload is carried whole is the
- * identity arms' question (ES5, ES28), and whether the bound's ranking reads a
- * payload field is `rankingVariants`' — every payload field, run against the
- * ids both ways wherever a pair ties. Running every payload string through
- * every bounded trio multiplied the runs without asking anything new.
+ * The dimensions a bound selects by and that hold revisions — the coordinate's
+ * `d` (`d value`, `d shape`) and the ranking (`instant`) — whose ties are where
+ * the ranking variants run. (`kind` and `author` cases are two coordinates, so
+ * they hold no revision for a bound to supersede.) **A bound sees every payload case too**: a bound that
+ * read a payload value to decide what to keep — one that dropped an entry with
+ * empty content, say — publishes a superseded revision without reading the
+ * ranking at all, so the payload cases cannot be left to the identity arms.
+ * Leaving them out once let exactly that through both bounded landings. A
+ * payload pair carries its own values in both directions, so it runs without
+ * the ranking variants laid over it.
  */
-const BOUNDED_DIMENSIONS: readonly Dimension[] = [
-  'kind',
-  'author',
-  'd value',
-  'd shape',
-  'instant'
-];
+const RANKED_DIMENSIONS: readonly Dimension[] = ['d value', 'd shape', 'instant'];
 
 /**
- * Every enumerated case of those dimensions whose two events share a
- * coordinate (`helpers/design.ts`), as the revision the rules keep and the one
- * they supersede. Two packets of one id are not among them: they are one
- * event, not a revision and the one it supersedes.
+ * Every enumerated case whose two events share a coordinate
+ * (`helpers/design.ts`), as the revision the rules keep and the one they
+ * supersede, with its dimension. Two packets of one id are not among them:
+ * they are one event, not a revision and the one it supersedes.
  */
 const REVISION_PAIRS = minimalPairs()
-  .filter(
-    ({ sameCoordinate, dimension }) => sameCoordinate && BOUNDED_DIMENSIONS.includes(dimension)
-  )
-  .map(({ label, events }) => {
+  .filter(({ sameCoordinate, dimension }) => sameCoordinate && dimension !== 'same id')
+  .map(({ label, events, dimension }) => {
     const [a, b] = events as [Partial<Nostr.Event>, Partial<Nostr.Event>];
     const keptId = [...winnersOf([ev(a).event, ev(b).event]).values()][0]?.id;
     return keptId === a.id
-      ? { label, winner: a, superseded: b }
-      : { label, winner: b, superseded: a };
+      ? { label, dimension, winner: a, superseded: b }
+      : { label, dimension, winner: b, superseded: a };
   });
 
 /**
  * The ranking variants a pair is run with: every one in `rankingVariants` when
- * the two revisions tie on `created_at` — where the bound's tie-break decides
- * which entry keeps the slot — and none otherwise.
+ * the two revisions of a ranked dimension tie on `created_at` — where the
+ * bound's tie-break decides which entry keeps the slot — and none otherwise.
  */
-const variantsFor = (
-  winner: Partial<Nostr.Event>,
-  superseded: Partial<Nostr.Event>
-): readonly (readonly [Rewrite, Rewrite, Rewrite])[] =>
-  winner.created_at === superseded.created_at ? rankingVariants() : rankingVariants().slice(0, 1);
+const variantsFor = ({
+  dimension,
+  winner,
+  superseded
+}: (typeof REVISION_PAIRS)[number]): readonly (readonly [Rewrite, Rewrite, Rewrite])[] =>
+  RANKED_DIMENSIONS.includes(dimension) && winner.created_at === superseded.created_at
+    ? rankingVariants()
+    : rankingVariants().slice(0, 1);
 
 /**
  * How many folds each bounded arm's enumeration runs: every same-coordinate
  * pair, every competitor, every ranking variant, three bounds, six orders.
  * Asserted exactly, so the design's size is a fact the arms state.
  */
-const BOUNDED_RUNS = 2_784_528;
+const BOUNDED_RUNS = 4_582_800;
 
 /** The time the enumerated bounded arms are given; the budget above is what they are held to. */
 const ENUMERATED = 120_000;
@@ -273,19 +270,25 @@ describe('a bounded set that carries a replacement', () => {
       // ties, every ranking variant (each payload field running against the ids
       // both ways), at every bound and in every order, the superseded revision
       // from another relay, the instant held still.
-      // Every dimension of the design is placed: in the bound's, among the
-      // payload fields the ranking variants cover, or neither a revision nor
-      // a coordinate (two packets of one id, regular events). A dimension
-      // added to the design has to be placed here before this passes.
+      // Every dimension of the design is placed: ranked, a payload field, or
+      // holding no revision (another kind or author, two packets of one id,
+      // regular events). A dimension added to the design has to be placed here before
+      // this passes.
       expect(
-        [...BOUNDED_DIMENSIONS, ...PAYLOAD_FIELDS, 'same id', 'regular'].sort(),
+        [...RANKED_DIMENSIONS, ...PAYLOAD_FIELDS, 'kind', 'author', 'same id', 'regular'].sort(),
         'every dimension placed'
       ).toEqual(Object.keys(CROSSINGS).sort());
+      // And every dimension with a revision reaches the bound.
+      expect(
+        [...new Set(REVISION_PAIRS.map(({ dimension }) => dimension))].sort(),
+        'every dimension with a revision is bounded'
+      ).toEqual([...RANKED_DIMENSIONS, ...PAYLOAD_FIELDS].sort());
       const offenders: string[] = [];
       let runs = 0;
-      for (const { label, winner, superseded } of REVISION_PAIRS)
-        for (const competitor of competitorsFor(superseded, winner))
-          for (const [w, l, c] of variantsFor(winner, superseded)) {
+      for (const pair of REVISION_PAIRS)
+        for (const competitor of competitorsFor(pair.superseded, pair.winner))
+          for (const [w, l, c] of variantsFor(pair)) {
+            const { label, winner, superseded } = pair;
             const trio = [ev(w(winner)), elsewhere(ev(l(superseded))), ev(c(competitor))];
             for (const retain of BOUNDS)
               for (const order of permutations(trio)) {
@@ -411,9 +414,10 @@ describe('a bounded set that carries a replacement', () => {
       // the set is read at 600.
       const offenders: string[] = [];
       let runs = 0;
-      for (const { label, winner, superseded } of REVISION_PAIRS)
-        for (const competitor of competitorsFor(superseded, winner, { expiring: true }))
-          for (const [w, l, c] of variantsFor(winner, superseded)) {
+      for (const pair of REVISION_PAIRS)
+        for (const competitor of competitorsFor(pair.superseded, pair.winner, { expiring: true }))
+          for (const [w, l, c] of variantsFor(pair)) {
+            const { label, winner, superseded } = pair;
             const trio = [ev(w(winner)), elsewhere(ev(l(superseded))), ev(c(competitor))];
             for (const retain of BOUNDS)
               for (const order of permutations(trio)) {

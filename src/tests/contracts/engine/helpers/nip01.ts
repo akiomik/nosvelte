@@ -252,7 +252,7 @@ export const FIELDS: readonly Field[] = [
     },
     comparison: 'exact',
     enumerated:
-      '64 hex digits, in pairs differing at the first, a middle or the last digit (HEX_PAIRS)',
+      '64 hex digits, in pairs differing at the first, a middle or the last digit, and one at the first and last in opposite directions (HEX_PAIRS)',
     swept: 'two authors per draw, 64 hex digits sharing a 60-digit prefix'
   },
   {
@@ -324,7 +324,7 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: '64-bytes lowercase hex of the signature' },
     comparison: 'not read by the rules; carried whole',
     enumerated:
-      '128 hex digits differing at one digit, between revisions and between two packets of one id, and all-0, all-8 and all-f in the ranking variants',
+      '128 hex digits: a HEX_PAIRS value written twice, so two signatures differ at two or four digits, between revisions and between two packets of one id; and all-0, all-8 and all-f in the ranking variants',
     swept: '128 hex digits, independent of every other field'
   },
   {

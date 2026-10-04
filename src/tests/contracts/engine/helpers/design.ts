@@ -651,11 +651,11 @@ export function minimalPairs(): Case[] {
     for (const y of COORDINATE_KINDS.slice(at + 1))
       add('kind', `kind ${x} / ${y}`, [base(x), base(y)], false);
   for (const kind of COORDINATE_KINDS) {
-    // Author: two authors are two coordinates, whichever digit differs.
+    // Author: two authors are two coordinates, whichever digits differ.
     for (const [at, [x, y]] of HEX_PAIRS.entries())
       add(
         'author',
-        `kind ${kind}, authors differing at one digit (pair ${at})`,
+        `kind ${kind}, authors from hex pair ${at}`,
         [base(kind, { pubkey: x }), base(kind, { pubkey: y })],
         false
       );
