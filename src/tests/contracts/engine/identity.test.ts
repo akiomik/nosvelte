@@ -816,10 +816,10 @@ const CASES = minimalPairs();
  * design's size is a fact the arms state; and the time they are given, which
  * is not what they are held to.
  */
-const ES3_REPLAYS = 253_376;
-const ES5_FOLDS = 253_376;
-const ES28_FOLDS = 63_344;
-const ENUMERATED = 60_000;
+const ES3_REPLAYS = 298_560;
+const ES5_FOLDS = 298_560;
+const ES28_FOLDS = 74_640;
+const ENUMERATED = 120_000;
 
 /** The packets for `events`, half of them from a second relay. */
 const packetsOf = (events: readonly Partial<Nostr.Event>[], rand: () => number): OwnedPacket[] =>
@@ -1194,18 +1194,52 @@ describe('canonical event set', () => {
         ).toContain(field);
     // A tag is "an array of one or more strings" whose first is its name, its
     // second its value, and the rest further elements (NIP-01): each is a place.
-    expect(
-      Object.values(PAYLOAD_STRING_POSITIONS)
-        .filter((position) => position.field === 'tags')
-        .map((position) => ('element' in position ? position.element : undefined))
-        .sort()
-    ).toEqual([0, 1, 2]);
+    // NIP-01's own longest example is four elements; one place is beyond it.
+    const elements = Object.values(PAYLOAD_STRING_POSITIONS)
+      .filter((position) => position.field === 'tags')
+      .map((position) => ('element' in position ? position.element : -1));
+    expect(elements.filter((element) => element <= 2).sort()).toEqual([0, 1, 2]);
+    expect(elements.some((element) => element >= 4)).toBe(true);
     for (const position of Object.keys(PAYLOAD_STRING_POSITIONS))
       for (const pair of STRING_PAIRS)
         expect(
           CASES.some((one) => one.payload?.position === position && one.payload.pair === pair),
           `${position}: ${JSON.stringify(pair)}`
         ).toBe(true);
+
+    // **And what each case says of itself is what its events are.** Every
+    // check above reads a case's labels, so each label is derived again from
+    // the events and compared: a builder that drifts from its label — a pair
+    // normalised on the way in — is refused here rather than counted.
+    const drift: string[] = [];
+    const byLabel = new Map(CASES.map((one) => [one.label, one]));
+    // A label names one case, or the swap below finds the wrong twin.
+    expect(byLabel.size, 'one case per label').toBe(CASES.length);
+    for (const one of CASES) {
+      const [a, b] = one.events as [Partial<Nostr.Event>, Partial<Nostr.Event>];
+      const kinds = [...new Set(one.events.map(({ kind }) => kind))].sort();
+      if (JSON.stringify(kinds) !== JSON.stringify([...one.kinds].sort()))
+        drift.push(`${one.label}: kinds`);
+      if ((a.created_at === b.created_at ? 'tie' : 'newer') !== one.relation)
+        drift.push(`${one.label}: relation`);
+      if (one.dimension === 'same id' && a.id !== b.id) drift.push(`${one.label}: one id`);
+      if (one.payload !== undefined) {
+        const { read } = PAYLOAD_STRING_POSITIONS[one.payload.position];
+        const [x, y] =
+          one.direction === 'as built' ? one.payload.pair : [...one.payload.pair].reverse();
+        if (read(a) !== x || read(b) !== y) drift.push(`${one.label}: the pair as built`);
+      }
+      if (one.direction === 'as built') {
+        const twin = byLabel.get(`${one.label}, swapped`);
+        const exchanged = [
+          { ...b, id: a.id, created_at: a.created_at },
+          { ...a, id: b.id, created_at: b.created_at }
+        ];
+        if (twin === undefined || JSON.stringify(twin.events) !== JSON.stringify(exchanged))
+          drift.push(`${one.label}: its swap`);
+      }
+    }
+    expect(drift).toEqual([]);
 
     // Which fields are outside the id is NIP-01's serialization, not a choice.
     expect([...OUTSIDE_THE_ID].sort()).toEqual(

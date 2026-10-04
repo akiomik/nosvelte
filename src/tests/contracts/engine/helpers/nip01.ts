@@ -263,7 +263,7 @@ export const FIELDS: readonly Field[] = [
     },
     comparison: 'numeric order',
     enumerated:
-      'every ordered pair of design.ts INSTANTS (negative, zero, small, fractional down to below a millisecond, across 2^31, 2^32 and 2^53, and 2^60), ties at five of them, and for a competitor the representable number above, below and between',
+      'every ordered pair of design.ts INSTANTS (negative and negative fractional, zero, small, fractional down to below a millisecond, across 2^31, 2^32 and 2^53, and 2^60), ties at five of them, and for a competitor the representable number above, below and between',
     swept: 'one of design.ts INSTANTS'
   },
   {
@@ -280,7 +280,7 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: 'Each tag is an array of one or more strings' },
     comparison: 'the first element is the name',
     enumerated:
-      'one-element tags, tags with extra elements, the `d` tag after two others, two `d` tags in both orders of their values, three whose first is neither the smallest, the largest nor the last, a value-less `d`',
+      'one-element tags, tags with extra elements up to ten, the `d` tag after two others, two `d` tags in both orders of their values, three whose first is neither the smallest, the largest nor the last, a value-less `d`',
     swept: 'the same shapes, with zero to three tags before the `d` tags'
   },
   {
@@ -304,7 +304,7 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'not read by the rules',
     enumerated:
-      "both members of every STRING_PAIRS pair as an unrelated tag's value and as an element after it",
+      "both members of every STRING_PAIRS pair as an unrelated tag's value, the element after it, and the tenth element",
     swept: 'every string in STRING_PAIRS'
   },
   {
@@ -347,7 +347,8 @@ const KINDS = [...COORDINATE_KINDS, ...REGULAR] as const;
 const OTHER_NAMES = [...D_LOOKALIKES, 'title', 'client'] as const;
 
 /** Whether {@link RULES} keep an event of `kind` as itself. */
-const isRegular = (kind: number): boolean => !isReplaceable(kind) && !isAddressable(kind);
+const isRegular = (kind: number): boolean =>
+  !isReplaceable(kind) && !isAddressable(kind) && !isEphemeral(kind);
 
 /**
  * `count` events drawn from {@link FIELDS}: each field independently of the
