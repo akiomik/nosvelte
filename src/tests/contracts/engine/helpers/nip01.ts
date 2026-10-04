@@ -104,6 +104,14 @@ export const RULES: readonly Rule[] = [
     }
   },
   {
+    rule: 'two packets with one id are one event: the first to arrive is kept whole, and a later one changes nothing',
+    source: {
+      from: '0003',
+      decides:
+        'the id commits to every field the rules read but not to sig (BIP-340 admits several valid signatures for one id) nor ots; keeping the first makes such a packet a replay (B5-C3)'
+    }
+  },
+  {
     rule: 'every string the rules read is compared exactly, code unit by code unit',
     source: {
       from: '0003',
@@ -112,6 +120,14 @@ export const RULES: readonly Rule[] = [
     }
   }
 ];
+
+/**
+ * The fields NIP-01 serializes to compute an event's id — everything the id
+ * commits to: "[0, <pubkey, as a lowercase hex string>, <created_at, as a
+ * number>, <kind, as a number>, <tags, as an array of arrays of non-null
+ * strings>, <content, as a string>]".
+ */
+export const SERIALIZED = ['pubkey', 'created_at', 'kind', 'tags', 'content'] as const;
 
 /** What the rules read of an event, whether the caller's or one this library owns. */
 export interface Revision {
@@ -139,8 +155,12 @@ export function coordinateOf(event: Revision): string {
   return `event:${event.id}`;
 }
 
-/** Of two revisions of one coordinate, the one {@link RULES} keep: the later, and on a tie the lower id. */
+/**
+ * Of a held revision `a` and an arriving `b` of one coordinate, the one
+ * {@link RULES} keep: the later, on a tie the lower id, and of one id the held.
+ */
 export function newerOf<T extends Pick<Revision, 'created_at' | 'id'>>(a: T, b: T): T {
+  if (a.id === b.id) return a;
   if (a.created_at !== b.created_at) return a.created_at > b.created_at ? a : b;
   return a.id <= b.id ? a : b;
 }
@@ -221,7 +241,7 @@ export const FIELDS: readonly Field[] = [
     },
     comparison: 'exact, and lexical for the tie',
     enumerated:
-      '64 hex digits: pairs differing at the first, a middle or the last digit (HEX_PAIRS), ids in both orders against recency, and for a competitor all-0, the midpoint and all-f',
+      '64 hex digits: pairs differing at the first, a middle or the last digit, and one differing at the first and last in opposite directions (HEX_PAIRS); ids in both orders against recency; two packets of one id; and for a competitor all-0, the midpoint and all-f',
     swept: '64 hex digits sharing a 56-digit prefix, in no relation to recency'
   },
   {
@@ -260,7 +280,7 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: 'Each tag is an array of one or more strings' },
     comparison: 'the first element is the name',
     enumerated:
-      'one-element tags, tags with extra elements, the `d` tag after two others, two `d` tags, a value-less `d`',
+      'one-element tags, tags with extra elements, the `d` tag after two others, two `d` tags in both orders of their values, three whose first is neither the smallest, the largest nor the last, a value-less `d`',
     swept: 'the same shapes, with zero to three tags before the `d` tags'
   },
   {
@@ -301,7 +321,7 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: '64-bytes lowercase hex of the signature' },
     comparison: 'not read by the rules; carried whole',
     enumerated:
-      '128 hex digits differing at one digit, and all-0, all-8 and all-f in the ranking variants',
+      '128 hex digits differing at one digit, between revisions and between two packets of one id, and all-0, all-8 and all-f in the ranking variants',
     swept: '128 hex digits, independent of every other field'
   },
   {
@@ -312,7 +332,8 @@ export const FIELDS: readonly Field[] = [
         'not a NIP-01 field: "plus `ots` when the wire carried one — deprecated in `nostr-typedef`, still sent, and a field a consumer can render, so dropping it would silently change what they see"'
     },
     comparison: 'not read by the rules; carried whole',
-    enumerated: 'absent against present, and both members of every STRING_PAIRS pair',
+    enumerated:
+      'absent against present, and both members of every STRING_PAIRS pair, between revisions and between two packets of one id',
     swept: 'absent, or any string in STRING_PAIRS'
   }
 ];

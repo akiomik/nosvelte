@@ -51,20 +51,23 @@ const run = (digit: string, length: number): string => digit.repeat(length);
 /**
  * 64-digit lowercase hex values, in pairs that differ in exactly one digit —
  * the first, one in the middle, the last — so no prefix, suffix or slice of
- * the value can stand in for the whole of it.
+ * the value can stand in for the whole of it; and one pair that differs at the
+ * first and the last digit in opposite directions, so an order read from any
+ * position but the first disagrees with the true one.
  */
 export const HEX_PAIRS: readonly (readonly [string, string])[] = [
   [`1${run('a', 63)}`, `2${run('a', 63)}`],
   [`${run('a', 31)}1${run('a', 32)}`, `${run('a', 31)}2${run('a', 32)}`],
-  [`${run('a', 63)}1`, `${run('a', 63)}2`]
+  [`${run('a', 63)}1`, `${run('a', 63)}2`],
+  [`1${run('a', 62)}2`, `2${run('a', 62)}1`]
 ];
 
 /**
  * Strings in pairs that differ by one thing a careless reader folds: case,
  * Unicode's composed and decomposed forms, compatibility forms, surrounding,
  * inner and line-ending whitespace, a prefix, a suffix, the part after a colon,
- * a number's spelling, a percent-escape, the part after a NUL, and an empty
- * value against a named one.
+ * a number's spelling, a percent-escape, the part after a NUL, a plus read as
+ * a space, and an empty value against a named one.
  */
 export const STRING_PAIRS: readonly (readonly [string, string])[] = [
   ['s', 'S'],
@@ -82,6 +85,7 @@ export const STRING_PAIRS: readonly (readonly [string, string])[] = [
   ['01', '1'],
   ['%73', 's'],
   ['s\0x', 's'],
+  ['a+b', 'a b'],
   ['', 's']
 ];
 
@@ -128,7 +132,24 @@ export type Fold =
       readonly name: string;
       readonly domain: 'instant';
       readonly key: (value: number) => number | string;
+    }
+  | {
+      readonly name: string;
+      readonly domain: 'hex order';
+      readonly key: (value: string) => string;
+    }
+  | {
+      readonly name: string;
+      readonly domain: 'd selection';
+      readonly select: (tags: readonly (readonly string[])[]) => string;
     };
+
+/** The `d` values of `tags`, in order; a value-less one reads as empty. */
+const dValues = (tags: readonly (readonly string[])[]): string[] =>
+  tags.filter(([name]) => name === 'd').map((tag) => tag[1] ?? '');
+
+/** The `d` value the rules read: the first (0003). */
+export const firstD = (tags: readonly (readonly string[])[]): string => dValues(tags)[0] ?? '';
 
 /** A percent-decoding reader, which leaves a value it cannot decode as it is. */
 function uriDecoded(value: string): string {
@@ -141,8 +162,10 @@ function uriDecoded(value: string): string {
 
 /**
  * The catalogue. For an identifier domain, a folding is shown by a pair it
- * merges; for a payload domain, by a value it changes; for instants, by an
- * ordered pair whose order it breaks.
+ * merges; for a payload domain, by a value it changes; for instants and for
+ * hex read as an order, by an ordered pair whose order it breaks; for the
+ * choice among several `d` tags, by a pair of tag lists whose coordinate it
+ * judges differently from the first `d`.
  */
 export const FOLDS: readonly Fold[] = [
   ...(['identifier string', 'payload string'] as const).flatMap((domain) => [
@@ -167,7 +190,8 @@ export const FOLDS: readonly Fold[] = [
         value.trim() !== '' && Number.isFinite(Number(value)) ? String(Number(value)) : value
     },
     { name: 'URI-decoded', domain, apply: uriDecoded },
-    { name: 'before a NUL', domain, apply: (value: string) => value.split('\0')[0] ?? '' }
+    { name: 'before a NUL', domain, apply: (value: string) => value.split('\0')[0] ?? '' },
+    { name: 'plus as a space', domain, apply: (value: string) => value.replace(/\+/g, ' ') }
   ]),
   { name: 'lower case', domain: 'tag name', apply: (value) => value.toLowerCase() },
   { name: 'trim', domain: 'tag name', apply: (value) => value.trim() },
@@ -191,7 +215,26 @@ export const FOLDS: readonly Fold[] = [
   { name: 'floor', domain: 'instant', key: (value) => Math.floor(value) },
   { name: 'ceiling', domain: 'instant', key: (value) => Math.ceil(value) },
   { name: 'rounded', domain: 'instant', key: (value) => Math.round(value) },
-  { name: 'truncated', domain: 'instant', key: (value) => Math.trunc(value) }
+  { name: 'truncated', domain: 'instant', key: (value) => Math.trunc(value) },
+  {
+    name: 'bytes reversed',
+    domain: 'hex order',
+    key: (value) => (value.match(/../g) ?? []).reverse().join('')
+  },
+  { name: 'digits reversed', domain: 'hex order', key: (value) => [...value].reverse().join('') },
+  {
+    name: 'halves exchanged',
+    domain: 'hex order',
+    key: (value) => value.slice(32) + value.slice(0, 32)
+  },
+  { name: 'the last', domain: 'd selection', select: (tags) => dValues(tags).at(-1) ?? '' },
+  { name: 'the smallest', domain: 'd selection', select: (tags) => dValues(tags).sort()[0] ?? '' },
+  {
+    name: 'the largest',
+    domain: 'd selection',
+    select: (tags) => dValues(tags).sort().at(-1) ?? ''
+  },
+  { name: 'all joined', domain: 'd selection', select: (tags) => dValues(tags).join(',') }
 ];
 
 /** What each fold's domain holds: identifier and payload strings, tag names, hex, instants. */
@@ -226,7 +269,10 @@ export const PAYLOAD_FIELDS = ['content', 'sig', 'tags', 'ots'] as const;
 /**
  * Every field of an event, by the role the rules give it: the coordinate, the
  * ranking between revisions, or the payload carried whole. `tags` is both — its
- * `d` is part of an addressable coordinate, and the rest is payload.
+ * `d` is part of an addressable coordinate, and the rest is payload. And
+ * **outside the id**: the id is the hash of every other field but `sig` and
+ * `ots`, so two packets can share an id and differ in those — BIP-340 admits
+ * several valid signatures for one id. Which is kept is a decision (0003).
  */
 export const FIELD_ROLES = {
   id: ['ranking'],
@@ -235,9 +281,16 @@ export const FIELD_ROLES = {
   pubkey: ['coordinate'],
   tags: ['coordinate', 'payload'],
   content: ['payload'],
-  sig: ['payload'],
-  ots: ['payload']
+  sig: ['payload', 'outside the id'],
+  ots: ['payload', 'outside the id']
 } as const satisfies { readonly [K in keyof Nostr.Event]-?: readonly string[] };
+
+/** The fields {@link FIELD_ROLES} puts outside the id. */
+export const OUTSIDE_THE_ID = (
+  Object.entries(FIELD_ROLES) as [keyof typeof FIELD_ROLES, readonly string[]][]
+)
+  .filter(([, roles]) => roles.includes('outside the id'))
+  .map(([field]) => field);
 
 /** The dimensions a case changes. */
 export type Dimension =
@@ -247,24 +300,32 @@ export type Dimension =
   | 'd value'
   | 'd shape'
   | 'instant'
-  | 'regular';
+  | 'regular'
+  | 'same id';
 
 /**
- * **The crossings the design promises**: each dimension, over each kind listed
- * for it, at every relation and in both directions. `ES29` refuses the design
- * if any one of these has no case.
+ * **The crossings the design promises**: each dimension, over each kind and at
+ * each relation listed for it, in both directions. `ES29` refuses the design if
+ * any one of these has no case. Two packets of one id tie by construction, so
+ * `same id` is crossed with the tie alone, over every kind.
  */
-export const CROSSINGS: { readonly [D in Dimension]: readonly number[] } = {
-  kind: COORDINATE_KINDS,
-  author: COORDINATE_KINDS,
-  content: COORDINATE_KINDS,
-  sig: COORDINATE_KINDS,
-  tags: COORDINATE_KINDS,
-  ots: COORDINATE_KINDS,
-  'd value': COORDINATE_KINDS,
-  'd shape': COORDINATE_KINDS,
-  instant: COORDINATE_KINDS,
-  regular: REGULAR
+export const CROSSINGS: {
+  readonly [D in Dimension]: {
+    readonly kinds: readonly number[];
+    readonly relations: readonly Relation[];
+  };
+} = {
+  kind: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  author: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  content: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  sig: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  tags: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  ots: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  'd value': { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  'd shape': { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  instant: { kinds: COORDINATE_KINDS, relations: RELATIONS },
+  regular: { kinds: REGULAR, relations: RELATIONS },
+  'same id': { kinds: [...COORDINATE_KINDS, ...REGULAR], relations: ['tie'] }
 };
 
 /** One case: events whose fold the oracle decides, and where it sits on the axes. */
@@ -425,6 +486,25 @@ export function minimalPairs(): Case[] {
         [['d', 's']],
         false
       ],
+      [
+        'two, first t / t',
+        [
+          ['d', 't'],
+          ['d', 's']
+        ],
+        [['d', 't']],
+        true
+      ],
+      [
+        'three, first m / m',
+        [
+          ['d', 'm'],
+          ['d', 'z'],
+          ['d', 'a']
+        ],
+        [['d', 'm']],
+        true
+      ],
       ['extra elements / plain', [['d', 's', 'm']], [['d', 's']], true],
       ...D_LOOKALIKES.map((name): [string, string[][], string[][], boolean] => [
         `${JSON.stringify(name)} before d / d`,
@@ -488,6 +568,33 @@ export function minimalPairs(): Case[] {
           kinds: [kind],
           relation: 'tie'
         });
+  }
+  // **Two packets of one id**, for every kind: everything the id commits to
+  // equal, and one field outside it different — another valid signature, or
+  // another `ots`. They are one event, and the first to arrive is kept (0003).
+  for (const kind of CROSSINGS['same id'].kinds) {
+    const variants: [string, Partial<Nostr.Event>, Partial<Nostr.Event>][] = [
+      ...HEX_PAIRS.map(([x, y]): [string, Partial<Nostr.Event>, Partial<Nostr.Event>] => [
+        'another sig',
+        { sig: `${x}${x}` },
+        { sig: `${y}${y}` }
+      ]),
+      ['ots absent / present', {}, { ots: 's' }],
+      ...STRING_PAIRS.map(([x, y]): [string, Partial<Nostr.Event>, Partial<Nostr.Event>] => [
+        `ots ${JSON.stringify(x)} / ${JSON.stringify(y)}`,
+        { ots: x },
+        { ots: y }
+      ])
+    ];
+    for (const [label, x, y] of variants)
+      cases.push({
+        label: `kind ${kind}, one id, ${label}`,
+        events: [base(kind, x), base(kind, y)],
+        sameCoordinate: true,
+        dimension: 'same id',
+        kinds: [kind],
+        relation: 'tie'
+      });
   }
   // **Both directions of every pair.** Each case above makes one side the
   // older; the swap keeps the ids and instants where they are and exchanges

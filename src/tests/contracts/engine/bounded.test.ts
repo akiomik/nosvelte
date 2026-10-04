@@ -105,10 +105,11 @@ const BOUNDS = [1, 2, 3] as const;
  * Every enumerated case whose two events share a coordinate (`helpers/design.ts`),
  * as the revision the rules keep and the one they supersede — the design's
  * cases change one dimension each, so a bound meets every value and every
- * recency relation the identity arms do.
+ * recency relation the identity arms do. Two packets of one id are left out:
+ * they are one event, not a revision and the one it supersedes.
  */
 const REVISION_PAIRS = minimalPairs()
-  .filter(({ sameCoordinate }) => sameCoordinate)
+  .filter(({ sameCoordinate, dimension }) => sameCoordinate && dimension !== 'same id')
   .map(({ label, events }) => {
     const [a, b] = events as [Partial<Nostr.Event>, Partial<Nostr.Event>];
     const keptId = [...winnersOf([ev(a).event, ev(b).event]).values()][0]?.id;
@@ -133,7 +134,7 @@ const variantsFor = (
  * pair, every competitor, every ranking variant, three bounds, six orders.
  * Asserted exactly, so the design's size is a fact the arms state.
  */
-const BOUNDED_RUNS = 2_787_120;
+const BOUNDED_RUNS = 3_026_880;
 
 /** The time the enumerated bounded arms are given; the budget above is what they are held to. */
 const ENUMERATED = 60_000;

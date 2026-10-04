@@ -1226,6 +1226,14 @@ one of them; a port inherits the protocol from NIP-01 and these from here, so ea
   one identifier.
 - **Every string these rules read is compared exactly.** NIP-01 describes tags as "arbitrary string
   arrays" and gives no folding, so case, Unicode form and whitespace all distinguish two values.
+- **Two packets with one id are one event, and the first to arrive is kept whole.** The id is the
+  hash of every field these rules read, but not of `sig` — BIP-340 admits several valid signatures
+  for one id — nor of `ots` (0002). The fold keeps the first packet of an id and returns the set
+  unchanged for a later one, so a packet that differs only there is a replay (`B5-C3`). The price:
+  which valid signature, and which `ots`, a set shows follows the arrival order, so the order
+  independence `B5-C2` contracts is of everything the id commits to. Choosing one deterministically
+  (the lowest `sig`, say) would make a later packet change a set the replay row says it leaves
+  alone, and would still need a rule for `ots`.
 
 The event set's tests carry the same split: their oracle lists each rule with its source, a sentence
 of NIP-01 or this paragraph.

@@ -64,9 +64,13 @@ import {
   DIRECTIONS,
   DOMAINS,
   FIELD_ROLES,
+  firstD,
+  type Fold,
   FOLDS,
+  HEX_PAIRS,
   INSTANTS,
   minimalPairs,
+  OUTSIDE_THE_ID,
   PAYLOAD_FIELDS,
   permutations,
   rankingVariants,
@@ -76,6 +80,7 @@ import {
   arbitraryEvents,
   coordinateOf,
   isEphemeral,
+  SERIALIZED,
   shuffled,
   winnersOf
 } from './helpers/nip01.js';
@@ -759,6 +764,19 @@ const heldOf = (set: CachedEventSet): string[] =>
     .map(({ event }) => JSON.stringify(event))
     .sort();
 
+/** Another 128-digit signature than `sig`. */
+const run128 = (sig: string): string => (sig === 'f'.repeat(128) ? '0' : 'f').repeat(128);
+
+/** Held events with the fields outside the id taken out: what the id commits to. */
+const committedOf = (held: readonly string[]): string[] =>
+  held
+    .map((json) => {
+      const event = JSON.parse(json) as Record<string, unknown>;
+      for (const field of OUTSIDE_THE_ID) delete event[field];
+      return JSON.stringify(event);
+    })
+    .sort();
+
 /** What NIP-01 keeps of `packets`, each event whole, by `helpers/nip01.ts`. */
 const keptOf = (packets: readonly OwnedPacket[]): string[] =>
   [...winnersOf(packets.map(({ event }) => event)).values()]
@@ -941,6 +959,17 @@ describe('canonical event set', () => {
             event: structuredClone(packet.event)
           };
           expect(foldEvent(folded, elsewhere), `${label}: from another relay`).toBe(folded);
+          // The same event with each field outside the id changed — another
+          // valid signature, another `ots` — is a replay too (0003).
+          for (const field of OUTSIDE_THE_ID) {
+            const variant = structuredClone(packet.event) as unknown as Record<string, unknown>;
+            variant[field] =
+              field === 'sig' ? run128(packet.event.sig) : `${String(variant[field] ?? '')}+`;
+            expect(
+              foldEvent(folded, { ...elsewhere, event: variant as unknown as typeof packet.event }),
+              `${label}: another ${field}`
+            ).toBe(folded);
+          }
         }
       }
     }
@@ -972,39 +1001,56 @@ describe('canonical event set', () => {
     // reorders for an instant. A folding found next is one line in `FOLDS`, and
     // this refuses a domain that cannot show it rather than letting the landings
     // pass on inputs that never meet it.
-    for (const fold of FOLDS) {
-      if (fold.domain === 'instant') {
-        const reordered = INSTANTS.some((older, at) =>
-          INSTANTS.slice(at + 1).some((newer) => !(fold.key(older) < fold.key(newer)))
-        );
-        expect(reordered, `instant: ${fold.name}`).toBe(true);
-        continue;
+    // The `d` tag lists the design pairs, for the choice among several.
+    const tagPairs = CASES.filter(
+      (one) => one.dimension === 'd shape' && one.kinds.every((kind) => kind >= 30000)
+    ).map(({ events }) => events.map(({ tags }) => tags ?? []) as [string[][], string[][]]);
+    const shows = (fold: Fold): boolean => {
+      switch (fold.domain) {
+        case 'instant':
+          return INSTANTS.some((older, at) =>
+            INSTANTS.slice(at + 1).some((newer) => !(fold.key(older) < fold.key(newer)))
+          );
+        case 'hex order':
+          return HEX_PAIRS.some(([a, b]) => fold.key(a) < fold.key(b) !== a < b);
+        case 'd selection':
+          return tagPairs.some(
+            ([a, b]) => (fold.select(a) === fold.select(b)) !== (firstD(a) === firstD(b))
+          );
+        case 'payload string':
+          return DOMAINS[fold.domain].flat().some((value) => fold.apply(value) !== value);
+        case 'identifier string':
+        case 'tag name':
+        case 'hex':
+          return (DOMAINS[fold.domain] as readonly (readonly [string, string])[]).some(
+            ([a, b]) => a !== b && fold.apply(a) === fold.apply(b)
+          );
+        default:
+          return fold satisfies never;
       }
-      const pairs = DOMAINS[fold.domain] as readonly (readonly [string, string])[];
-      const shown =
-        fold.domain === 'payload string'
-          ? pairs.flat().some((value) => fold.apply(value) !== value)
-          : pairs.some(([a, b]) => a !== b && fold.apply(a) === fold.apply(b));
-      expect(shown, `${fold.domain}: ${fold.name}`).toBe(true);
-    }
+    };
+    for (const fold of FOLDS) expect(shows(fold), `${fold.domain}: ${fold.name}`).toBe(true);
 
-    // The positive control: an injective transformation shows nothing, so the
-    // check above is not satisfied by any function at all.
-    const identity = (value: string): string => `<${value}>`;
-    expect(DOMAINS['identifier string'].some(([a, b]) => identity(a) === identity(b))).toBe(false);
-    expect(
-      INSTANTS.some((older, at) => INSTANTS.slice(at + 1).some((newer) => !(older < newer)))
-    ).toBe(false);
+    // The positive controls: a transformation that keeps what the rules read
+    // shows nothing in any domain, so the check is not satisfied by any
+    // function at all.
+    const controls: Fold[] = [
+      { name: 'injective', domain: 'identifier string', apply: (value) => `<${value}>` },
+      { name: 'unchanged', domain: 'instant', key: (value) => value },
+      { name: 'unchanged', domain: 'hex order', key: (value) => value },
+      { name: 'the first', domain: 'd selection', select: firstD }
+    ];
+    for (const control of controls) expect(shows(control), `control ${control.domain}`).toBe(false);
 
     // **Every crossing the design promises has a case**: each dimension, over
     // each kind `CROSSINGS` lists for it, at every relation and in both
     // directions. A product narrowed by hand — ties for two kinds only — is
     // refused here by name, rather than left for a reviewer to notice.
     const missing = (cases: readonly Case[]): string[] =>
-      (Object.entries(CROSSINGS) as [Dimension, readonly number[]][]).flatMap(
-        ([dimension, kinds]) =>
+      (Object.entries(CROSSINGS) as [Dimension, (typeof CROSSINGS)[Dimension]][]).flatMap(
+        ([dimension, { kinds, relations }]) =>
           kinds.flatMap((kind) =>
-            RELATIONS.flatMap((relation) =>
+            relations.flatMap((relation) =>
               DIRECTIONS.filter(
                 (direction) =>
                   !cases.some(
@@ -1023,6 +1069,11 @@ describe('canonical event set', () => {
     expect(
       missing(CASES.filter((one) => !(one.kinds.includes(3) && one.relation === 'tie')))
     ).toContain('instant / kind 3 / tie / as built');
+    // And a relation is crossed only where it can be: two packets of one id tie.
+    expect(CROSSINGS['same id'].relations).toEqual(['tie']);
+    expect(
+      [...new Set(Object.values(CROSSINGS).flatMap(({ relations }) => relations))].sort()
+    ).toEqual([...RELATIONS].sort());
 
     // **Every field of an event has a role, and every payload field is a
     // dimension and a ranking variant.** `FIELD_ROLES` is checked against the
@@ -1041,6 +1092,25 @@ describe('canonical event set', () => {
       );
       expect(changed, `${field}: a ranking variant`).toBe(true);
     }
+    // **And every field outside the id differs between two packets of one
+    // id** in some case, since the id cannot tell them apart and the rules
+    // have to.
+    // Which fields are outside the id is NIP-01's serialization, not a choice.
+    expect([...OUTSIDE_THE_ID].sort()).toEqual(
+      Object.keys(FIELD_ROLES)
+        .filter((field) => field !== 'id' && !(SERIALIZED as readonly string[]).includes(field))
+        .sort()
+    );
+    for (const field of OUTSIDE_THE_ID)
+      expect(
+        CASES.some(
+          ({ dimension, events: [a, b] }) =>
+            dimension === 'same id' &&
+            a?.id === b?.id &&
+            JSON.stringify(a?.[field]) !== JSON.stringify(b?.[field])
+        ),
+        `${field}: two packets of one id`
+      ).toBe(true);
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {
@@ -1117,7 +1187,13 @@ describe('canonical event set', () => {
     // a minimal pair that changes one dimension, alone and beside an ephemeral
     // event the fold drops — folds to the one set the rules name, each event
     // whole, with the drop noted the same way.
-    for (const { label, events } of CASES)
+    //
+    // **Two packets of one id are the exception, and it is contracted** (0003):
+    // they are one event, the first to arrive is kept whole, and so which
+    // signature and which `ots` the set shows follows the arrival order. The
+    // set is the same by everything the id commits to, and the kept packet is
+    // the first — both halves are compared.
+    for (const { label, events, dimension } of CASES)
       for (const set of [events, [...events, base(20001, { id: 'e'.repeat(64) })]])
         for (const elsewhere of [false, true]) {
           const packets = packetsOfCase(set, elsewhere);
@@ -1125,7 +1201,10 @@ describe('canonical event set', () => {
           const dropped = packets.some(({ event }) => isEphemeral(event.kind));
           for (const order of permutations(packets)) {
             const folded = foldAll(order);
-            expect(heldOf(folded), label).toEqual(expected);
+            if (dimension === 'same id') {
+              expect(committedOf(heldOf(folded)), label).toEqual(committedOf(expected));
+              expect(heldOf(folded), `${label}: the first kept`).toEqual(keptOf(order));
+            } else expect(heldOf(folded), label).toEqual(expected);
             expect(folded.ephemeralOmitted === true, `${label}: the drop noted`).toBe(dropped);
           }
         }
@@ -1265,10 +1344,11 @@ describe('canonical event set', () => {
       );
       for (const elsewhere of [false, true]) {
         const packets = packetsOfCase(events, elsewhere);
-        const expected = keptOf(packets);
-        expect(expected, `${label}: kept`).toHaveLength(sameCoordinate ? 1 : 2);
+        expect(keptOf(packets), `${label}: kept`).toHaveLength(sameCoordinate ? 1 : 2);
+        // The oracle is given the arrival order: two packets of one id are one
+        // event, and the first to arrive is kept (0003).
         for (const order of [packets, [...packets].reverse()])
-          expect(heldOf(foldAll(order)), label).toEqual(expected);
+          expect(heldOf(foldAll(order)), label).toEqual(keptOf(order));
       }
     }
 
