@@ -420,7 +420,12 @@ export function competitorsFor(
   const ids = ['!', `${low as string}0`, `${high as string}~`];
   const out: Partial<Nostr.Event>[] = [];
   for (const created_at of instants)
-    for (const [at, id] of ids.entries())
+    // The id ranks a competitor only where it ties one of the pair; elsewhere
+    // the instant alone places it, and one id is enough.
+    for (const [at, id] of (created_at === older || created_at === newer
+      ? ids
+      : ids.slice(0, 1)
+    ).entries())
       out.push(
         base(1, {
           id,

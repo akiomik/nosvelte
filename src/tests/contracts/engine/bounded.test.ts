@@ -125,6 +125,16 @@ const REVISION_PAIRS = minimalPairs()
 const variantsFor = (winner: Partial<Nostr.Event>, superseded: Partial<Nostr.Event>) =>
   winner.created_at === superseded.created_at ? rankingVariants() : [[{}, {}, {}] as const];
 
+/**
+ * How many folds each bounded arm's enumeration runs: every same-coordinate
+ * pair, every competitor, every ranking variant, three bounds, six orders.
+ * Asserted exactly, so the design's size is a fact the arms state.
+ */
+const BOUNDED_RUNS = 306_288;
+
+/** The time the enumerated bounded arms are given; the budget above is what they are held to. */
+const ENUMERATED = 60_000;
+
 /** A packet from another relay, as a parsed copy that shares nothing. */
 const elsewhere = (packet: OwnedPacket): OwnedPacket =>
   ({ ...packet, from: 'wss://elsewhere/', event: structuredClone(packet.event) }) as OwnedPacket;
@@ -185,78 +195,92 @@ describe('a bounded set that carries a replacement', () => {
   });
 
   // @contracts B5-C4
-  it('ES6d: no arrival order of a bounded set publishes a superseded replaceable', () => {
-    // Two neighbours for the coordinate to compete with: one older than both
-    // revisions, and one between them, so a bound that keeps the oldest entry
-    // rather than the newest evicts the newer revision too. And one fixture in
-    // which everything shares a `created_at`, where B5's tie decides which
-    // revision supersedes and the bound's own tie-break decides which entry
-    // keeps the slot: `a` supersedes `c`, and `b` competes for the slot.
-    const between = ev({ id: 'between', kind: 1, pubkey: PUBKEY, created_at: 150 });
-    // Their contents run against their ids, so a bound that ranked on content
-    // before id keeps the loser — written out rather than left to the draws
-    // below, which found it in one seeding and lost it in the next.
-    const winner = ev({ id: 'a', kind: 10002, pubkey: PUBKEY, created_at: 100, content: 'z' });
-    const competitor = ev({ id: 'b', kind: 1, pubkey: PUBKEY, created_at: 100, content: 'm' });
-    const loser = ev({ id: 'c', kind: 10002, pubkey: PUBKEY, created_at: 100, content: 'a' });
-    for (const [packets, superseded] of [
-      [[OLD, NEW, REGULAR], ['old']],
-      [[OLD, NEW, between], ['old']],
-      [[winner, competitor, loser], ['c']]
-    ] as const) {
-      for (const retain of BOUNDS) {
-        const offenders = permutations(packets)
-          .map((order) => {
-            const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
-            return { order, shown: shownOf(set, NOW, superseded) };
-          })
-          .filter(({ shown }) => shown.length > 0);
+  it(
+    'ES6d: no arrival order of a bounded set publishes a superseded replaceable',
+    () => {
+      // Two neighbours for the coordinate to compete with: one older than both
+      // revisions, and one between them, so a bound that keeps the oldest entry
+      // rather than the newest evicts the newer revision too. And one fixture in
+      // which everything shares a `created_at`, where B5's tie decides which
+      // revision supersedes and the bound's own tie-break decides which entry
+      // keeps the slot: `a` supersedes `c`, and `b` competes for the slot.
+      const between = ev({ id: 'between', kind: 1, pubkey: PUBKEY, created_at: 150 });
+      // Their contents run against their ids, so a bound that ranked on content
+      // before id keeps the loser — written out rather than left to the draws
+      // below, which found it in one seeding and lost it in the next.
+      const winner = ev({ id: 'a', kind: 10002, pubkey: PUBKEY, created_at: 100, content: 'z' });
+      const competitor = ev({ id: 'b', kind: 1, pubkey: PUBKEY, created_at: 100, content: 'm' });
+      const loser = ev({ id: 'c', kind: 10002, pubkey: PUBKEY, created_at: 100, content: 'a' });
+      for (const [packets, superseded] of [
+        [[OLD, NEW, REGULAR], ['old']],
+        [[OLD, NEW, between], ['old']],
+        [[winner, competitor, loser], ['c']]
+      ] as const) {
+        for (const retain of BOUNDS) {
+          const offenders = permutations(packets)
+            .map((order) => {
+              const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
+              return { order, shown: shownOf(set, NOW, superseded) };
+            })
+            .filter(({ shown }) => shown.length > 0);
 
-        // The bound before this change published `old` — the event `new`
-        // supersedes — in two of the six orders, because evicting `new` deleted
-        // the only trace of the coordinate and the fold then had nothing to
-        // compare `old` against.
-        expect(
-          offenders.map(({ order }) => order.map((packet) => packet.event.id).join(' -> ')),
-          `retain ${retain}: orders publishing a superseded replaceable`
-        ).toEqual([]);
+          // The bound before this change published `old` — the event `new`
+          // supersedes — in two of the six orders, because evicting `new` deleted
+          // the only trace of the coordinate and the fold then had nothing to
+          // compare `old` against.
+          expect(
+            offenders.map(({ order }) => order.map((packet) => packet.event.id).join(' -> ')),
+            `retain ${retain}: orders publishing a superseded replaceable`
+          ).toEqual([]);
+        }
       }
-    }
 
-    // **And every enumerated pair of revisions** (`helpers/design.ts`) beside
-    // every regular competitor `competitorsFor` places against it — newer than
-    // both, between, older than both, tying either, with contents running
-    // against its id both ways — at every bound and in every order, the
-    // superseded revision from another relay, the instant held still.
-    for (const { label, winner, superseded } of REVISION_PAIRS)
-      for (const competitor of competitorsFor(superseded, winner))
-        for (const [w, l, c] of variantsFor(winner, superseded))
-          for (const retain of BOUNDS)
-            for (const order of permutations([
+      // **And every enumerated pair of revisions** (`helpers/design.ts`) beside
+      // every regular competitor `competitorsFor` places against it — newer than
+      // both, between, older than both, tying either, with contents running
+      // against its id both ways — at every bound and in every order, the
+      // superseded revision from another relay, the instant held still.
+      const offenders: string[] = [];
+      let runs = 0;
+      for (const { label, winner, superseded } of REVISION_PAIRS)
+        for (const competitor of competitorsFor(superseded, winner))
+          for (const [w, l, c] of variantsFor(winner, superseded)) {
+            const trio = [
               ev({ ...winner, ...w }),
               elsewhere(ev({ ...superseded, ...l })),
               ev({ ...competitor, ...c })
-            ])) {
-              const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
-              expect(
-                shownOf(set, NOW, [superseded.id as string]),
-                `${label}, competitor at ${competitor.created_at}, retain ${retain}`
-              ).toEqual([]);
-            }
+            ];
+            for (const retain of BOUNDS)
+              for (const order of permutations(trio)) {
+                runs += 1;
+                const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
+                if (shownOf(set, NOW, [superseded.id as string]).length > 0)
+                  offenders.push(
+                    `${label}, competitor ${competitor.id} at ${competitor.created_at}, retain ${retain}`
+                  );
+              }
+          }
+      expect(offenders).toEqual([]);
+      // **The design's size, as a budget with no slack**: a change to what is
+      // enumerated moves this number, and has to say so here rather than only in
+      // a slower run.
+      expect(runs, 'the enumerated bounded runs').toBe(BOUNDED_RUNS);
 
-    // A seeded sweep over drawn events beside it, for combinations of several
-    // coordinates the pairs above do not build. It claims no coverage.
-    const rand = mulberry32(0xb5c4);
-    for (let trial = 0; trial < 300; trial += 1) {
-      const packets = drawn(rand);
-      const superseded = supersededAmong(packets);
-      for (const retain of BOUNDS)
-        for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
-          const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
-          expect(shownOf(set, NOW, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
-        }
-    }
-  });
+      // A seeded sweep over drawn events beside it, for combinations of several
+      // coordinates the pairs above do not build. It claims no coverage.
+      const rand = mulberry32(0xb5c4);
+      for (let trial = 0; trial < 300; trial += 1) {
+        const packets = drawn(rand);
+        const superseded = supersededAmong(packets);
+        for (const retain of BOUNDS)
+          for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
+            const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
+            expect(shownOf(set, NOW, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
+          }
+      }
+    },
+    ENUMERATED
+  );
 
   it('ES6e: one stored set and one published answer, whatever the arrival order', () => {
     const answers = permutations([OLD, NEW, REGULAR]).map((order) => {
@@ -310,75 +334,86 @@ describe('a bounded set that carries a replacement', () => {
   });
 
   // @contracts B5-C5
-  it('ES6f: nor does a clock that moves between arrivals', () => {
-    // The same crossing reached the other way. `new` is evicted by a regular
-    // event that is valid when it arrives and expired by the time `old` shows
-    // up, so the slot the coordinate lost is free again at exactly the moment
-    // an older event for it arrives.
-    const lasting = ev({ id: 'new-plain', kind: 10002, pubkey: PUBKEY, created_at: 200 });
-    const fading = (created_at: number): OwnedPacket =>
-      ev({
-        id: `regular-fading-${created_at}`,
-        kind: 1,
-        pubkey: PUBKEY,
-        created_at,
-        tags: [['expiration', '500']]
-      });
-    // And the other way round: the regular event is older than the newer
-    // revision, so the revision keeps its slot through the clock's move and
-    // `old` arrives to find it still there — the comparison has to be made.
-    for (const competitor of [fading(300), fading(150)]) {
-      for (const retain of BOUNDS) {
-        const set = foldBoundedAt(retain)([
-          [lasting, 400],
-          [competitor, 400],
-          [OLD, 600]
-        ]);
-        expect(
-          shownOf(set, 600, ['old']),
-          `${competitor.event.id}, retain ${retain}: superseded published after the clock moved`
-        ).toEqual([]);
+  it(
+    'ES6f: nor does a clock that moves between arrivals',
+    () => {
+      // The same crossing reached the other way. `new` is evicted by a regular
+      // event that is valid when it arrives and expired by the time `old` shows
+      // up, so the slot the coordinate lost is free again at exactly the moment
+      // an older event for it arrives.
+      const lasting = ev({ id: 'new-plain', kind: 10002, pubkey: PUBKEY, created_at: 200 });
+      const fading = (created_at: number): OwnedPacket =>
+        ev({
+          id: `regular-fading-${created_at}`,
+          kind: 1,
+          pubkey: PUBKEY,
+          created_at,
+          tags: [['expiration', '500']]
+        });
+      // And the other way round: the regular event is older than the newer
+      // revision, so the revision keeps its slot through the clock's move and
+      // `old` arrives to find it still there — the comparison has to be made.
+      for (const competitor of [fading(300), fading(150)]) {
+        for (const retain of BOUNDS) {
+          const set = foldBoundedAt(retain)([
+            [lasting, 400],
+            [competitor, 400],
+            [OLD, 600]
+          ]);
+          expect(
+            shownOf(set, 600, ['old']),
+            `${competitor.event.id}, retain ${retain}: superseded published after the clock moved`
+          ).toEqual([]);
+        }
       }
-    }
 
-    // **And every enumerated pair of revisions** beside a regular competitor
-    // that expires at 500, placed against it by `created_at` as above, at every
-    // bound and in every order: the first two arrivals at 400, the last at 600,
-    // so the clock crosses the deadline before the last revision arrives, and
-    // the set is read at 600.
-    for (const { label, winner, superseded } of REVISION_PAIRS)
-      for (const competitor of competitorsFor(superseded, winner, { expiring: true }))
-        for (const [w, l, c] of variantsFor(winner, superseded))
-          for (const retain of BOUNDS)
-            for (const order of permutations([
+      // **And every enumerated pair of revisions** beside a regular competitor
+      // that expires at 500, placed against it by `created_at` as above, at every
+      // bound and in every order: the first two arrivals at 400, the last at 600,
+      // so the clock crosses the deadline before the last revision arrives, and
+      // the set is read at 600.
+      const offenders: string[] = [];
+      let runs = 0;
+      for (const { label, winner, superseded } of REVISION_PAIRS)
+        for (const competitor of competitorsFor(superseded, winner, { expiring: true }))
+          for (const [w, l, c] of variantsFor(winner, superseded)) {
+            const trio = [
               ev({ ...winner, ...w }),
               elsewhere(ev({ ...superseded, ...l })),
               ev({ ...competitor, ...c })
-            ])) {
-              const set = foldBoundedAt(retain)(
-                order.map((packet, at) => [packet, at < 2 ? 400 : 600] as const)
-              );
-              expect(
-                shownOf(set, 600, [superseded.id as string]),
-                `${label}, competitor at ${competitor.created_at}, retain ${retain}`
-              ).toEqual([]);
-            }
+            ];
+            for (const retain of BOUNDS)
+              for (const order of permutations(trio)) {
+                runs += 1;
+                const set = foldBoundedAt(retain)(
+                  order.map((packet, at) => [packet, at < 2 ? 400 : 600] as const)
+                );
+                if (shownOf(set, 600, [superseded.id as string]).length > 0)
+                  offenders.push(
+                    `${label}, competitor ${competitor.id} at ${competitor.created_at}, retain ${retain}`
+                  );
+              }
+          }
+      expect(offenders).toEqual([]);
+      expect(runs, 'the enumerated bounded runs').toBe(BOUNDED_RUNS);
 
-    // A seeded sweep over drawn events beside it, whose regular members expire
-    // between arrivals. It claims no coverage.
-    const rand = mulberry32(0xb5c5);
-    for (let trial = 0; trial < 300; trial += 1) {
-      const packets = drawn(rand, { expiries: [150, 250, 350] });
-      const superseded = supersededAmong(packets);
-      for (const retain of BOUNDS)
-        for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
-          const instants = order.map((_, at) => 100 + at * 50);
-          const set = foldBoundedAt(retain)(
-            order.map((packet, at) => [packet, instants[at] as number] as const)
-          );
-          const last = instants.at(-1) as number;
-          expect(shownOf(set, last, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
-        }
-    }
-  });
+      // A seeded sweep over drawn events beside it, whose regular members expire
+      // between arrivals. It claims no coverage.
+      const rand = mulberry32(0xb5c5);
+      for (let trial = 0; trial < 300; trial += 1) {
+        const packets = drawn(rand, { expiries: [150, 250, 350] });
+        const superseded = supersededAmong(packets);
+        for (const retain of BOUNDS)
+          for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
+            const instants = order.map((_, at) => 100 + at * 50);
+            const set = foldBoundedAt(retain)(
+              order.map((packet, at) => [packet, instants[at] as number] as const)
+            );
+            const last = instants.at(-1) as number;
+            expect(shownOf(set, last, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
+          }
+      }
+    },
+    ENUMERATED
+  );
 });
