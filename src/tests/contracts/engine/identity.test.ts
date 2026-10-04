@@ -811,6 +811,16 @@ const packetsOfCase = (
 /** The enumerated design, built once. */
 const CASES = minimalPairs();
 
+/**
+ * How many folds or replays each enumerated arm runs, asserted exactly, so the
+ * design's size is a fact the arms state; and the time they are given, which
+ * is not what they are held to.
+ */
+const ES3_REPLAYS = 253_376;
+const ES5_FOLDS = 253_376;
+const ES28_FOLDS = 63_344;
+const ENUMERATED = 60_000;
+
 /** The packets for `events`, half of them from a second relay. */
 const packetsOf = (events: readonly Partial<Nostr.Event>[], rand: () => number): OwnedPacket[] =>
   events.map((fields) => {
@@ -896,108 +906,123 @@ describe('canonical event set', () => {
   });
 
   // @contracts B5-C3
-  it('ES3: the fold is idempotent, and a replay does not even rebuild the set', () => {
-    const a = ev();
-    const b = ev({ kind: 0 });
-    expect(idsOf(foldAll([a, b, a, b, a]))).toEqual(idsOf(foldAll([a, b])));
+  it(
+    'ES3: the fold is idempotent, and a replay does not even rebuild the set',
+    () => {
+      const a = ev();
+      const b = ev({ kind: 0 });
+      expect(idsOf(foldAll([a, b, a, b, a]))).toEqual(idsOf(foldAll([a, b])));
 
-    // Comparing ids only says the *value* is unchanged, which the Map gives for
-    // free — no mutation of the fold could break it, so that assertion defends
-    // nothing. Replaying must also return the identical set: a fold that
-    // rebuilds on a replay makes every consumer of the cache value re-render on
-    // a duplicate packet, and duplicates are the normal case with several
-    // relays. This direction is breakable, and it is the one worth pinning.
-    const set = foldAll([a, b]);
-    expect(foldEvent(set, a)).toBe(set);
-    expect(foldEvent(set, b)).toBe(set);
+      // Comparing ids only says the *value* is unchanged, which the Map gives for
+      // free — no mutation of the fold could break it, so that assertion defends
+      // nothing. Replaying must also return the identical set: a fold that
+      // rebuilds on a replay makes every consumer of the cache value re-render on
+      // a duplicate packet, and duplicates are the normal case with several
+      // relays. This direction is breakable, and it is the one worth pinning.
+      const set = foldAll([a, b]);
+      expect(foldEvent(set, a)).toBe(set);
+      expect(foldEvent(set, b)).toBe(set);
 
-    // The duplicate that actually occurs is the same event delivered by a second
-    // relay: an equal event in a different packet object. Re-folding the
-    // identical object proves nothing about the comparison, because reference
-    // equality short-circuits it either way.
-    const fromAnotherRelay = { ...b, from: 'wss://other/', event: structuredClone(b.event) };
-    expect(foldEvent(set, fromAnotherRelay)).toBe(set);
-    const regularElsewhere = { ...a, from: 'wss://other/', event: structuredClone(a.event) };
-    expect(foldEvent(set, regularElsewhere)).toBe(set);
-    // From another relay, in every class with a coordinate as well: a tie-break
-    // that let an equal event replace the incumbent for one class alone would
-    // rebuild the set there and nowhere else.
-    for (const kind of [3, 10002, 19999]) {
-      const held = ev({ kind });
-      const holding = foldEvent(set, held);
-      const elsewhere = { ...held, from: 'wss://other/', event: structuredClone(held.event) };
-      expect(foldEvent(holding, elsewhere), `${kind}`).toBe(holding);
-    }
+      // The duplicate that actually occurs is the same event delivered by a second
+      // relay: an equal event in a different packet object. Re-folding the
+      // identical object proves nothing about the comparison, because reference
+      // equality short-circuits it either way.
+      const fromAnotherRelay = { ...b, from: 'wss://other/', event: structuredClone(b.event) };
+      expect(foldEvent(set, fromAnotherRelay)).toBe(set);
+      const regularElsewhere = { ...a, from: 'wss://other/', event: structuredClone(a.event) };
+      expect(foldEvent(set, regularElsewhere)).toBe(set);
+      // From another relay, in every class with a coordinate as well: a tie-break
+      // that let an equal event replace the incumbent for one class alone would
+      // rebuild the set there and nowhere else.
+      for (const kind of [3, 10002, 19999]) {
+        const held = ev({ kind });
+        const holding = foldEvent(set, held);
+        const elsewhere = { ...held, from: 'wss://other/', event: structuredClone(held.event) };
+        expect(foldEvent(holding, elsewhere), `${kind}`).toBe(holding);
+      }
 
-    // Every path a replay can take returns what it was given: an addressable
-    // event, from either relay, and an ephemeral one once it has been noted.
-    // **A replay from another relay is a separate object all the way down** —
-    // `structuredClone`, not a spread — since a relay hands over a parsed copy
-    // and shares nothing with the incumbent, not even its tag arrays.
-    const addressable = ev({ kind: 30023, tags: [['d', 's']] });
-    const withIt = foldEvent(set, addressable);
-    expect(foldEvent(withIt, addressable)).toBe(withIt);
-    const addressableElsewhere = {
-      ...addressable,
-      from: 'wss://other/',
-      event: structuredClone(addressable.event)
-    };
-    expect(foldEvent(withIt, addressableElsewhere)).toBe(withIt);
-    const ephemeral = ev({ kind: 20001 });
-    const noted = foldEvent(set, ephemeral);
-    expect(foldEvent(noted, ephemeral)).toBe(noted);
-    expect(foldEvent(noted, { ...ephemeral, event: structuredClone(ephemeral.event) })).toBe(noted);
+      // Every path a replay can take returns what it was given: an addressable
+      // event, from either relay, and an ephemeral one once it has been noted.
+      // **A replay from another relay is a separate object all the way down** —
+      // `structuredClone`, not a spread — since a relay hands over a parsed copy
+      // and shares nothing with the incumbent, not even its tag arrays.
+      const addressable = ev({ kind: 30023, tags: [['d', 's']] });
+      const withIt = foldEvent(set, addressable);
+      expect(foldEvent(withIt, addressable)).toBe(withIt);
+      const addressableElsewhere = {
+        ...addressable,
+        from: 'wss://other/',
+        event: structuredClone(addressable.event)
+      };
+      expect(foldEvent(withIt, addressableElsewhere)).toBe(withIt);
+      const ephemeral = ev({ kind: 20001 });
+      const noted = foldEvent(set, ephemeral);
+      expect(foldEvent(noted, ephemeral)).toBe(noted);
+      expect(foldEvent(noted, { ...ephemeral, event: structuredClone(ephemeral.event) })).toBe(
+        noted
+      );
 
-    // **And every enumerated case** (`helpers/design.ts`): both events folded,
-    // in both orders, then each replayed — the same object, and a parsed copy
-    // from another relay — after the whole case, so a revision replayed after
-    // it was superseded is among them, with every value the rules read. Each
-    // replay returns the set it was given.
-    for (const { label, events } of CASES) {
-      const packets = events.map((fields) => ev(fields));
-      for (const order of [packets, [...packets].reverse()]) {
-        const folded = foldAll(order);
-        for (const packet of packets) {
-          expect(foldEvent(folded, packet), `${label}: the same object`).toBe(folded);
-          const elsewhere = {
+      // **And every enumerated case** (`helpers/design.ts`): both events folded,
+      // in both orders, then each replayed — the same object, and a parsed copy
+      // from another relay — after the whole case, so a revision replayed after
+      // it was superseded is among them, with every value the rules read. Each
+      // replay returns the set it was given.
+      const offenders: string[] = [];
+      let replays = 0;
+      const replay = (set: CachedEventSet, packet: OwnedPacket, what: string) => {
+        replays += 1;
+        if (foldEvent(set, packet) !== set) offenders.push(what);
+      };
+      for (const { label, events } of CASES) {
+        const packets = events.map((fields) => ev(fields));
+        for (const order of [packets, [...packets].reverse()]) {
+          const folded = foldAll(order);
+          for (const packet of packets) {
+            replay(folded, packet, `${label}: the same object`);
+            const elsewhere = {
+              ...packet,
+              from: 'wss://elsewhere/',
+              event: structuredClone(packet.event)
+            };
+            replay(folded, elsewhere, `${label}: from another relay`);
+            // The same event with each field outside the id changed — another
+            // valid signature, another `ots` — is a replay too (0003).
+            for (const field of OUTSIDE_THE_ID) {
+              const variant = structuredClone(packet.event) as unknown as Record<string, unknown>;
+              variant[field] =
+                field === 'sig' ? run128(packet.event.sig) : `${String(variant[field] ?? '')}+`;
+              replay(
+                folded,
+                { ...elsewhere, event: variant as unknown as typeof packet.event },
+                `${label}: another ${field}`
+              );
+            }
+          }
+        }
+      }
+      expect(offenders).toEqual([]);
+      expect(replays, 'the enumerated replays').toBe(ES3_REPLAYS);
+
+      // A seeded sweep over drawn events beside it, for combinations of several
+      // coordinates the pairs above do not build. It claims no coverage.
+      const draws = mulberry32(0xb5c3);
+      for (let trial = 0; trial < 200; trial += 1) {
+        const packets = arbitraryEvents(draws, 3 + Math.floor(draws() * 8)).map((fields) =>
+          ev(fields)
+        );
+        const folded = foldAll(packets);
+        for (const packet of shuffled(packets, draws)) {
+          const replayed = {
             ...packet,
             from: 'wss://elsewhere/',
             event: structuredClone(packet.event)
           };
-          expect(foldEvent(folded, elsewhere), `${label}: from another relay`).toBe(folded);
-          // The same event with each field outside the id changed — another
-          // valid signature, another `ots` — is a replay too (0003).
-          for (const field of OUTSIDE_THE_ID) {
-            const variant = structuredClone(packet.event) as unknown as Record<string, unknown>;
-            variant[field] =
-              field === 'sig' ? run128(packet.event.sig) : `${String(variant[field] ?? '')}+`;
-            expect(
-              foldEvent(folded, { ...elsewhere, event: variant as unknown as typeof packet.event }),
-              `${label}: another ${field}`
-            ).toBe(folded);
-          }
+          expect(foldEvent(folded, replayed), `trial ${trial}: ${packet.event.id}`).toBe(folded);
         }
       }
-    }
-
-    // A seeded sweep over drawn events beside it, for combinations of several
-    // coordinates the pairs above do not build. It claims no coverage.
-    const draws = mulberry32(0xb5c3);
-    for (let trial = 0; trial < 200; trial += 1) {
-      const packets = arbitraryEvents(draws, 3 + Math.floor(draws() * 8)).map((fields) =>
-        ev(fields)
-      );
-      const folded = foldAll(packets);
-      for (const packet of shuffled(packets, draws)) {
-        const replayed = {
-          ...packet,
-          from: 'wss://elsewhere/',
-          event: structuredClone(packet.event)
-        };
-        expect(foldEvent(folded, replayed), `trial ${trial}: ${packet.event.id}`).toBe(folded);
-      }
-    }
-  });
+    },
+    ENUMERATED
+  );
 
   it('ES29: every domain the design draws from shows every folding in the catalogue', () => {
     // An instrument, not a landing: what it holds is `helpers/design.ts`. For
@@ -1214,106 +1239,122 @@ describe('canonical event set', () => {
   });
 
   // @contracts B5-C2
-  it('ES5: randomised — any permutation of the same packets folds to the same set', () => {
-    const rand = mulberry32(0xc0ffee);
-    const packets = [
-      // The tie has to decide the final set, or the permutation sweep says
-      // nothing about the tie-break. Previously a third, newer metadata event
-      // beat both of these regardless of order, so removing the tie-break left
-      // this test passing — the coverage was vacuous.
-      ev({ kind: 0, created_at: 5, id: 'm1', content: 'content of m1' }),
-      ev({ kind: 0, created_at: 5, id: 'm0', content: 'content of m0' }),
-      ev({ kind: 0, created_at: 2, id: 'm2', content: 'content of m2' }),
-      ev({ kind: 1, created_at: 1, id: 'n1', content: 'content of n1' }),
-      ev({ kind: 1, created_at: 2, id: 'n2', content: 'content of n2' }),
-      ev({ kind: 30023, created_at: 3, id: 'a1', content: 'content of a1', tags: [['d', 's']] }),
-      ev({ kind: 30023, created_at: 4, id: 'a2', content: 'content of a2', tags: [['d', 's']] }),
-      ev({
-        kind: 30023,
-        created_at: 4,
-        id: 'a3',
-        content: 'content of a3',
-        tags: [['d', 'other']]
-      }),
-      // And a tie in each other class with a coordinate: a replaceable kind
-      // from the range, and an addressable one under one `d`. A tie-break
-      // written for one class alone is an order-dependent fold for the rest.
-      ev({ kind: 10002, created_at: 7, id: 'r1', content: 'content of r1' }),
-      ev({ kind: 10002, created_at: 7, id: 'r0', content: 'content of r0' }),
-      ev({ kind: 30023, created_at: 8, id: 'b1', content: 'content of b1', tags: [['d', 'u']] }),
-      ev({ kind: 30023, created_at: 8, id: 'b0', content: 'content of b0', tags: [['d', 'u']] })
-    ];
-    const expected = ['b0', 'r0', 'm0', 'a2', 'a3', 'n2', 'n1'];
-    // **Written out rather than derived from the fold.** It was
-    // `idsOf(foldAll(packets))` — the implementation under test producing its
-    // own oracle — so an implementation that stored nothing agreed with itself
-    // two hundred times: measured, with `entries.set` removed this arm passed
-    // and `E4` died. What the row claims is that every order gives *this* set,
-    // and the ties are what make the claim non-trivial: `m0`/`m1`, `r0`/`r1`
-    // and `b0`/`b1` each share a coordinate and a `created_at`, and the lower
-    // id has to win from either direction. Two hundred seeded shuffles, not
-    // every order of twelve packets.
+  it(
+    'ES5: randomised — any permutation of the same packets folds to the same set',
+    () => {
+      const rand = mulberry32(0xc0ffee);
+      const packets = [
+        // The tie has to decide the final set, or the permutation sweep says
+        // nothing about the tie-break. Previously a third, newer metadata event
+        // beat both of these regardless of order, so removing the tie-break left
+        // this test passing — the coverage was vacuous.
+        ev({ kind: 0, created_at: 5, id: 'm1', content: 'content of m1' }),
+        ev({ kind: 0, created_at: 5, id: 'm0', content: 'content of m0' }),
+        ev({ kind: 0, created_at: 2, id: 'm2', content: 'content of m2' }),
+        ev({ kind: 1, created_at: 1, id: 'n1', content: 'content of n1' }),
+        ev({ kind: 1, created_at: 2, id: 'n2', content: 'content of n2' }),
+        ev({ kind: 30023, created_at: 3, id: 'a1', content: 'content of a1', tags: [['d', 's']] }),
+        ev({ kind: 30023, created_at: 4, id: 'a2', content: 'content of a2', tags: [['d', 's']] }),
+        ev({
+          kind: 30023,
+          created_at: 4,
+          id: 'a3',
+          content: 'content of a3',
+          tags: [['d', 'other']]
+        }),
+        // And a tie in each other class with a coordinate: a replaceable kind
+        // from the range, and an addressable one under one `d`. A tie-break
+        // written for one class alone is an order-dependent fold for the rest.
+        ev({ kind: 10002, created_at: 7, id: 'r1', content: 'content of r1' }),
+        ev({ kind: 10002, created_at: 7, id: 'r0', content: 'content of r0' }),
+        ev({ kind: 30023, created_at: 8, id: 'b1', content: 'content of b1', tags: [['d', 'u']] }),
+        ev({ kind: 30023, created_at: 8, id: 'b0', content: 'content of b0', tags: [['d', 'u']] })
+      ];
+      const expected = ['b0', 'r0', 'm0', 'a2', 'a3', 'n2', 'n1'];
+      // **Written out rather than derived from the fold.** It was
+      // `idsOf(foldAll(packets))` — the implementation under test producing its
+      // own oracle — so an implementation that stored nothing agreed with itself
+      // two hundred times: measured, with `entries.set` removed this arm passed
+      // and `E4` died. What the row claims is that every order gives *this* set,
+      // and the ties are what make the claim non-trivial: `m0`/`m1`, `r0`/`r1`
+      // and `b0`/`b1` each share a coordinate and a `created_at`, and the lower
+      // id has to win from either direction. Two hundred seeded shuffles, not
+      // every order of twelve packets.
 
-    for (let i = 0; i < 200; i += 1) {
-      const shuffled = [...packets];
-      for (let j = shuffled.length - 1; j > 0; j -= 1) {
-        const k = Math.floor(rand() * (j + 1));
-        [shuffled[j], shuffled[k]] = [shuffled[k] as OwnedPacket, shuffled[j] as OwnedPacket];
-      }
-      expect(idsOf(foldAll(shuffled))).toEqual(expected);
-      // And the payload: the id kept is kept with its own content.
-      expect(
-        selectMany(foldAll(shuffled)).every(
-          ({ event }) => event.content === `content of ${event.id}`
-        ),
-        'an id kept with another revision’s content'
-      ).toBe(true);
-    }
-
-    // **And every order of every enumerated case** (`helpers/design.ts`) — each
-    // a minimal pair that changes one dimension, alone and beside an ephemeral
-    // event the fold drops — folds to the one set the rules name, each event
-    // whole, with the drop noted the same way.
-    //
-    // **Two packets of one id are the exception, and it is contracted** (0003):
-    // they are one event, the first to arrive is kept whole, and so which
-    // signature and which `ots` the set shows follows the arrival order. The
-    // set is the same by everything the id commits to, and the kept packet is
-    // the first — both halves are compared.
-    for (const { label, events, dimension } of CASES)
-      for (const set of [events, [...events, base(20001, { id: 'e'.repeat(64) })]])
-        for (const elsewhere of [false, true]) {
-          const packets = packetsOfCase(set, elsewhere);
-          const expected = keptOf(packets);
-          const dropped = packets.some(({ event }) => isEphemeral(event.kind));
-          for (const order of permutations(packets)) {
-            const folded = foldAll(order);
-            if (dimension === 'same id') {
-              expect(committedOf(heldOf(folded)), label).toEqual(committedOf(expected));
-              expect(heldOf(folded), `${label}: the first kept`).toEqual(keptOf(order));
-            } else expect(heldOf(folded), label).toEqual(expected);
-            expect(folded.ephemeralOmitted === true, `${label}: the drop noted`).toBe(dropped);
-          }
+      for (let i = 0; i < 200; i += 1) {
+        const shuffled = [...packets];
+        for (let j = shuffled.length - 1; j > 0; j -= 1) {
+          const k = Math.floor(rand() * (j + 1));
+          [shuffled[j], shuffled[k]] = [shuffled[k] as OwnedPacket, shuffled[j] as OwnedPacket];
         }
-
-    // A seeded sweep over drawn events beside it, for combinations of several
-    // coordinates the pairs above do not build. It claims no coverage: what is
-    // covered is what the design lists.
-    const draws = mulberry32(0xb5c2);
-    for (let trial = 0; trial < 100; trial += 1) {
-      const packets = packetsOf(
-        arbitraryEvents(draws, 3 + Math.floor(draws() * 8), { ephemeral: true }),
-        draws
-      );
-      const expected = keptOf(packets);
-      const dropped = packets.some(({ event }) => isEphemeral(event.kind));
-      for (let order = 0; order < 10; order += 1) {
-        const folded = foldAll(shuffled(packets, draws));
-        expect(heldOf(folded), `trial ${trial}`).toEqual(expected);
-        expect(folded.ephemeralOmitted === true, `trial ${trial}: the drop noted`).toBe(dropped);
+        expect(idsOf(foldAll(shuffled))).toEqual(expected);
+        // And the payload: the id kept is kept with its own content.
+        expect(
+          selectMany(foldAll(shuffled)).every(
+            ({ event }) => event.content === `content of ${event.id}`
+          ),
+          'an id kept with another revision’s content'
+        ).toBe(true);
       }
-    }
-  });
+
+      // **And every order of every enumerated case** (`helpers/design.ts`) — each
+      // a minimal pair that changes one dimension, alone and beside an ephemeral
+      // event the fold drops — folds to the one set the rules name, each event
+      // whole, with the drop noted the same way.
+      //
+      // **Two packets of one id are the exception, and it is contracted** (0003):
+      // they are one event, the first to arrive is kept whole, and so which
+      // signature and which `ots` the set shows follows the arrival order. The
+      // set is the same by everything the id commits to, and the kept packet is
+      // the first — both halves are compared.
+      const offenders: string[] = [];
+      let folds = 0;
+      for (const { label, events, dimension } of CASES)
+        for (const set of [events, [...events, base(20001, { id: 'e'.repeat(64) })]])
+          for (const elsewhere of [false, true]) {
+            const packets = packetsOfCase(set, elsewhere);
+            const expected = keptOf(packets);
+            const dropped = packets.some(({ event }) => isEphemeral(event.kind));
+            for (const order of permutations(packets)) {
+              folds += 1;
+              const folded = foldAll(order);
+              const held = JSON.stringify(heldOf(folded));
+              if (dimension === 'same id') {
+                if (
+                  JSON.stringify(committedOf(heldOf(folded))) !==
+                  JSON.stringify(committedOf(expected))
+                )
+                  offenders.push(label);
+                if (held !== JSON.stringify(keptOf(order)))
+                  offenders.push(`${label}: the first kept`);
+              } else if (held !== JSON.stringify(expected)) offenders.push(label);
+              if ((folded.ephemeralOmitted === true) !== dropped)
+                offenders.push(`${label}: the drop noted`);
+            }
+          }
+      expect(offenders).toEqual([]);
+      expect(folds, 'the enumerated folds').toBe(ES5_FOLDS);
+
+      // A seeded sweep over drawn events beside it, for combinations of several
+      // coordinates the pairs above do not build. It claims no coverage: what is
+      // covered is what the design lists.
+      const draws = mulberry32(0xb5c2);
+      for (let trial = 0; trial < 100; trial += 1) {
+        const packets = packetsOf(
+          arbitraryEvents(draws, 3 + Math.floor(draws() * 8), { ephemeral: true }),
+          draws
+        );
+        const expected = keptOf(packets);
+        const dropped = packets.some(({ event }) => isEphemeral(event.kind));
+        for (let order = 0; order < 10; order += 1) {
+          const folded = foldAll(shuffled(packets, draws));
+          expect(heldOf(folded), `trial ${trial}`).toEqual(expected);
+          expect(folded.ephemeralOmitted === true, `trial ${trial}: the drop noted`).toBe(dropped);
+        }
+      }
+    },
+    ENUMERATED
+  );
 
   it('ES6: the fold is monotonic — replaying everything can only keep or replace', () => {
     const first = foldAll([ev({ kind: 1, id: 'r1' }), ev({ kind: 0, created_at: 1, id: 'm1' })]);
@@ -1330,126 +1371,136 @@ describe('canonical event set', () => {
   });
 
   // @contracts B5-C1
-  it('ES28: two revisions of one replaceable event fold to the newer, under the identity its class dictates', () => {
-    // Every class that has a coordinate, at the edges of its range and in the
-    // middle: the two specials, the replaceable range, and the addressable one.
-    // Each with the `d` tag after another tag, so the identifier is the `d`
-    // tag's and not the first tag's.
-    const tags = [
-      ['title', 't'],
-      ['d', 's']
-    ];
-    const KINDS = [0, 3, 10000, 10002, 19999, 30000, 30023, 39999];
-    // **Each pair twice, with the ids in both orders**, so the newer winning is
-    // recency and neither id order: a fold that let the lower id win, or the
-    // higher, picks the older revision in one of the two.
-    const ORDERS = [
-      ['a-older', 'b-newer'],
-      ['y-older', 'x-newer']
-    ] as const;
-    for (const kind of KINDS) {
+  it(
+    'ES28: two revisions of one replaceable event fold to the newer, under the identity its class dictates',
+    () => {
+      // Every class that has a coordinate, at the edges of its range and in the
+      // middle: the two specials, the replaceable range, and the addressable one.
+      // Each with the `d` tag after another tag, so the identifier is the `d`
+      // tag's and not the first tag's.
+      const tags = [
+        ['title', 't'],
+        ['d', 's']
+      ];
+      const KINDS = [0, 3, 10000, 10002, 19999, 30000, 30023, 39999];
+      // **Each pair twice, with the ids in both orders**, so the newer winning is
+      // recency and neither id order: a fold that let the lower id win, or the
+      // higher, picks the older revision in one of the two.
+      const ORDERS = [
+        ['a-older', 'b-newer'],
+        ['y-older', 'x-newer']
+      ] as const;
+      for (const kind of KINDS) {
+        for (const [olderId, newerId] of ORDERS) {
+          const older = ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags });
+          const newer = ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags });
+          // The newer, whichever revision arrives first.
+          expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-${newerId}`]);
+          expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-${newerId}`]);
+          // And whichever relay each came from: the relay is not the coordinate.
+          const fromAnother = { ...newer, from: 'wss://another/', event: { ...newer.event } };
+          expect(idsOf(foldAll([older, fromAnother])), `${kind}: another relay`).toEqual([
+            `${kind}-${newerId}`
+          ]);
+        }
+        // Another author's revision is another event.
+        const older = ev({ kind, created_at: 10, id: `${kind}-a-older`, tags });
+        const theirs = ev({ kind, created_at: 20, id: `${kind}-theirs`, pubkey: 'p2', tags });
+        expect(idsOf(foldAll([older, theirs])).sort(), `${kind}: another author`).toEqual(
+          [`${kind}-a-older`, `${kind}-theirs`].sort()
+        );
+      }
+      // **And every kind's revisions in one set**, so the kind is part of the
+      // identity too: one author's lists of two replaceable kinds, or two
+      // addressable kinds under one `d`, are two coordinates and not one.
       for (const [olderId, newerId] of ORDERS) {
-        const older = ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags });
-        const newer = ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags });
-        // The newer, whichever revision arrives first.
-        expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-${newerId}`]);
-        expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-${newerId}`]);
-        // And whichever relay each came from: the relay is not the coordinate.
-        const fromAnother = { ...newer, from: 'wss://another/', event: { ...newer.event } };
-        expect(idsOf(foldAll([older, fromAnother])), `${kind}: another relay`).toEqual([
-          `${kind}-${newerId}`
+        const together = KINDS.flatMap((kind) => [
+          ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags }),
+          ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags })
+        ]);
+        expect(idsOf(foldAll(together)).sort(), 'one coordinate per kind').toEqual(
+          KINDS.map((kind) => `${kind}-${newerId}`).sort()
+        );
+      }
+      // Addressable: the `d` tag is part of the coordinate, so a revision under
+      // another `d` is another event — with the same first tag, so only the `d`
+      // tells them apart — and a revision with no `d` at all is the one whose `d`
+      // is empty. Replaceable: the `d` tag is not, so a revision that carries
+      // another one is still a revision.
+      const otherD = [
+        ['title', 't'],
+        ['d', 'other']
+      ];
+      for (const kind of [30000, 30023, 39999]) {
+        const here = ev({ kind, created_at: 20, id: `${kind}-here`, tags });
+        const elsewhere = ev({ kind, created_at: 10, id: `${kind}-elsewhere`, tags: otherD });
+        expect(idsOf(foldAll([here, elsewhere])).sort(), `${kind}: another d`).toEqual(
+          [`${kind}-elsewhere`, `${kind}-here`].sort()
+        );
+        const unnamed = ev({ kind, created_at: 10, id: `${kind}-unnamed`, tags: [] });
+        const emptyD = ev({ kind, created_at: 20, id: `${kind}-empty-d`, tags: [['d', '']] });
+        expect(idsOf(foldAll([unnamed, emptyD])), `${kind}: no d is the empty d`).toEqual([
+          `${kind}-empty-d`
         ]);
       }
-      // Another author's revision is another event.
-      const older = ev({ kind, created_at: 10, id: `${kind}-a-older`, tags });
-      const theirs = ev({ kind, created_at: 20, id: `${kind}-theirs`, pubkey: 'p2', tags });
-      expect(idsOf(foldAll([older, theirs])).sort(), `${kind}: another author`).toEqual(
-        [`${kind}-a-older`, `${kind}-theirs`].sort()
-      );
-    }
-    // **And every kind's revisions in one set**, so the kind is part of the
-    // identity too: one author's lists of two replaceable kinds, or two
-    // addressable kinds under one `d`, are two coordinates and not one.
-    for (const [olderId, newerId] of ORDERS) {
-      const together = KINDS.flatMap((kind) => [
-        ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags }),
-        ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags })
-      ]);
-      expect(idsOf(foldAll(together)).sort(), 'one coordinate per kind').toEqual(
-        KINDS.map((kind) => `${kind}-${newerId}`).sort()
-      );
-    }
-    // Addressable: the `d` tag is part of the coordinate, so a revision under
-    // another `d` is another event — with the same first tag, so only the `d`
-    // tells them apart — and a revision with no `d` at all is the one whose `d`
-    // is empty. Replaceable: the `d` tag is not, so a revision that carries
-    // another one is still a revision.
-    const otherD = [
-      ['title', 't'],
-      ['d', 'other']
-    ];
-    for (const kind of [30000, 30023, 39999]) {
-      const here = ev({ kind, created_at: 20, id: `${kind}-here`, tags });
-      const elsewhere = ev({ kind, created_at: 10, id: `${kind}-elsewhere`, tags: otherD });
-      expect(idsOf(foldAll([here, elsewhere])).sort(), `${kind}: another d`).toEqual(
-        [`${kind}-elsewhere`, `${kind}-here`].sort()
-      );
-      const unnamed = ev({ kind, created_at: 10, id: `${kind}-unnamed`, tags: [] });
-      const emptyD = ev({ kind, created_at: 20, id: `${kind}-empty-d`, tags: [['d', '']] });
-      expect(idsOf(foldAll([unnamed, emptyD])), `${kind}: no d is the empty d`).toEqual([
-        `${kind}-empty-d`
-      ]);
-    }
-    for (const kind of [0, 10002]) {
-      const before = ev({ kind, created_at: 10, id: `${kind}-a-before`, tags });
-      const after = ev({ kind, created_at: 20, id: `${kind}-b-after`, tags: otherD });
-      expect(idsOf(foldAll([before, after])), `${kind}: d is not its identity`).toEqual([
-        `${kind}-b-after`
-      ]);
-    }
-    // A regular kind has no revisions: one author and one kind are two events.
-    for (const kind of [1, 9999, 40000]) {
-      const first = ev({ kind, created_at: 10, id: `${kind}-first` });
-      const second = ev({ kind, created_at: 20, id: `${kind}-second` });
-      expect(idsOf(foldAll([first, second])).sort(), `${kind}`).toEqual(
-        [`${kind}-first`, `${kind}-second`].sort()
-      );
-    }
-
-    // **And every enumerated case** (`helpers/design.ts`): each changes one
-    // dimension of a base event — kind, author, `d` value or shape, a tag name
-    // that only looks like `d`, content, `sig`, an unrelated tag, recency over
-    // every ordered pair of instants, a tie — and states whether the two share
-    // a coordinate. The oracle has to agree with that statement, and the fold
-    // with the oracle, in both orders and with the later one from another relay,
-    // each event compared whole.
-    for (const { label, events, sameCoordinate } of CASES) {
-      const owned = events.map((fields) => ev(fields).event);
-      const [first, second] = owned as [(typeof owned)[number], (typeof owned)[number]];
-      expect(coordinateOf(first) === coordinateOf(second), `${label}: the oracle`).toBe(
-        sameCoordinate
-      );
-      for (const elsewhere of [false, true]) {
-        const packets = packetsOfCase(events, elsewhere);
-        expect(keptOf(packets), `${label}: kept`).toHaveLength(sameCoordinate ? 1 : 2);
-        // The oracle is given the arrival order: two packets of one id are one
-        // event, and the first to arrive is kept (0003).
-        for (const order of [packets, [...packets].reverse()])
-          expect(heldOf(foldAll(order)), label).toEqual(keptOf(order));
+      for (const kind of [0, 10002]) {
+        const before = ev({ kind, created_at: 10, id: `${kind}-a-before`, tags });
+        const after = ev({ kind, created_at: 20, id: `${kind}-b-after`, tags: otherD });
+        expect(idsOf(foldAll([before, after])), `${kind}: d is not its identity`).toEqual([
+          `${kind}-b-after`
+        ]);
       }
-    }
+      // A regular kind has no revisions: one author and one kind are two events.
+      for (const kind of [1, 9999, 40000]) {
+        const first = ev({ kind, created_at: 10, id: `${kind}-first` });
+        const second = ev({ kind, created_at: 20, id: `${kind}-second` });
+        expect(idsOf(foldAll([first, second])).sort(), `${kind}`).toEqual(
+          [`${kind}-first`, `${kind}-second`].sort()
+        );
+      }
 
-    // A seeded sweep over drawn events beside it, for combinations of several
-    // coordinates the pairs above do not build. It claims no coverage: what is
-    // covered is what the design lists.
-    const rand = mulberry32(0xb5c1);
-    for (let trial = 0; trial < 300; trial += 1) {
-      const packets = packetsOf(arbitraryEvents(rand, 3 + Math.floor(rand() * 8)), rand);
-      const expected = keptOf(packets);
-      for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)])
-        expect(heldOf(foldAll(order)), `trial ${trial}`).toEqual(expected);
-    }
-  });
+      // **And every enumerated case** (`helpers/design.ts`): each changes one
+      // dimension of a base event — kind, author, `d` value or shape, a tag name
+      // that only looks like `d`, content, `sig`, an unrelated tag, recency over
+      // every ordered pair of instants, a tie — and states whether the two share
+      // a coordinate. The oracle has to agree with that statement, and the fold
+      // with the oracle, in both orders and with the later one from another relay,
+      // each event compared whole.
+      const offenders: string[] = [];
+      let folds = 0;
+      for (const { label, events, sameCoordinate } of CASES) {
+        const owned = events.map((fields) => ev(fields).event);
+        const [first, second] = owned as [(typeof owned)[number], (typeof owned)[number]];
+        if ((coordinateOf(first) === coordinateOf(second)) !== sameCoordinate)
+          offenders.push(`${label}: the oracle`);
+        for (const elsewhere of [false, true]) {
+          const packets = packetsOfCase(events, elsewhere);
+          if (keptOf(packets).length !== (sameCoordinate ? 1 : 2)) offenders.push(`${label}: kept`);
+          // The oracle is given the arrival order: two packets of one id are one
+          // event, and the first to arrive is kept (0003).
+          for (const order of [packets, [...packets].reverse()]) {
+            folds += 1;
+            if (JSON.stringify(heldOf(foldAll(order))) !== JSON.stringify(keptOf(order)))
+              offenders.push(`${label}${elsewhere ? ', from another relay' : ''}`);
+          }
+        }
+      }
+      expect(offenders).toEqual([]);
+      expect(folds, 'the enumerated folds').toBe(ES28_FOLDS);
+
+      // A seeded sweep over drawn events beside it, for combinations of several
+      // coordinates the pairs above do not build. It claims no coverage: what is
+      // covered is what the design lists.
+      const rand = mulberry32(0xb5c1);
+      for (let trial = 0; trial < 300; trial += 1) {
+        const packets = packetsOf(arbitraryEvents(rand, 3 + Math.floor(rand() * 8)), rand);
+        const expected = keptOf(packets);
+        for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)])
+          expect(heldOf(foldAll(order)), `trial ${trial}`).toEqual(expected);
+      }
+    },
+    ENUMERATED
+  );
 
   // `E6b` and `E13` are not here any more. Both were written against
   // `foldEvent(set, packet, { retain })`, and the fold takes no bound now:
