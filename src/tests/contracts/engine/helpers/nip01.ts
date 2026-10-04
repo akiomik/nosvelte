@@ -21,6 +21,8 @@
  */
 import type Nostr from 'nostr-typedef';
 
+import { STRING_PAIRS } from './design.js';
+
 /** Where a rule or a domain comes from. */
 export type Source =
   | { readonly from: 'NIP-01'; readonly says: string }
@@ -90,6 +92,14 @@ export const RULES: readonly Rule[] = [
       from: '0003',
       decides:
         'reading the first and taking none as empty gives every addressable event exactly one identifier'
+    }
+  },
+  {
+    rule: 'a d tag with no value is the empty value',
+    source: {
+      from: '0003',
+      decides:
+        'the same identifier as a missing or empty d, so a tag shape does not split a coordinate'
     }
   },
   {
@@ -175,23 +185,6 @@ export function shuffled<T>(items: readonly T[], rand: () => number): T[] {
 const hex = (rand: () => number, length: number): string =>
   Array.from({ length }, () => Math.floor(rand() * 16).toString(16)).join('');
 
-/**
- * Strings that the exact comparison in {@link RULES} keeps apart and a careless
- * one merges: each **pair** below differs by one thing a reader might fold —
- * case, Unicode form, leading, trailing or inner whitespace, a colon that a
- * splitter cuts at, an empty value against a named one. Drawn wherever a field
- * is an arbitrary string.
- */
-const STRING_PAIRS: readonly (readonly [string, string])[] = [
-  ['s', 'S'],
-  ['é', 'é'],
-  ['s', ' s'],
-  ['s', 's '],
-  ['s x', 's  x'],
-  ['s', 's:x'],
-  ['', 's'],
-  ['\u{1F642}', '\u{1F643}']
-];
 const STRINGS = [...new Set(STRING_PAIRS.flat())];
 
 /** One field of an event: its domain in NIP-01, how the rules compare it, and what is drawn. */
@@ -230,15 +223,18 @@ export const FIELDS: readonly Field[] = [
   },
   {
     field: 'created_at',
-    domain: { from: 'NIP-01', says: 'unix timestamp in seconds — no bound is stated' },
+    domain: {
+      from: 'NIP-01',
+      says: 'unix timestamp in seconds — no bound is stated; ingestion accepts any finite number (event.ts)'
+    },
     comparison: 'numeric order',
     drawn:
-      'negative, zero, small, across a change of digit count, across 2^31 and 2^32, and the largest safe integer — the last a bound this library takes from JavaScript numbers (0003), not from NIP-01'
+      'negative, zero, small, across a change of digit count, across 2^31, 2^32 and 2^53, and 2^60 — the design enumerates every ordered pair of these (design.ts INSTANTS)'
   },
   {
     field: 'kind',
     domain: { from: 'NIP-01', says: 'integer between 0 and 65535' },
-    comparison: 'by class',
+    comparison: 'by class, and the exact kind is part of every coordinate',
     drawn:
       'every class boundary on both sides — 0 1 2 3 4 44 45 999 1000 9999 10000 19999 30000 39999 40000 65535 — no ephemeral kind, which the fold refuses before any rule reads it'
   },
@@ -259,8 +255,9 @@ export const FIELDS: readonly Field[] = [
   {
     field: 'd value',
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
-    comparison: 'exact',
-    drawn: 'both members of every pair in STRING_PAIRS, absent, and empty'
+    comparison:
+      'exact; the first d tag decides, and none, a value-less one and an empty one are the empty value (0003)',
+    drawn: 'both members of every pair in STRING_PAIRS, absent, value-less, and empty'
   },
   {
     field: 'tag value',
@@ -270,9 +267,13 @@ export const FIELDS: readonly Field[] = [
   },
   {
     field: 'content',
-    domain: { from: 'NIP-01', says: 'arbitrary string' },
+    domain: {
+      from: 'NIP-01',
+      says: 'arbitrary string — and for kind 0, a stringified JSON object of metadata'
+    },
     comparison: 'not read by the rules; carried whole',
-    drawn: 'every string in STRING_PAIRS around a random core, independent of the id'
+    drawn:
+      'every string in STRING_PAIRS, independent of the id. Synthetic for kind 0 as for every kind: the fold never parses content, so kind 0 metadata JSON is not drawn'
   },
   {
     field: 'sig',
@@ -397,99 +398,4 @@ export function arbitraryEvents(
       ]);
   }
   return drawn;
-}
-
-/**
- * The arrangements `B5`'s rows name, found in one arrival order. A sweep counts
- * them over its draws and asserts each was reached, so a change to the draws
- * that stops reaching one fails rather than leaving the sweep blind to it.
- */
-export type Arrangement =
-  | 'revisions of one coordinate'
-  | 'a superseded revision arrives after its winner'
-  | 'a superseded revision arrives before its winner'
-  | 'revisions tie on created_at'
-  | 'revisions of one coordinate from two relays'
-  | 'several coordinates in one set'
-  | 'two authors of one kind';
-
-/** Which {@link Arrangement}s `order` reaches, for events and the relay each arrived from. */
-export function arrangementsOf(
-  order: readonly { readonly event: Revision; readonly from?: string }[]
-): Set<Arrangement> {
-  const found = new Set<Arrangement>();
-  const byCoordinate = new Map<string, { event: Revision; from?: string; at: number }[]>();
-  order.forEach(({ event, from }, at) => {
-    const list = byCoordinate.get(coordinateOf(event)) ?? [];
-    list.push({ event, ...(from === undefined ? {} : { from }), at });
-    byCoordinate.set(coordinateOf(event), list);
-  });
-  if (byCoordinate.size > 1) found.add('several coordinates in one set');
-  const authorsByKind = new Map<number, Set<string>>();
-  for (const { event } of order) {
-    const set = authorsByKind.get(event.kind) ?? new Set<string>();
-    set.add(event.pubkey);
-    authorsByKind.set(event.kind, set);
-  }
-  if ([...authorsByKind.values()].some((authors) => authors.size > 1))
-    found.add('two authors of one kind');
-  for (const revisions of byCoordinate.values()) {
-    if (revisions.length < 2) continue;
-    found.add('revisions of one coordinate');
-    const winner = revisions.reduce((a, b) => (newerOf(a.event, b.event) === a.event ? a : b));
-    for (const each of revisions) {
-      if (each === winner) continue;
-      found.add(
-        each.at > winner.at
-          ? 'a superseded revision arrives after its winner'
-          : 'a superseded revision arrives before its winner'
-      );
-      if (each.event.created_at === winner.event.created_at)
-        found.add('revisions tie on created_at');
-    }
-    if (new Set(revisions.map(({ from }) => from)).size > 1)
-      found.add('revisions of one coordinate from two relays');
-  }
-  return found;
-}
-
-/**
- * The value meetings a sweep must reach, beside its arrangements: each pair in
- * {@link STRING_PAIRS} as the `d` values of two revisions of one author's
- * addressable kind, and an empty `d` followed by a named one beside another
- * revision. An arrangement reached with values that never differ by the one
- * thing a careless reader folds shows nothing about that reader — which is how
- * a change to the draws once lost kills the arrangement counters kept.
- */
-export const MEETINGS: readonly string[] = [
-  ...STRING_PAIRS.map(([a, b]) => `d pair ${JSON.stringify(a)} | ${JSON.stringify(b)}`),
-  'd empty then named, beside another revision'
-];
-
-/** Which {@link MEETINGS} `events` reach. */
-export function meetingsOf(events: readonly Revision[]): Set<string> {
-  const found = new Set<string>();
-  const groups = new Map<string, Revision[]>();
-  for (const event of events) {
-    if (!isAddressable(event.kind)) continue;
-    const key = `${event.kind}:${event.pubkey}`;
-    groups.set(key, [...(groups.get(key) ?? []), event]);
-  }
-  const firstD = (event: Revision): string | undefined =>
-    event.tags.find(([name]) => name === 'd')?.[1];
-  for (const group of groups.values()) {
-    if (group.length < 2) continue;
-    const values = new Set(group.map(firstD).filter((value) => value !== undefined));
-    for (const [a, b] of STRING_PAIRS)
-      if (values.has(a) && values.has(b))
-        found.add(`d pair ${JSON.stringify(a)} | ${JSON.stringify(b)}`);
-    if (
-      group.some((event) => {
-        const ds = event.tags.filter(([name]) => name === 'd');
-        return ds.length > 1 && ds[0]?.[1] === '' && ds[1]?.[1] !== '';
-      })
-    )
-      found.add('d empty then named, beside another revision');
-  }
-  return found;
 }

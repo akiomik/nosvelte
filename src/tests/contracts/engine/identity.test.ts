@@ -56,13 +56,11 @@ import type { ReqError } from '$lib/v1/reqerror.js';
 import { createRelayScope, type RelayScope } from '$lib/v1/scope.svelte.js';
 import { entryKeyOf } from '$lib/v1/useStreamedReq.svelte.js';
 
+import { base, DOMAINS, FOLDS, INSTANTS, minimalPairs, permutations } from './helpers/design.js';
 import {
   arbitraryEvents,
-  type Arrangement,
-  arrangementsOf,
+  coordinateOf,
   isEphemeral,
-  MEETINGS,
-  meetingsOf,
   shuffled,
   winnersOf
 } from './helpers/nip01.js';
@@ -753,49 +751,26 @@ const keptOf = (packets: readonly OwnedPacket[]): string[] =>
     .sort();
 
 /**
- * Assert that a sweep reached every arrangement in `wanted` at least `least`
- * times over its draws, so a change to the draws that stops reaching one fails
- * rather than leaving the sweep blind to it.
+ * The packets of an enumerated case, the last of them from another relay when
+ * `elsewhere`, as a parsed copy that shares nothing with the others.
  */
-const expectReached = (
-  counts: ReadonlyMap<Arrangement, number>,
-  wanted: readonly Arrangement[],
-  least: number
-): void => {
-  for (const arrangement of wanted)
-    expect(counts.get(arrangement) ?? 0, `reached: ${arrangement}`).toBeGreaterThanOrEqual(least);
-};
+const packetsOfCase = (
+  events: readonly Partial<Nostr.Event>[],
+  elsewhere: boolean
+): OwnedPacket[] =>
+  events.map((fields, at) => {
+    const packet = ev(fields);
+    return elsewhere && at === events.length - 1
+      ? ({
+          ...packet,
+          from: 'wss://elsewhere/',
+          event: structuredClone(packet.event)
+        } as OwnedPacket)
+      : packet;
+  });
 
-/** Count each arrangement `order` reaches into `counts`. */
-const tally = (
-  counts: Map<Arrangement, number>,
-  order: readonly (OwnedPacket & { from?: string })[]
-): void => {
-  for (const arrangement of arrangementsOf(order))
-    counts.set(arrangement, (counts.get(arrangement) ?? 0) + 1);
-};
-
-/** Count each {@link MEETINGS} entry `packets` reach into `counts`. */
-const meet = (counts: Map<string, number>, packets: readonly OwnedPacket[]): void => {
-  for (const meeting of meetingsOf(packets.map(({ event }) => event)))
-    counts.set(meeting, (counts.get(meeting) ?? 0) + 1);
-};
-
-/** Assert every {@link MEETINGS} entry was reached at least `least` times. */
-const expectMet = (counts: ReadonlyMap<string, number>, least: number): void => {
-  for (const meeting of MEETINGS)
-    expect(counts.get(meeting) ?? 0, `met: ${meeting}`).toBeGreaterThanOrEqual(least);
-};
-
-const EVERY_ARRANGEMENT: readonly Arrangement[] = [
-  'revisions of one coordinate',
-  'a superseded revision arrives after its winner',
-  'a superseded revision arrives before its winner',
-  'revisions tie on created_at',
-  'revisions of one coordinate from two relays',
-  'several coordinates in one set',
-  'two authors of one kind'
-];
+/** The enumerated design, built once. */
+const CASES = minimalPairs();
 
 /** The packets for `events`, half of them from a second relay. */
 const packetsOf = (events: readonly Partial<Nostr.Event>[], rand: () => number): OwnedPacket[] =>
@@ -934,12 +909,29 @@ describe('canonical event set', () => {
     expect(foldEvent(noted, ephemeral)).toBe(noted);
     expect(foldEvent(noted, { ...ephemeral, event: structuredClone(ephemeral.event) })).toBe(noted);
 
-    // **And over drawn events, from the field table**, so a replay meets every
-    // value the rules read — negative and zero timestamps, every `d` shape —
-    // and every arrangement: each drawn event is replayed as a parsed copy from
-    // another relay **after** the whole draw has been folded, so a revision
-    // replayed after it was superseded is among them. Each replay returns the
-    // set it was given.
+    // **And every enumerated case** (`helpers/design.ts`): both events folded,
+    // in both orders, then each replayed — the same object, and a parsed copy
+    // from another relay — after the whole case, so a revision replayed after
+    // it was superseded is among them, with every value the rules read. Each
+    // replay returns the set it was given.
+    for (const { label, events } of CASES) {
+      const packets = events.map((fields) => ev(fields));
+      for (const order of [packets, [...packets].reverse()]) {
+        const folded = foldAll(order);
+        for (const packet of packets) {
+          expect(foldEvent(folded, packet), `${label}: the same object`).toBe(folded);
+          const elsewhere = {
+            ...packet,
+            from: 'wss://elsewhere/',
+            event: structuredClone(packet.event)
+          };
+          expect(foldEvent(folded, elsewhere), `${label}: from another relay`).toBe(folded);
+        }
+      }
+    }
+
+    // A seeded sweep over drawn events beside it, for combinations of several
+    // coordinates the pairs above do not build. It claims no coverage.
     const draws = mulberry32(0xb5c3);
     for (let trial = 0; trial < 200; trial += 1) {
       const packets = arbitraryEvents(draws, 3 + Math.floor(draws() * 8)).map((fields) =>
@@ -955,6 +947,39 @@ describe('canonical event set', () => {
         expect(foldEvent(folded, replayed), `trial ${trial}: ${packet.event.id}`).toBe(folded);
       }
     }
+  });
+
+  it('ES29: every domain the design draws from shows every folding in the catalogue', () => {
+    // An instrument, not a landing: what it holds is `helpers/design.ts`. For
+    // each transformation a careless reader applies (`FOLDS`), the domain it
+    // would be applied to must hold the input that shows it — a pair it merges
+    // for an identifier, a value it changes for a payload, an ordered pair it
+    // reorders for an instant. A folding found next is one line in `FOLDS`, and
+    // this refuses a domain that cannot show it rather than letting the landings
+    // pass on inputs that never meet it.
+    for (const fold of FOLDS) {
+      if (fold.domain === 'instant') {
+        const reordered = INSTANTS.some((older, at) =>
+          INSTANTS.slice(at + 1).some((newer) => !(fold.key(older) < fold.key(newer)))
+        );
+        expect(reordered, `instant: ${fold.name}`).toBe(true);
+        continue;
+      }
+      const pairs = DOMAINS[fold.domain] as readonly (readonly [string, string])[];
+      const shown =
+        fold.domain === 'payload string'
+          ? pairs.flat().some((value) => fold.apply(value) !== value)
+          : pairs.some(([a, b]) => a !== b && fold.apply(a) === fold.apply(b));
+      expect(shown, `${fold.domain}: ${fold.name}`).toBe(true);
+    }
+
+    // The positive control: an injective transformation shows nothing, so the
+    // check above is not satisfied by any function at all.
+    const identity = (value: string): string => `<${value}>`;
+    expect(DOMAINS['identifier string'].some(([a, b]) => identity(a) === identity(b))).toBe(false);
+    expect(
+      INSTANTS.some((older, at) => INSTANTS.slice(at + 1).some((newer) => !(older < newer)))
+    ).toBe(false);
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {
@@ -1027,13 +1052,27 @@ describe('canonical event set', () => {
       ).toBe(true);
     }
 
-    // **And every order of drawn events folds to the one set NIP-01 names**,
-    // each event whole, across every class and with ties common.
-    // Ephemeral kinds are drawn here too: the fold drops them and notes the
-    // drop, and that note is part of the set an order must not change.
+    // **And every order of every enumerated case** (`helpers/design.ts`) — each
+    // a minimal pair that changes one dimension, alone and beside an ephemeral
+    // event the fold drops — folds to the one set the rules name, each event
+    // whole, with the drop noted the same way.
+    for (const { label, events } of CASES)
+      for (const set of [events, [...events, base(20001, { id: 'e'.repeat(64) })]])
+        for (const elsewhere of [false, true]) {
+          const packets = packetsOfCase(set, elsewhere);
+          const expected = keptOf(packets);
+          const dropped = packets.some(({ event }) => isEphemeral(event.kind));
+          for (const order of permutations(packets)) {
+            const folded = foldAll(order);
+            expect(heldOf(folded), label).toEqual(expected);
+            expect(folded.ephemeralOmitted === true, `${label}: the drop noted`).toBe(dropped);
+          }
+        }
+
+    // A seeded sweep over drawn events beside it, for combinations of several
+    // coordinates the pairs above do not build. It claims no coverage: what is
+    // covered is what the design lists.
     const draws = mulberry32(0xb5c2);
-    const reached = new Map<Arrangement, number>();
-    const met = new Map<string, number>();
     for (let trial = 0; trial < 100; trial += 1) {
       const packets = packetsOf(
         arbitraryEvents(draws, 3 + Math.floor(draws() * 8), { ephemeral: true }),
@@ -1041,17 +1080,12 @@ describe('canonical event set', () => {
       );
       const expected = keptOf(packets);
       const dropped = packets.some(({ event }) => isEphemeral(event.kind));
-      meet(met, packets);
       for (let order = 0; order < 10; order += 1) {
-        const shuffledOrder = shuffled(packets, draws);
-        tally(reached, shuffledOrder);
-        const folded = foldAll(shuffledOrder);
+        const folded = foldAll(shuffled(packets, draws));
         expect(heldOf(folded), `trial ${trial}`).toEqual(expected);
         expect(folded.ephemeralOmitted === true, `trial ${trial}: the drop noted`).toBe(dropped);
       }
     }
-    expectReached(reached, EVERY_ARRANGEMENT, 20);
-    expectMet(met, 3);
   });
 
   it('ES6: the fold is monotonic — replaying everything can only keep or replace', () => {
@@ -1155,27 +1189,38 @@ describe('canonical event set', () => {
       );
     }
 
-    // **And the rule over every event, not the events above.** Three reviews
-    // each found a mutation those fixtures let through, one dimension at a
-    // time; so events are drawn across every dimension the rule could read —
-    // kind, author, `d` absent, empty or named, an unrelated tag that varies,
-    // content, a relay, `created_at` ties, ids in no relation to recency — and
-    // what the fold keeps is compared, each event whole, with what NIP-01 keeps
-    // (`helpers/nip01.ts`, which calls nothing of the library's).
+    // **And every enumerated case** (`helpers/design.ts`): each changes one
+    // dimension of a base event — kind, author, `d` value or shape, a tag name
+    // that only looks like `d`, content, `sig`, an unrelated tag, recency over
+    // every ordered pair of instants, a tie — and states whether the two share
+    // a coordinate. The oracle has to agree with that statement, and the fold
+    // with the oracle, in both orders and with the later one from another relay,
+    // each event compared whole.
+    for (const { label, events, sameCoordinate } of CASES) {
+      const owned = events.map((fields) => ev(fields).event);
+      const [first, second] = owned as [(typeof owned)[number], (typeof owned)[number]];
+      expect(coordinateOf(first) === coordinateOf(second), `${label}: the oracle`).toBe(
+        sameCoordinate
+      );
+      for (const elsewhere of [false, true]) {
+        const packets = packetsOfCase(events, elsewhere);
+        const expected = keptOf(packets);
+        expect(expected, `${label}: kept`).toHaveLength(sameCoordinate ? 1 : 2);
+        for (const order of [packets, [...packets].reverse()])
+          expect(heldOf(foldAll(order)), label).toEqual(expected);
+      }
+    }
+
+    // A seeded sweep over drawn events beside it, for combinations of several
+    // coordinates the pairs above do not build. It claims no coverage: what is
+    // covered is what the design lists.
     const rand = mulberry32(0xb5c1);
-    const reached = new Map<Arrangement, number>();
-    const met = new Map<string, number>();
     for (let trial = 0; trial < 300; trial += 1) {
       const packets = packetsOf(arbitraryEvents(rand, 3 + Math.floor(rand() * 8)), rand);
       const expected = keptOf(packets);
-      meet(met, packets);
-      for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
-        tally(reached, order);
+      for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)])
         expect(heldOf(foldAll(order)), `trial ${trial}`).toEqual(expected);
-      }
     }
-    expectReached(reached, EVERY_ARRANGEMENT, 20);
-    expectMet(met, 5);
   });
 
   // `E6b` and `E13` are not here any more. Both were written against

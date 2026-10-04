@@ -1,19 +1,12 @@
+import type Nostr from 'nostr-typedef';
 import { describe, expect, it } from 'vitest';
 
 import type { OwnedPacket } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
 import { emptyEventSet, foldEvent, project, retainNewest, selectMany } from '$lib/v1/eventset.js';
 
-import {
-  arbitraryEvents,
-  type Arrangement,
-  arrangementsOf,
-  MEETINGS,
-  meetingsOf,
-  mulberry32,
-  shuffled,
-  winnersOf
-} from './helpers/nip01.js';
+import { competitorsFor, minimalPairs, rankingVariants } from './helpers/design.js';
+import { arbitraryEvents, mulberry32, shuffled, winnersOf } from './helpers/nip01.js';
 import { ownedEventPacket } from './helpers/relay.js';
 
 /**
@@ -108,37 +101,33 @@ function shownOf(set: CachedEventSet, at: number, superseded: readonly string[])
  */
 const BOUNDS = [1, 2, 3] as const;
 
-/** The arrangements `B5-C4` and `B5-C5` name, each of which a sweep must reach. */
-const BOUNDED_ARRANGEMENTS: readonly Arrangement[] = [
-  'revisions of one coordinate',
-  'a superseded revision arrives after its winner',
-  'a superseded revision arrives before its winner',
-  'revisions tie on created_at',
-  'revisions of one coordinate from two relays',
-  'several coordinates in one set'
-];
+/**
+ * Every enumerated case whose two events share a coordinate (`helpers/design.ts`),
+ * as the revision the rules keep and the one they supersede — the design's
+ * cases change one dimension each, so a bound meets every value and every
+ * recency relation the identity arms do.
+ */
+const REVISION_PAIRS = minimalPairs()
+  .filter(({ sameCoordinate }) => sameCoordinate)
+  .map(({ label, events }) => {
+    const [a, b] = events as [Partial<Nostr.Event>, Partial<Nostr.Event>];
+    const keptId = [...winnersOf([ev(a).event, ev(b).event]).values()][0]?.id;
+    return keptId === a.id
+      ? { label, winner: a, superseded: b }
+      : { label, winner: b, superseded: a };
+  });
 
-/** Count what `order` reaches into `counts`. */
-const tally = (counts: Map<Arrangement, number>, order: readonly OwnedPacket[]): void => {
-  for (const arrangement of arrangementsOf(order as readonly (OwnedPacket & { from?: string })[]))
-    counts.set(arrangement, (counts.get(arrangement) ?? 0) + 1);
-};
+/**
+ * The ranking variants a pair is run with: every one in `rankingVariants` when
+ * the two revisions tie on `created_at` — where the bound's tie-break decides
+ * which entry keeps the slot — and none otherwise.
+ */
+const variantsFor = (winner: Partial<Nostr.Event>, superseded: Partial<Nostr.Event>) =>
+  winner.created_at === superseded.created_at ? rankingVariants() : [[{}, {}, {}] as const];
 
-/** Assert every arrangement in {@link BOUNDED_ARRANGEMENTS} was reached at least `least` times. */
-const expectReached = (counts: ReadonlyMap<Arrangement, number>, least: number): void => {
-  for (const arrangement of BOUNDED_ARRANGEMENTS)
-    expect(counts.get(arrangement) ?? 0, `reached: ${arrangement}`).toBeGreaterThanOrEqual(least);
-};
-
-/** Count each {@link MEETINGS} entry `packets` reach, and assert each was reached. */
-const meet = (counts: Map<string, number>, packets: readonly OwnedPacket[]): void => {
-  for (const meeting of meetingsOf(packets.map(({ event }) => event)))
-    counts.set(meeting, (counts.get(meeting) ?? 0) + 1);
-};
-const expectMet = (counts: ReadonlyMap<string, number>, least: number): void => {
-  for (const meeting of MEETINGS)
-    expect(counts.get(meeting) ?? 0, `met: ${meeting}`).toBeGreaterThanOrEqual(least);
-};
+/** A packet from another relay, as a parsed copy that shares nothing. */
+const elsewhere = (packet: OwnedPacket): OwnedPacket =>
+  ({ ...packet, from: 'wss://elsewhere/', event: structuredClone(packet.event) }) as OwnedPacket;
 
 /** Drawn packets, half of them from a second relay. */
 const drawn = (rand: () => number, options?: { expiries?: readonly number[] }): OwnedPacket[] =>
@@ -234,28 +223,39 @@ describe('a bounded set that carries a replacement', () => {
       }
     }
 
-    // **And over drawn events, not only these.** Every class with a coordinate
-    // — the specials, the range, addressable under each kind of `d` — beside
-    // regular competitors, ties common, at every bound and in several orders,
-    // the instant held still: whatever the bound evicts, no revision NIP-01
-    // supersedes is published. A fixture of one kind could not see a key that
-    // broke for another.
+    // **And every enumerated pair of revisions** (`helpers/design.ts`) beside
+    // every regular competitor `competitorsFor` places against it — newer than
+    // both, between, older than both, tying either, with contents running
+    // against its id both ways — at every bound and in every order, the
+    // superseded revision from another relay, the instant held still.
+    for (const { label, winner, superseded } of REVISION_PAIRS)
+      for (const competitor of competitorsFor(superseded, winner))
+        for (const [w, l, c] of variantsFor(winner, superseded))
+          for (const retain of BOUNDS)
+            for (const order of permutations([
+              ev({ ...winner, ...w }),
+              elsewhere(ev({ ...superseded, ...l })),
+              ev({ ...competitor, ...c })
+            ])) {
+              const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
+              expect(
+                shownOf(set, NOW, [superseded.id as string]),
+                `${label}, competitor at ${competitor.created_at}, retain ${retain}`
+              ).toEqual([]);
+            }
+
+    // A seeded sweep over drawn events beside it, for combinations of several
+    // coordinates the pairs above do not build. It claims no coverage.
     const rand = mulberry32(0xb5c4);
-    const reached = new Map<Arrangement, number>();
-    const met = new Map<string, number>();
     for (let trial = 0; trial < 300; trial += 1) {
       const packets = drawn(rand);
       const superseded = supersededAmong(packets);
-      meet(met, packets);
       for (const retain of BOUNDS)
         for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
-          tally(reached, order);
           const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
           expect(shownOf(set, NOW, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
         }
     }
-    expectReached(reached, 20);
-    expectMet(met, 3);
   });
 
   it('ES6e: one stored set and one published answer, whatever the arrival order', () => {
@@ -341,19 +341,37 @@ describe('a bounded set that carries a replacement', () => {
       }
     }
 
-    // **And over drawn events whose regular members expire between the
-    // arrivals**, so the clock moves across deadlines while revisions are
-    // still arriving, at every bound and in several orders.
+    // **And every enumerated pair of revisions** beside a regular competitor
+    // that expires at 500, placed against it by `created_at` as above, at every
+    // bound and in every order: the first two arrivals at 400, the last at 600,
+    // so the clock crosses the deadline before the last revision arrives, and
+    // the set is read at 600.
+    for (const { label, winner, superseded } of REVISION_PAIRS)
+      for (const competitor of competitorsFor(superseded, winner, { expiring: true }))
+        for (const [w, l, c] of variantsFor(winner, superseded))
+          for (const retain of BOUNDS)
+            for (const order of permutations([
+              ev({ ...winner, ...w }),
+              elsewhere(ev({ ...superseded, ...l })),
+              ev({ ...competitor, ...c })
+            ])) {
+              const set = foldBoundedAt(retain)(
+                order.map((packet, at) => [packet, at < 2 ? 400 : 600] as const)
+              );
+              expect(
+                shownOf(set, 600, [superseded.id as string]),
+                `${label}, competitor at ${competitor.created_at}, retain ${retain}`
+              ).toEqual([]);
+            }
+
+    // A seeded sweep over drawn events beside it, whose regular members expire
+    // between arrivals. It claims no coverage.
     const rand = mulberry32(0xb5c5);
-    const reached = new Map<Arrangement, number>();
-    const met = new Map<string, number>();
     for (let trial = 0; trial < 300; trial += 1) {
       const packets = drawn(rand, { expiries: [150, 250, 350] });
       const superseded = supersededAmong(packets);
-      meet(met, packets);
       for (const retain of BOUNDS)
         for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
-          tally(reached, order);
           const instants = order.map((_, at) => 100 + at * 50);
           const set = foldBoundedAt(retain)(
             order.map((packet, at) => [packet, instants[at] as number] as const)
@@ -362,7 +380,5 @@ describe('a bounded set that carries a replacement', () => {
           expect(shownOf(set, last, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
         }
     }
-    expectReached(reached, 20);
-    expectMet(met, 3);
   });
 });

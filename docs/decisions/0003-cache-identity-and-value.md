@@ -1220,9 +1220,10 @@ one of them; a port inherits the protocol from NIP-01 and these from here, so ea
 - **The equal-timestamp rule is applied to addressable revisions too.** NIP-01 states it for
   replaceable events ("the event with the lowest id … should be retained"); using it for every class
   with a coordinate is what makes a fold order-independent (`B5-C2`) without a second rule.
-- **An addressable coordinate reads the first `d` tag, and a missing `d` tag is the empty value.**
-  NIP-01 names the `d` value but not which of several, nor what an event without one has; reading
-  the first and taking none as empty gives every addressable event exactly one identifier.
+- **An addressable coordinate reads the first `d` tag, and a missing `d` tag — or one with no value
+  — is the empty value.** NIP-01 names the `d` value but not which of several, nor what an event
+  without one has; reading the first and taking none as empty gives every addressable event exactly
+  one identifier.
 - **Every string these rules read is compared exactly.** NIP-01 describes tags as "arbitrary string
   arrays" and gives no folding, so case, Unicode form and whitespace all distinguish two values.
 
