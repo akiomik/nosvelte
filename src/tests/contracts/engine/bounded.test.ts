@@ -4,7 +4,16 @@ import type { OwnedPacket } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
 import { emptyEventSet, foldEvent, project, retainNewest, selectMany } from '$lib/v1/eventset.js';
 
-import { arbitraryEvents, mulberry32, shuffled, winnersOf } from './helpers/nip01.js';
+import {
+  arbitraryEvents,
+  type Arrangement,
+  arrangementsOf,
+  MEETINGS,
+  meetingsOf,
+  mulberry32,
+  shuffled,
+  winnersOf
+} from './helpers/nip01.js';
 import { ownedEventPacket } from './helpers/relay.js';
 
 /**
@@ -98,6 +107,38 @@ function shownOf(set: CachedEventSet, at: number, superseded: readonly string[])
  * replaced shows up beside its replacement.
  */
 const BOUNDS = [1, 2, 3] as const;
+
+/** The arrangements `B5-C4` and `B5-C5` name, each of which a sweep must reach. */
+const BOUNDED_ARRANGEMENTS: readonly Arrangement[] = [
+  'revisions of one coordinate',
+  'a superseded revision arrives after its winner',
+  'a superseded revision arrives before its winner',
+  'revisions tie on created_at',
+  'revisions of one coordinate from two relays',
+  'several coordinates in one set'
+];
+
+/** Count what `order` reaches into `counts`. */
+const tally = (counts: Map<Arrangement, number>, order: readonly OwnedPacket[]): void => {
+  for (const arrangement of arrangementsOf(order as readonly (OwnedPacket & { from?: string })[]))
+    counts.set(arrangement, (counts.get(arrangement) ?? 0) + 1);
+};
+
+/** Assert every arrangement in {@link BOUNDED_ARRANGEMENTS} was reached at least `least` times. */
+const expectReached = (counts: ReadonlyMap<Arrangement, number>, least: number): void => {
+  for (const arrangement of BOUNDED_ARRANGEMENTS)
+    expect(counts.get(arrangement) ?? 0, `reached: ${arrangement}`).toBeGreaterThanOrEqual(least);
+};
+
+/** Count each {@link MEETINGS} entry `packets` reach, and assert each was reached. */
+const meet = (counts: Map<string, number>, packets: readonly OwnedPacket[]): void => {
+  for (const meeting of meetingsOf(packets.map(({ event }) => event)))
+    counts.set(meeting, (counts.get(meeting) ?? 0) + 1);
+};
+const expectMet = (counts: ReadonlyMap<string, number>, least: number): void => {
+  for (const meeting of MEETINGS)
+    expect(counts.get(meeting) ?? 0, `met: ${meeting}`).toBeGreaterThanOrEqual(least);
+};
 
 /** Drawn packets, half of them from a second relay. */
 const drawn = (rand: () => number, options?: { expiries?: readonly number[] }): OwnedPacket[] =>
@@ -200,15 +241,21 @@ describe('a bounded set that carries a replacement', () => {
     // supersedes is published. A fixture of one kind could not see a key that
     // broke for another.
     const rand = mulberry32(0xb5c4);
+    const reached = new Map<Arrangement, number>();
+    const met = new Map<string, number>();
     for (let trial = 0; trial < 300; trial += 1) {
       const packets = drawn(rand);
       const superseded = supersededAmong(packets);
+      meet(met, packets);
       for (const retain of BOUNDS)
         for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
+          tally(reached, order);
           const set = foldBoundedAt(retain)(order.map((packet) => [packet, NOW] as const));
           expect(shownOf(set, NOW, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
         }
     }
+    expectReached(reached, 20);
+    expectMet(met, 3);
   });
 
   it('ES6e: one stored set and one published answer, whatever the arrival order', () => {
@@ -298,11 +345,15 @@ describe('a bounded set that carries a replacement', () => {
     // arrivals**, so the clock moves across deadlines while revisions are
     // still arriving, at every bound and in several orders.
     const rand = mulberry32(0xb5c5);
+    const reached = new Map<Arrangement, number>();
+    const met = new Map<string, number>();
     for (let trial = 0; trial < 300; trial += 1) {
       const packets = drawn(rand, { expiries: [150, 250, 350] });
       const superseded = supersededAmong(packets);
+      meet(met, packets);
       for (const retain of BOUNDS)
         for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)]) {
+          tally(reached, order);
           const instants = order.map((_, at) => 100 + at * 50);
           const set = foldBoundedAt(retain)(
             order.map((packet, at) => [packet, instants[at] as number] as const)
@@ -311,5 +362,7 @@ describe('a bounded set that carries a replacement', () => {
           expect(shownOf(set, last, superseded), `trial ${trial}, retain ${retain}`).toEqual([]);
         }
     }
+    expectReached(reached, 20);
+    expectMet(met, 3);
   });
 });
