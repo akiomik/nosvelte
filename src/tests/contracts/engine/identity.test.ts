@@ -60,6 +60,7 @@ import {
   base,
   type Case,
   CROSSINGS,
+  D_LOOKALIKES,
   type Dimension,
   DIRECTIONS,
   DOMAINS,
@@ -70,11 +71,14 @@ import {
   HEX_PAIRS,
   INSTANTS,
   minimalPairs,
+  NOT_FOR_TAG_NAMES,
+  OPTIONAL,
   OUTSIDE_THE_ID,
   PAYLOAD_FIELDS,
   permutations,
   rankingVariants,
-  RELATIONS
+  RELATIONS,
+  STRING_PAIRS
 } from './helpers/design.js';
 import {
   arbitraryEvents,
@@ -1031,16 +1035,54 @@ describe('canonical event set', () => {
     };
     for (const fold of FOLDS) expect(shows(fold), `${fold.domain}: ${fold.name}`).toBe(true);
 
-    // The positive controls: a transformation that keeps what the rules read
-    // shows nothing in any domain, so the check is not satisfied by any
-    // function at all.
-    const controls: Fold[] = [
-      { name: 'injective', domain: 'identifier string', apply: (value) => `<${value}>` },
-      { name: 'unchanged', domain: 'instant', key: (value) => value },
-      { name: 'unchanged', domain: 'hex order', key: (value) => value },
-      { name: 'the first', domain: 'd selection', select: firstD }
+    // The positive controls, **one per domain** — the type refuses a domain
+    // without one: a transformation that keeps what the rules read shows
+    // nothing, so no check is satisfied by any function at all.
+    const injective = (value: string): string => `<${value}>`;
+    const controls = {
+      'identifier string': { name: 'injective', domain: 'identifier string', apply: injective },
+      'payload string': {
+        name: 'unchanged',
+        domain: 'payload string',
+        apply: (value: string) => value
+      },
+      'tag name': { name: 'injective', domain: 'tag name', apply: injective },
+      hex: { name: 'injective', domain: 'hex', apply: injective },
+      instant: { name: 'unchanged', domain: 'instant', key: (value: number) => value },
+      'hex order': { name: 'unchanged', domain: 'hex order', key: (value: string) => value },
+      'd selection': { name: 'the first', domain: 'd selection', select: firstD }
+    } satisfies { readonly [D in Fold['domain']]: Fold & { readonly domain: D } };
+    for (const control of Object.values(controls))
+      expect(shows(control), `control ${control.domain}`).toBe(false);
+
+    // **Tag names are strings, so every string fold is a tag-name fold** unless
+    // `NOT_FOR_TAG_NAMES` exempts it with a reason: the two partition the
+    // string catalogue. Each exemption is searched for a counterexample among
+    // every string of one code unit, `d` beside each, the lookalikes and every
+    // string the design pairs — the search finds `D` for lower case, so it is
+    // not blind.
+    const named = (domain: Fold['domain']): string[] =>
+      FOLDS.filter((fold) => fold.domain === domain).map(({ name }) => name);
+    const exempt = Object.keys(NOT_FOR_TAG_NAMES);
+    expect([...named('tag name'), ...exempt].sort()).toEqual(named('identifier string').sort());
+    expect(named('tag name').filter((name) => exempt.includes(name))).toEqual([]);
+    const units = Array.from({ length: 0x10000 }, (_, code) => String.fromCharCode(code));
+    const candidates = [
+      ...units,
+      ...units.map((unit) => `d${unit}`),
+      ...units.map((unit) => `${unit}d`),
+      ...D_LOOKALIKES,
+      ...STRING_PAIRS.flat()
     ];
-    for (const control of controls) expect(shows(control), `control ${control.domain}`).toBe(false);
+    const mergesWithD = (name: string): boolean => {
+      const fold = FOLDS.find((one) => one.domain === 'identifier string' && one.name === name);
+      if (fold === undefined || !('apply' in fold)) throw new Error(`no string fold ${name}`);
+      const target = fold.apply('d');
+      return candidates.some((candidate) => candidate !== 'd' && fold.apply(candidate) === target);
+    };
+    for (const name of exempt)
+      expect(mergesWithD(name), `exempt for tag names: ${name}`).toBe(false);
+    expect(mergesWithD('lower case'), 'the search finds a witness').toBe(true);
 
     // **Every crossing the design promises has a case**: each dimension, over
     // each kind `CROSSINGS` lists for it, at every relation and in both
@@ -1095,6 +1137,25 @@ describe('canonical event set', () => {
     // **And every field outside the id differs between two packets of one
     // id** in some case, since the id cannot tell them apart and the rules
     // have to.
+    // **And every optional field is crossed with the variation of every other
+    // field outside the id**: absent on both, and present with one value on
+    // both. A signature that changes only where `ots` is absent is not a
+    // signature that changes.
+    for (const field of OUTSIDE_THE_ID)
+      for (const other of OPTIONAL.filter((one) => one !== field))
+        for (const present of [false, true])
+          expect(
+            CASES.some(
+              ({ dimension, events: [a, b] }) =>
+                dimension === 'same id' &&
+                a?.id === b?.id &&
+                JSON.stringify(a?.[field]) !== JSON.stringify(b?.[field]) &&
+                a?.[other] === b?.[other] &&
+                (a?.[other] !== undefined) === present
+            ),
+            `${field} varied with ${other} ${present ? 'present' : 'absent'}`
+          ).toBe(true);
+
     // Which fields are outside the id is NIP-01's serialization, not a choice.
     expect([...OUTSIDE_THE_ID].sort()).toEqual(
       Object.keys(FIELD_ROLES)

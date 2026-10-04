@@ -287,7 +287,8 @@ export const FIELDS: readonly Field[] = [
     field: 'tag name',
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'exact',
-    enumerated: '`d`, and D_LOOKALIKES (`D`, ` d `, `d `, `ｄ`) before and instead of it',
+    enumerated:
+      '`d`, and D_LOOKALIKES (another case, padding on either side, the compatibility form, a part after a colon or a NUL, a percent-escape) before and instead of it; every string fold applies to tag names unless NOT_FOR_TAG_NAMES exempts it',
     swept: 'D_LOOKALIKES and two unrelated names'
   },
   {

@@ -91,9 +91,10 @@ export const STRING_PAIRS: readonly (readonly [string, string])[] = [
 
 /**
  * Tag names that are not `d` and that a careless reader takes for it: another
- * case, padding, and the compatibility form of the letter.
+ * case, padding on either side, the compatibility form of the letter, a part
+ * after a colon or a NUL, and a percent-escape of it.
  */
-export const D_LOOKALIKES = ['D', ' d ', 'd ', 'ｄ'] as const;
+export const D_LOOKALIKES = ['D', ' d ', ' d', 'd ', 'ｄ', 'd:x', 'd\0x', '%64'] as const;
 
 /**
  * `created_at` values in ascending order: negative, zero, small, fractional,
@@ -167,35 +168,61 @@ function uriDecoded(value: string): string {
  * choice among several `d` tags, by a pair of tag lists whose coordinate it
  * judges differently from the first `d`.
  */
+/** The transformations a careless reader applies to a string, whichever string it is. */
+const STRING_FOLDS: readonly {
+  readonly name: string;
+  readonly apply: (value: string) => string;
+}[] = [
+  { name: 'lower case', apply: (value: string) => value.toLowerCase() },
+  { name: 'upper case', apply: (value: string) => value.toUpperCase() },
+  { name: 'trim', apply: (value: string) => value.trim() },
+  { name: 'trim start', apply: (value: string) => value.trimStart() },
+  { name: 'trim end', apply: (value: string) => value.trimEnd() },
+  { name: 'NFC', apply: (value: string) => value.normalize('NFC') },
+  { name: 'NFD', apply: (value: string) => value.normalize('NFD') },
+  { name: 'NFKC', apply: (value: string) => value.normalize('NFKC') },
+  { name: 'NFKD', apply: (value: string) => value.normalize('NFKD') },
+  { name: 'collapse whitespace', apply: (value: string) => value.replace(/\s+/g, ' ') },
+  { name: 'CRLF to LF', apply: (value: string) => value.replace(/\r\n/g, '\n') },
+  { name: 'first four', apply: (value: string) => value.slice(0, 4) },
+  { name: 'last four', apply: (value: string) => value.slice(-4) },
+  { name: 'before a colon', apply: (value: string) => value.split(':')[0] ?? '' },
+  {
+    name: 'as a number',
+    apply: (value: string) =>
+      value.trim() !== '' && Number.isFinite(Number(value)) ? String(Number(value)) : value
+  },
+  { name: 'URI-decoded', apply: uriDecoded },
+  { name: 'before a NUL', apply: (value: string) => value.split('\0')[0] ?? '' },
+  { name: 'plus as a space', apply: (value: string) => value.replace(/\+/g, ' ') }
+];
+
+/**
+ * The string folds that cannot merge any tag name with `d`, each with why. Every
+ * other string fold is a tag-name fold, and `ES29` checks the two partition the
+ * string catalogue — so a fold added for strings is a tag-name fold until it is
+ * exempted here, with a reason a reader can check — and searches every string of
+ * one code unit, and `d` beside each, for a counterexample to each exemption.
+ */
+export const NOT_FOR_TAG_NAMES: Readonly<Record<string, string>> = {
+  NFC: 'no other string composes to `d`',
+  NFD: 'no other string decomposes to `d`',
+  'collapse whitespace': 'a run of whitespace becomes a space, so no other string becomes `d`',
+  'CRLF to LF': 'only a line ending changes, so no other string becomes `d`',
+  'first four': 'only `d` has `d` as its first four code units',
+  'last four': 'only `d` has `d` as its last four code units',
+  'as a number': '`d` is not a number, and a number never reads as `d`',
+  'plus as a space': 'only a plus changes, so no other string becomes `d`'
+};
+
 export const FOLDS: readonly Fold[] = [
-  ...(['identifier string', 'payload string'] as const).flatMap((domain) => [
-    { name: 'lower case', domain, apply: (value: string) => value.toLowerCase() },
-    { name: 'upper case', domain, apply: (value: string) => value.toUpperCase() },
-    { name: 'trim', domain, apply: (value: string) => value.trim() },
-    { name: 'trim start', domain, apply: (value: string) => value.trimStart() },
-    { name: 'trim end', domain, apply: (value: string) => value.trimEnd() },
-    { name: 'NFC', domain, apply: (value: string) => value.normalize('NFC') },
-    { name: 'NFD', domain, apply: (value: string) => value.normalize('NFD') },
-    { name: 'NFKC', domain, apply: (value: string) => value.normalize('NFKC') },
-    { name: 'NFKD', domain, apply: (value: string) => value.normalize('NFKD') },
-    { name: 'collapse whitespace', domain, apply: (value: string) => value.replace(/\s+/g, ' ') },
-    { name: 'CRLF to LF', domain, apply: (value: string) => value.replace(/\r\n/g, '\n') },
-    { name: 'first four', domain, apply: (value: string) => value.slice(0, 4) },
-    { name: 'last four', domain, apply: (value: string) => value.slice(-4) },
-    { name: 'before a colon', domain, apply: (value: string) => value.split(':')[0] ?? '' },
-    {
-      name: 'as a number',
-      domain,
-      apply: (value: string) =>
-        value.trim() !== '' && Number.isFinite(Number(value)) ? String(Number(value)) : value
-    },
-    { name: 'URI-decoded', domain, apply: uriDecoded },
-    { name: 'before a NUL', domain, apply: (value: string) => value.split('\0')[0] ?? '' },
-    { name: 'plus as a space', domain, apply: (value: string) => value.replace(/\+/g, ' ') }
-  ]),
-  { name: 'lower case', domain: 'tag name', apply: (value) => value.toLowerCase() },
-  { name: 'trim', domain: 'tag name', apply: (value) => value.trim() },
-  { name: 'NFKC', domain: 'tag name', apply: (value) => value.normalize('NFKC') },
+  ...(['identifier string', 'payload string'] as const).flatMap((domain) =>
+    STRING_FOLDS.map((fold) => ({ ...fold, domain }))
+  ),
+  ...STRING_FOLDS.filter(({ name }) => !(name in NOT_FOR_TAG_NAMES)).map((fold) => ({
+    ...fold,
+    domain: 'tag name' as const
+  })),
   { name: 'first eight', domain: 'hex', apply: (value) => value.slice(0, 8) },
   { name: 'last four', domain: 'hex', apply: (value) => value.slice(-4) },
   { name: 'all but the first', domain: 'hex', apply: (value) => value.slice(1) },
@@ -284,6 +311,23 @@ export const FIELD_ROLES = {
   sig: ['payload', 'outside the id'],
   ots: ['payload', 'outside the id']
 } as const satisfies { readonly [K in keyof Nostr.Event]-?: readonly string[] };
+
+/** The keys of `T` that may be absent. */
+type OptionalKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? K : never }[keyof T];
+
+/**
+ * The fields of an event that may be absent: absent and present are two states
+ * of each. Checked against the event type both ways when it compiles — a field
+ * listed that is not optional, or an optional one left out, does not compile.
+ */
+export const OPTIONAL = ['ots'] as const satisfies readonly OptionalKeys<Nostr.Event>[];
+const everyOptionalListed: Exclude<
+  OptionalKeys<Nostr.Event>,
+  (typeof OPTIONAL)[number]
+> extends never
+  ? true
+  : never = true;
+void everyOptionalListed;
 
 /** The fields {@link FIELD_ROLES} puts outside the id. */
 export const OUTSIDE_THE_ID = (
@@ -571,31 +615,50 @@ export function minimalPairs(): Case[] {
   }
   // **Two packets of one id**, for every kind: everything the id commits to
   // equal, and one field outside it different — another valid signature, or
-  // another `ots`. They are one event, and the first to arrive is kept (0003).
-  for (const kind of CROSSINGS['same id'].kinds) {
-    const variants: [string, Partial<Nostr.Event>, Partial<Nostr.Event>][] = [
-      ...HEX_PAIRS.map(([x, y]): [string, Partial<Nostr.Event>, Partial<Nostr.Event>] => [
-        'another sig',
-        { sig: `${x}${x}` },
-        { sig: `${y}${y}` }
-      ]),
+  // another `ots` — while every other optional field is absent, and present
+  // with one value on both. They are one event, and the first to arrive is
+  // kept (0003). Built from `OUTSIDE_THE_ID` and `OPTIONAL`, so a field given
+  // either role is varied, and crossed with the others' presence, here.
+  const outside: Readonly<
+    Record<string, readonly (readonly [string, Partial<Nostr.Event>, Partial<Nostr.Event>])[]>
+  > = {
+    sig: HEX_PAIRS.map(
+      ([x, y]) => ['another sig', { sig: `${x}${x}` }, { sig: `${y}${y}` }] as const
+    ),
+    ots: [
       ['ots absent / present', {}, { ots: 's' }],
-      ...STRING_PAIRS.map(([x, y]): [string, Partial<Nostr.Event>, Partial<Nostr.Event>] => [
-        `ots ${JSON.stringify(x)} / ${JSON.stringify(y)}`,
-        { ots: x },
-        { ots: y }
-      ])
-    ];
-    for (const [label, x, y] of variants)
-      cases.push({
-        label: `kind ${kind}, one id, ${label}`,
-        events: [base(kind, x), base(kind, y)],
-        sameCoordinate: true,
-        dimension: 'same id',
-        kinds: [kind],
-        relation: 'tie'
-      });
-  }
+      ...STRING_PAIRS.map(
+        ([x, y]) =>
+          [`ots ${JSON.stringify(x)} / ${JSON.stringify(y)}`, { ots: x }, { ots: y }] as const
+      )
+    ]
+  };
+  /** Every combination of absent and present for `fields`, as overrides. */
+  const statesOf = (fields: readonly string[]): [string, Partial<Nostr.Event>][] =>
+    fields.reduce<[string, Partial<Nostr.Event>][]>(
+      (states, field) =>
+        states.flatMap(([label, overrides]) => [
+          [`${label}, ${field} absent`, overrides],
+          [`${label}, ${field} present`, { ...overrides, [field]: 'o' }]
+        ]),
+      [['', {}]]
+    );
+  for (const kind of CROSSINGS['same id'].kinds)
+    for (const field of OUTSIDE_THE_ID) {
+      const variants = outside[field];
+      if (variants === undefined)
+        throw new Error(`minimalPairs: no values outside the id for ${field}`);
+      for (const [label, x, y] of variants)
+        for (const [state, others] of statesOf(OPTIONAL.filter((other) => other !== field)))
+          cases.push({
+            label: `kind ${kind}, one id, ${label}${state}`,
+            events: [base(kind, { ...others, ...x }), base(kind, { ...others, ...y })],
+            sameCoordinate: true,
+            dimension: 'same id',
+            kinds: [kind],
+            relation: 'tie'
+          });
+    }
   // **Both directions of every pair.** Each case above makes one side the
   // older; the swap keeps the ids and instants where they are and exchanges
   // everything else, so whatever the dimension changed is carried by the
