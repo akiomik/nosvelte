@@ -56,7 +56,22 @@ import type { ReqError } from '$lib/v1/reqerror.js';
 import { createRelayScope, type RelayScope } from '$lib/v1/scope.svelte.js';
 import { entryKeyOf } from '$lib/v1/useStreamedReq.svelte.js';
 
-import { base, DOMAINS, FOLDS, INSTANTS, minimalPairs, permutations } from './helpers/design.js';
+import {
+  base,
+  type Case,
+  CROSSINGS,
+  type Dimension,
+  DIRECTIONS,
+  DOMAINS,
+  FIELD_ROLES,
+  FOLDS,
+  INSTANTS,
+  minimalPairs,
+  PAYLOAD_FIELDS,
+  permutations,
+  rankingVariants,
+  RELATIONS
+} from './helpers/design.js';
 import {
   arbitraryEvents,
   coordinateOf,
@@ -980,6 +995,52 @@ describe('canonical event set', () => {
     expect(
       INSTANTS.some((older, at) => INSTANTS.slice(at + 1).some((newer) => !(older < newer)))
     ).toBe(false);
+
+    // **Every crossing the design promises has a case**: each dimension, over
+    // each kind `CROSSINGS` lists for it, at every relation and in both
+    // directions. A product narrowed by hand — ties for two kinds only — is
+    // refused here by name, rather than left for a reviewer to notice.
+    const missing = (cases: readonly Case[]): string[] =>
+      (Object.entries(CROSSINGS) as [Dimension, readonly number[]][]).flatMap(
+        ([dimension, kinds]) =>
+          kinds.flatMap((kind) =>
+            RELATIONS.flatMap((relation) =>
+              DIRECTIONS.filter(
+                (direction) =>
+                  !cases.some(
+                    (one) =>
+                      one.dimension === dimension &&
+                      one.kinds.includes(kind) &&
+                      one.relation === relation &&
+                      one.direction === direction
+                  )
+              ).map((direction) => `${dimension} / kind ${kind} / ${relation} / ${direction}`)
+            )
+          )
+      );
+    expect(missing(CASES)).toEqual([]);
+    // Its control: the design with kind 3's ties taken out is refused.
+    expect(
+      missing(CASES.filter((one) => !(one.kinds.includes(3) && one.relation === 'tie')))
+    ).toContain('instant / kind 3 / tie / as built');
+
+    // **Every field of an event has a role, and every payload field is a
+    // dimension and a ranking variant.** `FIELD_ROLES` is checked against the
+    // event type when it compiles; here, against an event as built, and the
+    // payload fields against what the design and the bound's variants change.
+    expect(Object.keys(base(1, { ots: 'o' })).sort()).toEqual(Object.keys(FIELD_ROLES).sort());
+    const payload = (Object.entries(FIELD_ROLES) as [string, readonly string[]][])
+      .filter(([, roles]) => roles.includes('payload'))
+      .map(([field]) => field);
+    expect([...payload].sort()).toEqual([...PAYLOAD_FIELDS].sort());
+    for (const field of PAYLOAD_FIELDS) {
+      expect(Object.keys(CROSSINGS), `${field}: a dimension`).toContain(field);
+      const probe = base(1, { ots: 'o' });
+      const changed = rankingVariants().some(
+        ([winner]) => JSON.stringify(winner(probe)[field]) !== JSON.stringify(probe[field])
+      );
+      expect(changed, `${field}: a ranking variant`).toBe(true);
+    }
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {

@@ -4,7 +4,8 @@
  *
  * The rules the canonical event set follows, and the domain its inputs are
  * drawn from, each with where it comes from: a sentence of NIP-01, or a
- * decision this library recorded in 0003 where NIP-01 says nothing.
+ * decision this library recorded (in 0003, and in 0002 for `ots`) where NIP-01
+ * says nothing.
  *
  * **Why both columns.** Seven rounds of review found mutations the arms let
  * through, and the last ones were not gaps in the fixtures but in the reading
@@ -21,12 +22,12 @@
  */
 import type Nostr from 'nostr-typedef';
 
-import { STRING_PAIRS } from './design.js';
+import { COORDINATE_KINDS, D_LOOKALIKES, INSTANTS, REGULAR, STRING_PAIRS } from './design.js';
 
 /** Where a rule or a domain comes from. */
 export type Source =
   | { readonly from: 'NIP-01'; readonly says: string }
-  | { readonly from: '0003'; readonly decides: string };
+  | { readonly from: '0002' | '0003'; readonly decides: string };
 
 /** One rule the oracle applies, and its source. */
 export interface Rule {
@@ -187,20 +188,29 @@ const hex = (rand: () => number, length: number): string =>
 
 const STRINGS = [...new Set(STRING_PAIRS.flat())];
 
-/** One field of an event: its domain in NIP-01, how the rules compare it, and what is drawn. */
+/**
+ * One field of an event: its domain in NIP-01, how the rules compare it, and
+ * what each instrument puts in it — the enumerated design (`design.ts`, which
+ * the landings' coverage rests on) and the seeded sweep beside it (which claims
+ * none). The two are separate columns because they reach different values.
+ */
 export interface Field {
   readonly field: keyof Nostr.Event | 'tag name' | 'tag value' | 'd value' | 'tag shape';
   readonly domain: Source;
   readonly comparison: string;
-  readonly drawn: string;
+  readonly enumerated: string;
+  readonly swept: string;
 }
 
 /**
- * The domain of each field, from NIP-01, beside what the generator draws for
- * it. **The draws are synthetic**: ids and signatures are not hashes and
- * signatures of the events, and pubkeys need not be curve points, because the
- * seam under test is the fold, after verification — which `B5`'s other rows
- * and 0002 own. The table says so rather than calling the draws valid events.
+ * The domain of each field, from NIP-01, beside what the design and the sweep
+ * put in it. **The values are synthetic**: ids and signatures are not hashes
+ * and signatures of the events, pubkeys need not be curve points, and the
+ * design's competitors and ranking variants use sentinel values (an id of all
+ * `0` or all `f`, a one-letter content or tag name) chosen for their order,
+ * because the seam under test is the fold, after verification — which `B5`'s
+ * other rows and 0002 own. The table says so rather than calling them valid
+ * events.
  */
 export const FIELDS: readonly Field[] = [
   {
@@ -210,7 +220,9 @@ export const FIELDS: readonly Field[] = [
       says: '32-bytes lowercase hex-encoded sha256 of the serialized event data'
     },
     comparison: 'exact, and lexical for the tie',
-    drawn: '64 hex digits sharing a 56-digit prefix, in no relation to recency'
+    enumerated:
+      '64 hex digits: pairs differing at the first, a middle or the last digit (HEX_PAIRS), ids in both orders against recency, and for a competitor all-0, the midpoint and all-f',
+    swept: '64 hex digits sharing a 56-digit prefix, in no relation to recency'
   },
   {
     field: 'pubkey',
@@ -219,51 +231,59 @@ export const FIELDS: readonly Field[] = [
       says: '32-bytes lowercase hex-encoded public key of the event creator'
     },
     comparison: 'exact',
-    drawn: 'two authors per draw, 64 hex digits sharing a 60-digit prefix'
+    enumerated:
+      '64 hex digits, in pairs differing at the first, a middle or the last digit (HEX_PAIRS)',
+    swept: 'two authors per draw, 64 hex digits sharing a 60-digit prefix'
   },
   {
     field: 'created_at',
     domain: {
       from: 'NIP-01',
-      says: 'unix timestamp in seconds — no bound is stated; ingestion accepts any finite number (event.ts)'
+      says: 'unix timestamp in seconds — neither a bound nor whole seconds is stated; ingestion accepts any finite number (event.ts)'
     },
     comparison: 'numeric order',
-    drawn:
-      'negative, zero, small, across a change of digit count, across 2^31, 2^32 and 2^53, and 2^60 — the design enumerates every ordered pair of these (design.ts INSTANTS)'
+    enumerated:
+      'every ordered pair of design.ts INSTANTS (negative, zero, small, fractional, across 2^31, 2^32 and 2^53, and 2^60), ties at five of them, and for a competitor the representable number above, below and between',
+    swept: 'one of design.ts INSTANTS'
   },
   {
     field: 'kind',
     domain: { from: 'NIP-01', says: 'integer between 0 and 65535' },
     comparison: 'by class, and the exact kind is part of every coordinate',
-    drawn:
-      'every class boundary on both sides — 0 1 2 3 4 44 45 999 1000 9999 10000 19999 30000 39999 40000 65535 — no ephemeral kind, which the fold refuses before any rule reads it'
+    enumerated:
+      'every kind with a coordinate in design.ts (0, 3, 10000, 10002, 19999, 30000, 30023, 39999) across every dimension, and the regular kinds at every edge and unclassified (1 2 4 44 45 999 1000 9999 40000 65535)',
+    swept:
+      'the same kinds, a few per draw, and 20000 and 29999 where ephemeral events are asked for'
   },
   {
     field: 'tag shape',
     domain: { from: 'NIP-01', says: 'Each tag is an array of one or more strings' },
     comparison: 'the first element is the name',
-    drawn:
-      'one-element tags, tags with extra elements, the `d` tag after zero to three others, two `d` tags'
+    enumerated:
+      'one-element tags, tags with extra elements, the `d` tag after two others, two `d` tags, a value-less `d`',
+    swept: 'the same shapes, with zero to three tags before the `d` tags'
   },
   {
     field: 'tag name',
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'exact',
-    drawn:
-      '`d`, and names a careless reader takes for it: `D`, ` d `, `d ` — beside unrelated names'
+    enumerated: '`d`, and D_LOOKALIKES (`D`, ` d `, `d `, `ｄ`) before and instead of it',
+    swept: 'D_LOOKALIKES and two unrelated names'
   },
   {
     field: 'd value',
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison:
       'exact; the first d tag decides, and none, a value-less one and an empty one are the empty value (0003)',
-    drawn: 'both members of every pair in STRING_PAIRS, absent, value-less, and empty'
+    enumerated: 'both members of every STRING_PAIRS pair, absent, value-less, and empty',
+    swept: 'one STRING_PAIRS pair in focus per draw, and any string in STRING_PAIRS'
   },
   {
     field: 'tag value',
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'not read by the rules',
-    drawn: 'every string in STRING_PAIRS'
+    enumerated: 'a few fixed values beside the `d` tag',
+    swept: 'every string in STRING_PAIRS'
   },
   {
     field: 'content',
@@ -272,40 +292,36 @@ export const FIELDS: readonly Field[] = [
       says: 'arbitrary string — and for kind 0, a stringified JSON object of metadata'
     },
     comparison: 'not read by the rules; carried whole',
-    drawn:
-      'every string in STRING_PAIRS, independent of the id. Synthetic for kind 0 as for every kind: the fold never parses content, so kind 0 metadata JSON is not drawn'
+    enumerated:
+      'both members of every STRING_PAIRS pair, for every kind with a coordinate. Synthetic for kind 0 as for every kind: the fold never parses content, so kind 0 metadata JSON is not used',
+    swept: 'strings from STRING_PAIRS around six hex digits, independent of the id'
   },
   {
     field: 'sig',
     domain: { from: 'NIP-01', says: '64-bytes lowercase hex of the signature' },
     comparison: 'not read by the rules; carried whole',
-    drawn: '128 hex digits, independent of every other field'
+    enumerated:
+      '128 hex digits differing at one digit, and all-0, all-8 and all-f in the ranking variants',
+    swept: '128 hex digits, independent of every other field'
+  },
+  {
+    field: 'ots',
+    domain: {
+      from: '0002',
+      decides:
+        'not a NIP-01 field: "plus `ots` when the wire carried one — deprecated in `nostr-typedef`, still sent, and a field a consumer can render, so dropping it would silently change what they see"'
+    },
+    comparison: 'not read by the rules; carried whole',
+    enumerated: 'absent against present, and both members of every STRING_PAIRS pair',
+    swept: 'absent, or any string in STRING_PAIRS'
   }
 ];
 
-/** {@link FIELDS}'s `kind` row as values. */
-const KINDS = [
-  0, 1, 2, 3, 4, 44, 45, 999, 1000, 9999, 10000, 19999, 30000, 39999, 40000, 65535
-] as const;
+/** The kinds the sweep draws from: the design's, so the two never disagree. */
+const KINDS = [...COORDINATE_KINDS, ...REGULAR] as const;
 
-/** {@link FIELDS}'s `created_at` row as values. */
-const INSTANTS = [
-  -2,
-  -1,
-  0,
-  1,
-  9,
-  10,
-  99,
-  100,
-  2_147_483_647,
-  2_147_483_648,
-  4_294_967_296,
-  Number.MAX_SAFE_INTEGER
-] as const;
-
-/** {@link FIELDS}'s `tag name` row: names that are not `d`, some of which a careless reader takes for it. */
-const OTHER_NAMES = ['D', ' d ', 'd ', 'title', 'client'] as const;
+/** The sweep's tag names that are not `d`: the design's lookalikes, and two unrelated names. */
+const OTHER_NAMES = [...D_LOOKALIKES, 'title', 'client'] as const;
 
 /** Whether {@link RULES} keep an event of `kind` as itself. */
 const isRegular = (kind: number): boolean => !isReplaceable(kind) && !isAddressable(kind);
@@ -360,8 +376,9 @@ export function arbitraryEvents(
       // No `d` tag at all.
     } else if (dShape < 0.6) tags.push(['d', dValue()]);
     else if (dShape < 0.75) tags.push(['d', dValue(), pick(rand, STRINGS)]);
-    else if (dShape < 0.88) tags.push(['d', dValue()], ['d', dValue()]);
-    else tags.push(['d', ''], ['d', dValue()]);
+    else if (dShape < 0.84) tags.push(['d', dValue()], ['d', dValue()]);
+    else if (dShape < 0.92) tags.push(['d', ''], ['d', dValue()]);
+    else tags.push(['d']);
     if (rand() < 0.3) tags.push([pick(rand, OTHER_NAMES), pick(rand, STRINGS)]);
     if (expiries.length > 0 && isRegular(kind) && rand() < 0.6)
       tags.push(['expiration', String(pick(rand, expiries))]);
@@ -372,7 +389,8 @@ export function arbitraryEvents(
       created_at: pick(rand, INSTANTS),
       content: `${pick(rand, STRINGS)}${hex(rand, 6)}${pick(rand, STRINGS)}`,
       sig: hex(rand, 128),
-      tags
+      tags,
+      ...(rand() < 0.3 ? { ots: pick(rand, STRINGS) } : {})
     };
   });
   // **And the meeting itself, placed rather than hoped for.** Where the draw

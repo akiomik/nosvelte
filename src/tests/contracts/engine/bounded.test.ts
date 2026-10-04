@@ -5,7 +5,7 @@ import type { OwnedPacket } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
 import { emptyEventSet, foldEvent, project, retainNewest, selectMany } from '$lib/v1/eventset.js';
 
-import { competitorsFor, minimalPairs, rankingVariants } from './helpers/design.js';
+import { competitorsFor, minimalPairs, rankingVariants, type Rewrite } from './helpers/design.js';
 import { arbitraryEvents, mulberry32, shuffled, winnersOf } from './helpers/nip01.js';
 import { ownedEventPacket } from './helpers/relay.js';
 
@@ -122,15 +122,18 @@ const REVISION_PAIRS = minimalPairs()
  * the two revisions tie on `created_at` — where the bound's tie-break decides
  * which entry keeps the slot — and none otherwise.
  */
-const variantsFor = (winner: Partial<Nostr.Event>, superseded: Partial<Nostr.Event>) =>
-  winner.created_at === superseded.created_at ? rankingVariants() : [[{}, {}, {}] as const];
+const variantsFor = (
+  winner: Partial<Nostr.Event>,
+  superseded: Partial<Nostr.Event>
+): readonly (readonly [Rewrite, Rewrite, Rewrite])[] =>
+  winner.created_at === superseded.created_at ? rankingVariants() : rankingVariants().slice(0, 1);
 
 /**
  * How many folds each bounded arm's enumeration runs: every same-coordinate
  * pair, every competitor, every ranking variant, three bounds, six orders.
  * Asserted exactly, so the design's size is a fact the arms state.
  */
-const BOUNDED_RUNS = 306_288;
+const BOUNDED_RUNS = 2_787_120;
 
 /** The time the enumerated bounded arms are given; the budget above is what they are held to. */
 const ENUMERATED = 60_000;
@@ -236,20 +239,18 @@ describe('a bounded set that carries a replacement', () => {
       }
 
       // **And every enumerated pair of revisions** (`helpers/design.ts`) beside
-      // every regular competitor `competitorsFor` places against it — newer than
-      // both, between, older than both, tying either, with contents running
-      // against its id both ways — at every bound and in every order, the
-      // superseded revision from another relay, the instant held still.
+      // every regular competitor `competitorsFor` places against it — at the
+      // representable instant above both, below both and between, and tying
+      // either with an id below, between and above theirs — and, where the pair
+      // ties, every ranking variant (each payload field running against the ids
+      // both ways), at every bound and in every order, the superseded revision
+      // from another relay, the instant held still.
       const offenders: string[] = [];
       let runs = 0;
       for (const { label, winner, superseded } of REVISION_PAIRS)
         for (const competitor of competitorsFor(superseded, winner))
           for (const [w, l, c] of variantsFor(winner, superseded)) {
-            const trio = [
-              ev({ ...winner, ...w }),
-              elsewhere(ev({ ...superseded, ...l })),
-              ev({ ...competitor, ...c })
-            ];
+            const trio = [ev(w(winner)), elsewhere(ev(l(superseded))), ev(c(competitor))];
             for (const retain of BOUNDS)
               for (const order of permutations(trio)) {
                 runs += 1;
@@ -377,11 +378,7 @@ describe('a bounded set that carries a replacement', () => {
       for (const { label, winner, superseded } of REVISION_PAIRS)
         for (const competitor of competitorsFor(superseded, winner, { expiring: true }))
           for (const [w, l, c] of variantsFor(winner, superseded)) {
-            const trio = [
-              ev({ ...winner, ...w }),
-              elsewhere(ev({ ...superseded, ...l })),
-              ev({ ...competitor, ...c })
-            ];
+            const trio = [ev(w(winner)), elsewhere(ev(l(superseded))), ev(c(competitor))];
             for (const retain of BOUNDS)
               for (const order of permutations(trio)) {
                 runs += 1;
