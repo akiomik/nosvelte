@@ -67,7 +67,7 @@ export const HEX_PAIRS: readonly (readonly [string, string])[] = [
  * Unicode's composed and decomposed forms, compatibility forms, surrounding,
  * inner and line-ending whitespace, a prefix, a suffix, the part after a colon,
  * a number's spelling, a percent-escape, the part after a NUL, a plus read as
- * a space, and an empty value against a named one.
+ * a space, a character outside the BMP, and an empty value against a named one.
  */
 export const STRING_PAIRS: readonly (readonly [string, string])[] = [
   ['s', 'S'],
@@ -86,18 +86,21 @@ export const STRING_PAIRS: readonly (readonly [string, string])[] = [
   ['%73', 's'],
   ['s\0x', 's'],
   ['a+b', 'a b'],
+  ['s😀', 's😁'],
   ['', 's']
 ];
 
 /**
  * Tag names that are not `d` and that a careless reader takes for it: another
  * case, padding on either side, the compatibility form of the letter, a part
- * after a colon or a NUL, and a percent-escape of it.
+ * after a colon or a NUL, a percent-escape of it, and a character outside the
+ * BMP after it.
  */
-export const D_LOOKALIKES = ['D', ' d ', ' d', 'd ', 'ｄ', 'd:x', 'd\0x', '%64'] as const;
+export const D_LOOKALIKES = ['D', ' d ', ' d', 'd ', 'ｄ', 'd:x', 'd\0x', '%64', 'd😀'] as const;
 
 /**
- * `created_at` values in ascending order: negative, zero, small, fractional,
+ * `created_at` values in ascending order: negative, zero, small, fractional
+ * (one below a millisecond),
  * across a change of digit count, across 2^31 and 2^32, and across 2^53 —
  * every finite number ingestion accepts is in the domain, since NIP-01 states
  * neither a bound nor that the seconds are whole.
@@ -109,6 +112,7 @@ export const INSTANTS = [
   1,
   9,
   10,
+  10.0001,
   10.25,
   10.5,
   99,
@@ -194,7 +198,15 @@ const STRING_FOLDS: readonly {
   },
   { name: 'URI-decoded', apply: uriDecoded },
   { name: 'before a NUL', apply: (value: string) => value.split('\0')[0] ?? '' },
-  { name: 'plus as a space', apply: (value: string) => value.replace(/\+/g, ' ') }
+  { name: 'plus as a space', apply: (value: string) => value.replace(/\+/g, ' ') },
+  {
+    name: 'outside the BMP removed',
+    apply: (value: string) => value.replace(/[\u{10000}-\u{10FFFF}]/gu, '')
+  },
+  {
+    name: 'a code point cut to its first unit',
+    apply: (value: string) => Array.from(value, (point) => point[0]).join('')
+  }
 ];
 
 /**
@@ -212,7 +224,9 @@ export const NOT_FOR_TAG_NAMES: Readonly<Record<string, string>> = {
   'first four': 'only `d` has `d` as its first four code units',
   'last four': 'only `d` has `d` as its last four code units',
   'as a number': '`d` is not a number, and a number never reads as `d`',
-  'plus as a space': 'only a plus changes, so no other string becomes `d`'
+  'plus as a space': 'only a plus changes, so no other string becomes `d`',
+  'a code point cut to its first unit':
+    'only a character outside the BMP changes, and it leaves a surrogate behind, so no other string becomes `d`'
 };
 
 export const FOLDS: readonly Fold[] = [
@@ -243,6 +257,12 @@ export const FOLDS: readonly Fold[] = [
   { name: 'ceiling', domain: 'instant', key: (value) => Math.ceil(value) },
   { name: 'rounded', domain: 'instant', key: (value) => Math.round(value) },
   { name: 'truncated', domain: 'instant', key: (value) => Math.trunc(value) },
+  {
+    name: 'to the millisecond',
+    domain: 'instant',
+    key: (value) => Math.trunc(value * 1000) / 1000
+  },
+  { name: 'as a 32-bit float', domain: 'instant', key: (value) => Math.fround(value) },
   {
     name: 'bytes reversed',
     domain: 'hex order',
@@ -383,6 +403,11 @@ export interface Case {
   readonly kinds: readonly number[];
   readonly relation: Relation;
   readonly direction: Direction;
+  /** For a payload string, where it sits and which pair of `STRING_PAIRS` it is. */
+  readonly payload?: {
+    readonly position: PayloadPosition;
+    readonly pair: readonly [string, string];
+  };
 }
 
 const BASE_ID = HEX_PAIRS[0]?.[0] as string;
@@ -402,6 +427,57 @@ export function base(kind: number, overrides: Partial<Nostr.Event> = {}): Partia
     ...overrides
   };
 }
+
+/**
+ * The domain each payload field's values come from: `sig` is hex, the rest
+ * hold strings. Every string field has a position in {@link PAYLOAD_STRING_POSITIONS}.
+ */
+export const PAYLOAD_DOMAINS = {
+  content: 'string',
+  sig: 'hex',
+  tags: 'string',
+  ots: 'string'
+} as const satisfies { readonly [F in (typeof PAYLOAD_FIELDS)[number]]: 'string' | 'hex' };
+
+/**
+ * **Every place a payload string sits** — content, `ots`, and an unrelated
+ * tag's name, value and an element after it — with how to put a value there. A tag name is read to
+ * find `d` and also carried whole; this is its second role. Each position is
+ * crossed with every pair in `STRING_PAIRS`, and `ES29` refuses a position or
+ * a pair without a case.
+ */
+export const PAYLOAD_STRING_POSITIONS = {
+  content: { field: 'content', at: (_kind: number, value: string) => ({ content: value }) },
+  ots: { field: 'ots', at: (_kind: number, value: string) => ({ ots: value }) },
+  'tag name': {
+    field: 'tags',
+    element: 0,
+    at: (kind: number, value: string) => ({ tags: [...(base(kind).tags ?? []), [value, 'v']] })
+  },
+  'tag value': {
+    field: 'tags',
+    element: 1,
+    at: (kind: number, value: string) => ({ tags: [...(base(kind).tags ?? []), ['t', value]] })
+  },
+  'tag element after the value': {
+    field: 'tags',
+    element: 2,
+    at: (kind: number, value: string) => ({
+      tags: [...(base(kind).tags ?? []), ['t', 'v', value]]
+    })
+  }
+} as const satisfies Readonly<
+  Record<
+    string,
+    {
+      readonly field: (typeof PAYLOAD_FIELDS)[number];
+      /** For a tag, which element: NIP-01's name, value, and what follows. */
+      readonly element?: number;
+      readonly at: (kind: number, value: string) => Partial<Nostr.Event>;
+    }
+  >
+>;
+export type PayloadPosition = keyof typeof PAYLOAD_STRING_POSITIONS;
 
 /** An id distinct from every other in a case, built from `seed` without relating it to recency. */
 const idFor = (seed: string): string => `${seed}${run('0', 64 - seed.length)}`;
@@ -425,7 +501,8 @@ export function minimalPairs(): Case[] {
     dimension: Dimension,
     label: string,
     [older, newer]: readonly [Partial<Nostr.Event>, Partial<Nostr.Event>],
-    sameCoordinate: boolean
+    sameCoordinate: boolean,
+    payload?: Case['payload']
   ) => {
     for (const relation of RELATIONS)
       for (const idOrder of ['up', 'down'] as const) {
@@ -440,7 +517,8 @@ export function minimalPairs(): Case[] {
           sameCoordinate,
           dimension,
           kinds: [...new Set([older.kind as number, newer.kind as number])],
-          relation
+          relation,
+          ...(payload === undefined ? {} : { payload })
         });
       }
   };
@@ -457,14 +535,20 @@ export function minimalPairs(): Case[] {
         [base(kind, { pubkey: x }), base(kind, { pubkey: y })],
         false
       );
-    // Fields the coordinate does not read: one coordinate, the winner kept whole.
-    for (const [x, y] of STRING_PAIRS)
-      add(
-        'content',
-        `kind ${kind}, content ${JSON.stringify(x)} / ${JSON.stringify(y)}`,
-        [base(kind, { content: x }), base(kind, { content: y })],
-        true
-      );
+    // Fields the coordinate does not read: one coordinate, the winner kept
+    // whole. Every payload string position, with every pair of strings.
+    for (const [position, { field, at }] of Object.entries(PAYLOAD_STRING_POSITIONS) as [
+      PayloadPosition,
+      (typeof PAYLOAD_STRING_POSITIONS)[PayloadPosition]
+    ][])
+      for (const pair of STRING_PAIRS)
+        add(
+          field,
+          `kind ${kind}, ${position} ${JSON.stringify(pair[0])} / ${JSON.stringify(pair[1])}`,
+          [base(kind, at(kind, pair[0])), base(kind, at(kind, pair[1]))],
+          true,
+          { position, pair }
+        );
     for (const [x, y] of HEX_PAIRS)
       add(
         'sig',
@@ -489,13 +573,6 @@ export function minimalPairs(): Case[] {
       true
     );
     add('ots', `kind ${kind}, ots absent / present`, [base(kind), base(kind, { ots: 's' })], true);
-    for (const [x, y] of STRING_PAIRS)
-      add(
-        'ots',
-        `kind ${kind}, ots ${JSON.stringify(x)} / ${JSON.stringify(y)}`,
-        [base(kind, { ots: x }), base(kind, { ots: y })],
-        true
-      );
     // The `d` value: part of an addressable coordinate, read exactly; not part
     // of a replaceable one.
     for (const [x, y] of STRING_PAIRS)

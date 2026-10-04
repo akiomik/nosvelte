@@ -134,7 +134,7 @@ const variantsFor = (
  * pair, every competitor, every ranking variant, three bounds, six orders.
  * Asserted exactly, so the design's size is a fact the arms state.
  */
-const BOUNDED_RUNS = 3_229_056;
+const BOUNDED_RUNS = 5_128_992;
 
 /** The time the enumerated bounded arms are given; the budget above is what they are held to. */
 const ENUMERATED = 60_000;

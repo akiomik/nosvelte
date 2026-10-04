@@ -263,7 +263,7 @@ export const FIELDS: readonly Field[] = [
     },
     comparison: 'numeric order',
     enumerated:
-      'every ordered pair of design.ts INSTANTS (negative, zero, small, fractional, across 2^31, 2^32 and 2^53, and 2^60), ties at five of them, and for a competitor the representable number above, below and between',
+      'every ordered pair of design.ts INSTANTS (negative, zero, small, fractional down to below a millisecond, across 2^31, 2^32 and 2^53, and 2^60), ties at five of them, and for a competitor the representable number above, below and between',
     swept: 'one of design.ts INSTANTS'
   },
   {
@@ -288,7 +288,7 @@ export const FIELDS: readonly Field[] = [
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'exact',
     enumerated:
-      '`d`, and D_LOOKALIKES (another case, padding on either side, the compatibility form, a part after a colon or a NUL, a percent-escape) before and instead of it; every string fold applies to tag names unless NOT_FOR_TAG_NAMES exempts it',
+      "`d`, and D_LOOKALIKES (another case, padding on either side, the compatibility form, a part after a colon or a NUL, a percent-escape) before and instead of it; every string fold applies to tag names unless NOT_FOR_TAG_NAMES exempts it; and, since a name is carried as well as read, both members of every STRING_PAIRS pair as an unrelated tag's name",
     swept: 'D_LOOKALIKES and two unrelated names'
   },
   {
@@ -303,7 +303,8 @@ export const FIELDS: readonly Field[] = [
     field: 'tag value',
     domain: { from: 'NIP-01', says: 'arbitrary string arrays' },
     comparison: 'not read by the rules',
-    enumerated: 'a few fixed values beside the `d` tag',
+    enumerated:
+      "both members of every STRING_PAIRS pair as an unrelated tag's value and as an element after it",
     swept: 'every string in STRING_PAIRS'
   },
   {

@@ -74,7 +74,9 @@ import {
   NOT_FOR_TAG_NAMES,
   OPTIONAL,
   OUTSIDE_THE_ID,
+  PAYLOAD_DOMAINS,
   PAYLOAD_FIELDS,
+  PAYLOAD_STRING_POSITIONS,
   permutations,
   rankingVariants,
   RELATIONS,
@@ -1155,6 +1157,30 @@ describe('canonical event set', () => {
             ),
             `${field} varied with ${other} ${present ? 'present' : 'absent'}`
           ).toBe(true);
+
+    // **Every payload string position meets every pair of strings**, and every
+    // payload field holding strings has a position: a tag name is carried as
+    // well as read, and a fold of what is stored is a fold of it too.
+    for (const [field, domain] of Object.entries(PAYLOAD_DOMAINS))
+      if (domain === 'string')
+        expect(
+          Object.values(PAYLOAD_STRING_POSITIONS).map((position) => position.field),
+          `${field}: a payload string position`
+        ).toContain(field);
+    // A tag is "an array of one or more strings" whose first is its name, its
+    // second its value, and the rest further elements (NIP-01): each is a place.
+    expect(
+      Object.values(PAYLOAD_STRING_POSITIONS)
+        .filter((position) => position.field === 'tags')
+        .map((position) => ('element' in position ? position.element : undefined))
+        .sort()
+    ).toEqual([0, 1, 2]);
+    for (const position of Object.keys(PAYLOAD_STRING_POSITIONS))
+      for (const pair of STRING_PAIRS)
+        expect(
+          CASES.some((one) => one.payload?.position === position && one.payload.pair === pair),
+          `${position}: ${JSON.stringify(pair)}`
+        ).toBe(true);
 
     // Which fields are outside the id is NIP-01's serialization, not a choice.
     expect([...OUTSIDE_THE_ID].sort()).toEqual(
