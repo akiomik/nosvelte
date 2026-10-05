@@ -183,25 +183,7 @@ export function ownEvent(value: unknown): ReqEvent | undefined {
     // rendering `'ots' in event` would see one where there was none.
     ...(snapshot.ots === undefined ? {} : { ots: snapshot.ots })
   };
-  const frozen = Object.freeze(owned);
-  OWNED.add(frozen);
-  return frozen;
-}
-
-/**
- * Every event {@link ownEvent} made, held weakly: ownership's run-time half.
- *
- * The brand on the type cannot be forged by a spread, but a cast forges any
- * type, and `structuredClone` is typed as the identity — a clone of an owned
- * event is typed owned and is an unfrozen copy nobody checked. So the fold also
- * asks this set, which only {@link ownEvent} writes to and which a value cannot
- * answer for itself.
- */
-const OWNED = new WeakSet<object>();
-
-/** Whether `event` is a copy {@link ownEvent} made — whatever its type says. */
-export function isOwnedEvent(event: unknown): event is OwnedEvent {
-  return typeof event === 'object' && event !== null && OWNED.has(event);
+  return Object.freeze(owned);
 }
 
 /**
@@ -247,11 +229,31 @@ export interface OwnedPacket {
   readonly event: OwnedEvent;
 }
 
+/**
+ * Every packet {@link ownPacket} made, held weakly: ownership's run-time half.
+ *
+ * The brand on the type cannot be forged by a spread, but a cast forges any
+ * type, `structuredClone` is typed as the identity, and a spread that keeps an
+ * owned event can still carry the transport's fields beside it —
+ * `{ ...wirePacket, ...owned }` is typed owned, and its `message` holds the
+ * wire's event. So the fold also asks this set, which only {@link ownPacket}
+ * writes to and which a value cannot answer for itself: what the cache stores
+ * is the very object the boundary made, or nothing.
+ */
+const OWNED_PACKETS = new WeakSet<object>();
+
+/** Whether `packet` is the object {@link ownPacket} made — whatever its type says. */
+export function isOwnedPacket(packet: unknown): packet is OwnedPacket {
+  return typeof packet === 'object' && packet !== null && OWNED_PACKETS.has(packet);
+}
+
 /** The wire's packet, reduced to this library's copy of the event — or nothing. */
 export function ownPacket(packet: EventPacket): OwnedPacket | undefined {
   const event = ownEvent(packet.event);
   if (event === undefined) return undefined;
   // The one cast in the module, and the reason the brand is worth having: it is
   // here, in the factory, rather than at every call site.
-  return Object.freeze({ event: event as OwnedEvent });
+  const owned = Object.freeze({ event: event as OwnedEvent });
+  OWNED_PACKETS.add(owned);
+  return owned;
 }

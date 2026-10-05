@@ -36,7 +36,7 @@ import WS from 'vitest-websocket-mock';
 
 import { createAttemptRegistry } from '$lib/v1/attempt.js';
 import type { OwnedPacket, ReqEvent } from '$lib/v1/event.js';
-import { ownEvent, ownPacket } from '$lib/v1/event.js';
+import { isOwnedPacket, ownEvent, ownPacket } from '$lib/v1/event.js';
 import { emptyEventSet, foldEvent } from '$lib/v1/eventset.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
@@ -409,13 +409,44 @@ describe('the event a consumer holds is this library’s own', () => {
       await settle();
       unchanged(first.value, 'after a refresh');
       unchanged(second.value, 'the second hook after a refresh');
+
+      // **What the cache actually stores**, read out of the query cache rather
+      // than off a separate call to the factory: each packet is the object the
+      // boundary made, its only key is `event`, and it is plain data.
+      const stored = client
+        .getQueryCache()
+        .getAll()
+        .flatMap((entry) => {
+          const data = entry.state.data as { entries?: unknown } | undefined;
+          return data?.entries instanceof Map
+            ? [...(data.entries as Map<string, unknown>).values()]
+            : [];
+        });
+      expect(stored.length, 'the cache holds the event').toBeGreaterThan(0);
+      for (const packet of stored) {
+        expect(isOwnedPacket(packet), 'a stored packet the boundary made').toBe(true);
+        expect(Reflect.ownKeys(packet as object), 'a stored packet’s keys').toEqual(['event']);
+        expect(plainDataBreaches(packet), 'a stored packet is plain data').toEqual([]);
+      }
       first.destroy();
       second.destroy();
 
       // What the cache stores is the event alone: nothing reachable from it —
       // through any property or any prototype — is reachable from the wire's
       // packet. And it is a copy, not the wire's event.
-      const wire = fakeEventPacket({ id: 'oe14-b', created_at: 1 });
+      // The fixture fills every container a copy has to make — the tag list and
+      // each tag, more than one deep — so a copy that shares an inner array
+      // with the wire has one to share. An empty list cannot show it.
+      const wire = fakeEventPacket({
+        id: 'oe14-b',
+        created_at: 1,
+        tags: [
+          ['t', 'x'],
+          ['p', 'y', 'z']
+        ]
+      });
+      expect(wire.event.tags.length).toBeGreaterThan(1);
+      expect(wire.event.tags.every((tag) => tag.length > 1)).toBe(true);
       const owned = ownPacket(wire);
       expect(owned).toBeDefined();
       expect(Reflect.ownKeys(owned ?? {})).toEqual(['event']);
@@ -483,6 +514,12 @@ describe('the event a consumer holds is this library’s own', () => {
       expect(
         () => foldEvent(emptyEventSet, wire as unknown as OwnedPacket),
         'the wire’s packet, cast'
+      ).toThrow(TypeError);
+      // The spread no type refuses: an owned event beside the transport's
+      // fields, typed owned, with `message` holding the wire's event.
+      expect(
+        () => foldEvent(emptyEventSet, { ...wire, ...(owned as OwnedPacket) }),
+        'an owned event wrapped in the wire’s packet'
       ).toThrow(TypeError);
       expect(() => foldEvent(emptyEventSet, owned as OwnedPacket)).not.toThrow();
 

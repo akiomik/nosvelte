@@ -120,11 +120,26 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
     }
     for (const property of checker.getPropertiesOfType(type)) {
       const name = property.getName();
-      // A symbol-keyed member — the ownership brand — is not reachable by name.
-      if (name.startsWith('__@')) continue;
-      const access = isIdentifier(name)
-        ? `${expression}.${name}`
-        : `${expression}[${JSON.stringify(name)}]`;
+      // A private name (`#…`) cannot be written from outside its class, so it is
+      // the one member a consumer has no write to attempt.
+      if (name.startsWith('__#')) continue;
+      let access: string;
+      if (name.startsWith('__@')) {
+        // A symbol-keyed member is written through the symbol, which a
+        // consumer can name when it is a well-known one. One the probe cannot
+        // name is not skipped: it is reported, since silence would read as
+        // "nothing writable".
+        const declaration = property.valueDeclaration ?? property.declarations?.[0];
+        const named = declaration === undefined ? undefined : ts.getNameOfDeclaration(declaration);
+        const symbol =
+          named !== undefined && ts.isComputedPropertyName(named) ? named.expression.getText() : '';
+        if (!/^Symbol\.\w+$/.test(symbol))
+          throw new Error(`writesThrough: ${expression} has a symbol member the probe cannot name`);
+        access = `${expression}[${symbol}]`;
+      } else
+        access = isIdentifier(name)
+          ? `${expression}.${name}`
+          : `${expression}[${JSON.stringify(name)}]`;
       writes.push(`${access} = ${access}!;`);
       visit(`${access}!`, checker.getNonNullableType(checker.getTypeOfSymbol(property)), level + 1);
     }
