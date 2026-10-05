@@ -146,25 +146,65 @@ export function consumerDiagnostics(source: string): ConsumerDiagnostic[] {
  * writes the types let through. Each write is one line, so a diagnostic can be
  * laid against it.
  *
- * A union is refused rather than walked: a write to a member some constituents
- * lack is an error for that reason, which would read as a refusal. Walk each
- * variant instead ({@link variantsWith}). So is a symbol member the probe
- * cannot name, a value with members past `depth`, an `unknown`, and an object
- * type with nothing to enumerate.
+ * **A union is walked one variant at a time**, each line behind the guard that
+ * narrows to it — `if (x.status === 'settled') x.events = …;` — because a write
+ * to a member some constituents lack is an error for that reason, which would
+ * read as a refusal. A union of primitives has nothing to write into. One whose
+ * constituents share no literal member to tell them apart is reported instead,
+ * by throwing; so is a symbol member the probe cannot name, a value with members
+ * past `depth`, an `unknown`, and an object type with nothing to enumerate.
  *
  * What it does not judge is whether a write was refused: that is
  * {@link judgeWrites}, which asks the compiler about the expressions the walk
  * wrote rather than the types it derived them from.
  */
-export function writesThrough(imports: string, typeText: string, depth = 4): string[] {
-  const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
+export interface WalkOptions {
+  /** How many levels to walk; past it, a value with members throws. */
+  readonly depth?: number;
+  /**
+   * What a callable member this repository declares is. `'data'`, the default,
+   * reports it: data has no such member, and the published event has none.
+   * `'api'` takes it for a published handle's method — `refresh` — whose slot
+   * must still be refused, and whose result, awaited, is walked as a value the
+   * consumer holds. A method the probe cannot call with no arguments is
+   * reported.
+   */
+  readonly callables?: 'data' | 'api';
+}
+
+export function writesThrough(
+  imports: string,
+  typeText: string,
+  options: WalkOptions = {}
+): string[] {
+  return writesThroughEach(imports, [typeText], options)[0] as string[];
+}
+
+/** The root a value of the `at`th of `count` types is declared as. */
+const rootOf = (at: number, count: number): string => (count === 1 ? 'value' : `value_${at}`);
+
+/**
+ * {@link writesThrough}, for several types in one program — one compile, where
+ * a type at a time is one each. The `at`th type's lines are written through
+ * `value_${at}`, or through `value` when there is one; judge them with
+ * {@link judgeWritesEach}.
+ */
+export function writesThroughEach(
+  imports: string,
+  typeTexts: readonly string[],
+  options: WalkOptions = {}
+): string[][] {
+  const depth = options.depth ?? 4;
+  const callables = options.callables ?? 'data';
+  const roots = typeTexts.map((_, at) => rootOf(at, typeTexts.length));
+  const { program, consumer } = programOver(
+    `${imports}\n${typeTexts.map((typeText, at) => `declare const ${roots[at]}: ${typeText};`).join('\n')}\n`
+  );
   const checker = program.getTypeChecker();
-  const declaration = consumer.statements
+  const declarations = consumer.statements
     .filter(ts.isVariableStatement)
-    .flatMap((statement) => statement.declarationList.declarations)
-    .find((one) => ts.isIdentifier(one.name) && one.name.text === 'value');
-  if (declaration === undefined) throw new Error('the probe declared no value');
-  const writes: string[] = [];
+    .flatMap((statement) => statement.declarationList.declarations);
+  let writes: string[] = [];
   const isIdentifier = (name: string): boolean => /^[A-Za-z_$][\w$]*$/.test(name);
   // The type a `!` leaves — except that `NonNullable<unknown>` is `{}`, which
   // would hide an `unknown` behind an empty object.
@@ -189,13 +229,76 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
   };
   const standard = (declarations: readonly ts.Declaration[]): boolean =>
     declarations.every(
-      (one) => ts.isInterfaceDeclaration(one.parent) && one.parent.name.text === 'ReadonlyArray'
+      (one) => ts.isInterfaceDeclaration(one.parent) && STANDARD_READ_ONLY.has(one.parent.name.text)
     );
+  // A callable this repository declares: not the default library's, and not a
+  // dependency's.
+  const ours = (type: ts.Type): boolean => {
+    const declarations = type.getSymbol()?.getDeclarations() ?? [];
+    return (
+      declarations.length > 0 &&
+      declarations.every((one) => {
+        const file = one.getSourceFile();
+        return (
+          !program.isSourceFileDefaultLibrary(file) && !file.fileName.includes('/node_modules/')
+        );
+      })
+    );
+  };
+  const primitive = (type: ts.Type): boolean =>
+    (type.getFlags() &
+      (ts.TypeFlags.StringLike |
+        ts.TypeFlags.NumberLike |
+        ts.TypeFlags.BooleanLike |
+        ts.TypeFlags.BigIntLike |
+        ts.TypeFlags.ESSymbolLike |
+        ts.TypeFlags.EnumLike |
+        ts.TypeFlags.Undefined |
+        ts.TypeFlags.Null |
+        ts.TypeFlags.Void |
+        ts.TypeFlags.Never)) !==
+    0;
+  // A literal member every constituent has, with a different value in each:
+  // what a consumer compares to tell them apart.
+  const discriminantOf = (
+    constituents: readonly ts.Type[]
+  ): { name: string; literals: string[] } | undefined => {
+    const first = constituents[0];
+    if (first === undefined) return undefined;
+    const names = checker.getPropertiesOfType(first).map((one) => one.getName());
+    const preferred = ['status', 'kind', 'code', 'type'];
+    names.sort((a, b) => {
+      const at = (name: string): number =>
+        preferred.includes(name) ? preferred.indexOf(name) : preferred.length;
+      return at(a) - at(b);
+    });
+    for (const name of names) {
+      const literals = constituents.map((one) => {
+        const property = checker.getPropertyOfType(one, name);
+        if (property === undefined) return undefined;
+        const type = checker.getTypeOfSymbol(property);
+        if (type.isStringLiteral()) return JSON.stringify(type.value);
+        if (type.isNumberLiteral()) return String(type.value);
+        if (type.getFlags() & ts.TypeFlags.BooleanLiteral) return checker.typeToString(type);
+        return undefined;
+      });
+      if (literals.some((one) => one === undefined)) continue;
+      if (new Set(literals).size !== literals.length) continue;
+      return { name, literals: literals as string[] };
+    }
+    return undefined;
+  };
   const callable = (type: ts.Type): boolean =>
     type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0;
   // Every member of `type`: an assignment to each slot, and the value in it
   // walked — skipping, for a list, the positions its own branch wrote to.
-  const members = (expression: string, type: ts.Type, level: number, list: boolean): void => {
+  const members = (
+    expression: string,
+    type: ts.Type,
+    level: number,
+    list: boolean,
+    guard: string
+  ): void => {
     for (const property of checker.getPropertiesOfType(type)) {
       const name = property.getName();
       // A private name (`#…`) cannot be written or called from outside its
@@ -219,16 +322,30 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
         access = isIdentifier(name)
           ? `${expression}.${name}`
           : `${expression}[${JSON.stringify(name)}]`;
-      writes.push(`${access} = ${access}!;`);
+      writes.push(`${guard}${access} = ${access}!;`);
       const declared = library(property);
       if (declared === undefined)
-        visit(`${access}!`, present(checker.getTypeOfSymbol(property)), level + 1);
+        visit(`${access}!`, present(checker.getTypeOfSymbol(property)), level + 1, guard);
       else if (!standard(declared) && callable(checker.getTypeOfSymbol(property)))
-        writes.push(`void ${access}!.call;`);
+        writes.push(`${guard}void ${access}!.call;`);
     }
   };
 
-  const visit = (expression: string, type: ts.Type, level: number): void => {
+  // A type already walked is not walked again: a recursive one — a failure's
+  // `cause` is a failure — would otherwise run to the depth limit, and its
+  // members' writes were emitted, and will be judged, where it was first met.
+  // A union's variants are all claimed before any is walked, so a variant met
+  // again inside a sibling's `cause` is not walked there, one level down, but
+  // here, where the union is.
+  let walked = new Set<ts.Type>();
+  let results = 0;
+  const visit = (
+    expression: string,
+    type: ts.Type,
+    level: number,
+    guard: string,
+    claimed = false
+  ): void => {
     const flags = type.getFlags();
     // **`any` is not "nothing writable".** It has no properties to enumerate,
     // so it used to end the walk as if it had been read; a write through it
@@ -237,7 +354,7 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
     // until a consumer narrows it, and a narrowing can make it anything — so
     // it is reported too, by throwing, rather than certified.
     if (flags & ts.TypeFlags.Any) {
-      writes.push(`${expression}.anything = ${expression};`);
+      writes.push(`${guard}${expression}.anything = ${expression};`);
       return;
     }
     if (flags & ts.TypeFlags.Unknown) throw new Error(`writesThrough: ${expression} is unknown`);
@@ -257,24 +374,52 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
     // Past `depth`, a value with anything inside it is reported rather than
     // passed over: returning would certify as read a list the walk never
     // reached. A primitive there has nothing to write into, and ended above.
+    if (walked.has(type) && !claimed) return;
     if (level > depth) throw new Error(`writesThrough: ${expression} is deeper than ${depth}`);
-    if (type.isUnion()) throw new Error(`writesThrough: ${expression} is a union`);
+    if (!type.isUnion()) walked.add(type);
+    if (type.isUnion()) {
+      const constituents = type.types.filter(
+        (one) =>
+          !(one.getFlags() & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void))
+      );
+      if (constituents.every(primitive)) return;
+      const [only] = constituents;
+      if (constituents.length === 1 && only !== undefined)
+        return visit(expression, only, level, guard);
+      if (constituents.some(primitive))
+        throw new Error(`writesThrough: ${expression} is a union of values and objects`);
+      const discriminant = discriminantOf(constituents);
+      if (discriminant === undefined)
+        throw new Error(`writesThrough: ${expression} is a union with nothing to tell it apart`);
+      const fresh = new Set(constituents.filter((one) => !walked.has(one)));
+      for (const one of fresh) walked.add(one);
+      for (const [at, one] of constituents.entries())
+        if (fresh.has(one))
+          visit(
+            expression,
+            one,
+            level,
+            `${guard}if (${expression}.${discriminant.name} === ${discriminant.literals[at]}) `,
+            true
+          );
+      return;
+    }
     if (checker.isArrayType(type) || checker.isTupleType(type)) {
-      writes.push(`${expression}.push(${expression}[0]!);`);
+      writes.push(`${guard}${expression}.push(${expression}[0]!);`);
       // Every position, not the first: a tuple's positions and its rest
       // element can each have a type of their own, so `[readonly string[],
       // ...string[][]]` is readonly at 0 and mutable from 1. An array's one type
       // argument is its element, at every index.
       const elements = checker.getTypeArguments(type as ts.TypeReference);
       for (const [at, element] of elements.entries()) {
-        writes.push(`${expression}[${at}] = ${expression}[${at}]!;`);
-        visit(`${expression}[${at}]!`, element, level + 1);
+        writes.push(`${guard}${expression}[${at}] = ${expression}[${at}]!;`);
+        visit(`${expression}[${at}]!`, element, level + 1, guard);
       }
       // And every member's slot, which the positions do not reach:
       // TypeScript declares a read-only array's methods as methods, and a
       // method is an assignable slot — `tags.map = () => []` compiled against
       // `readonly string[]` and threw against the frozen array.
-      members(expression, type, level, true);
+      members(expression, type, level, true, guard);
       return;
     }
     // **A value that can be called is reported, not walked.** What a call does
@@ -284,15 +429,40 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
     // compiles exactly when it is callable, which reads as a write the types
     // let through. Data has no such member.
     const emitted = writes.length;
-    if (callable(type)) writes.push(`void ${expression}.call;`);
-    members(expression, type, level, false);
+    if (callable(type) && callables === 'api' && ours(type)) {
+      // A method of a published handle: what it resolves with is what the
+      // consumer holds, so that is walked, as a value of its own.
+      const call = type.getCallSignatures().find((signature) =>
+        signature.getParameters().every((parameter) => {
+          const declaration = parameter.valueDeclaration;
+          return (
+            declaration !== undefined &&
+            ts.isParameter(declaration) &&
+            checker.isOptionalParameter(declaration)
+          );
+        })
+      );
+      if (call === undefined)
+        throw new Error(`writesThrough: ${expression} is a method the probe cannot call`);
+      const returned = call.getReturnType();
+      const awaited = checker.getAwaitedType(returned) ?? returned;
+      // Bound to a name each line, so a guard can narrow it: a call is a new
+      // value every time it is written, and nothing narrows one.
+      const name = `__result${(results += 1)}`;
+      const invoked = awaited === returned ? `${expression}()` : `await ${expression}()`;
+      visit(name, present(awaited), level + 1, `${guard}for (const ${name} of [${invoked}]) `);
+      return;
+    }
+    if (callable(type)) writes.push(`${guard}void ${expression}.call;`);
+    members(expression, type, level, false, guard);
     // And a write through each index signature, under a key the type checker
     // cannot see — a dynamic key is a write a named property list never shows.
     for (const info of checker.getIndexInfosOfType(type)) {
-      const key =
-        info.keyType.getFlags() & ts.TypeFlags.NumberLike ? '(0 as number)' : "('k' as string)";
-      writes.push(`${expression}[${key}] = ${expression}[${key}]!;`);
-      visit(`${expression}[${key}]!`, present(info.type), level + 1);
+      // A literal key no named member has, so the write lands on the signature
+      // itself — and a literal, so a guard can narrow through it.
+      const key = info.keyType.getFlags() & ts.TypeFlags.NumberLike ? '999' : "'__key'";
+      writes.push(`${guard}${expression}[${key}] = ${expression}[${key}]!;`);
+      visit(`${expression}[${key}]!`, present(info.type), level + 1, guard);
     }
     // An object type the walk found nothing in — `object`, `{}`, a type
     // parameter — is not an empty one: a consumer narrows it to whatever they
@@ -300,9 +470,28 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
     if (writes.length === emitted)
       throw new Error(`writesThrough: ${expression} has nothing the probe can enumerate`);
   };
-  visit('value', checker.getTypeAtLocation(declaration.name), 0);
-  return writes;
+  return roots.map((root) => {
+    const declaration = declarations.find(
+      (one) => ts.isIdentifier(one.name) && one.name.text === root
+    );
+    if (declaration === undefined) throw new Error(`the probe declared no ${root}`);
+    writes = [];
+    walked = new Set<ts.Type>();
+    results = 0;
+    visit(root, checker.getTypeAtLocation(declaration.name), 0, '');
+    return writes;
+  });
 }
+
+/**
+ * The default library's read-only collections: every member they declare reads,
+ * and none writes, by their declaration.
+ */
+const STANDARD_READ_ONLY: ReadonlySet<string> = new Set([
+  'ReadonlyArray',
+  'ReadonlyMap',
+  'ReadonlySet'
+]);
 
 /** What the compiler said about one write the probe attempted. */
 export interface WriteVerdict {
@@ -347,9 +536,41 @@ export function judgeWrites(
   typeText: string,
   writes: readonly string[]
 ): WriteVerdict[] {
-  const { program, consumer } = programOver(
-    `${imports}\ndeclare const value: ${typeText};\n${writes.join('\n')}\n`
-  );
+  return judgeWritesEach(imports, [typeText], [writes])[0] as WriteVerdict[];
+}
+
+/**
+ * {@link judgeWrites}, for the lines {@link writesThroughEach} wrote through
+ * several types, in one program.
+ */
+export function judgeWritesEach(
+  imports: string,
+  typeTexts: readonly string[],
+  writesEach: readonly (readonly string[])[]
+): WriteVerdict[][] {
+  const all = writesEach.flat();
+  const prelude = `${imports}\n${typeTexts.map((typeText, at) => `declare const ${rootOf(at, typeTexts.length)}: ${typeText};`).join('\n')}`;
+  // In programs of a few hundred lines: past a size, the compiler stops
+  // analysing a module's control flow (TS2563), and a guard narrows nothing.
+  const verdicts: WriteVerdict[] = [];
+  for (let from = 0; from < all.length; from += JUDGED_AT_ONCE)
+    verdicts.push(...judgeIn(prelude, all.slice(from, from + JUDGED_AT_ONCE)));
+  let from = 0;
+  return writesEach.map((writes) => {
+    const own = verdicts.slice(from, from + writes.length);
+    from += writes.length;
+    return own;
+  });
+}
+
+/** How many lines one program judges. */
+const JUDGED_AT_ONCE = 300;
+
+/** Where the prelude ends and the lines to judge begin. */
+const WRITES_FOLLOW = 'declare const __writesFollow: never;';
+
+function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
+  const { program, consumer } = programOver(`${prelude}\n${WRITES_FOLLOW}\n${writes.join('\n')}\n`);
   const checker = program.getTypeChecker();
   const diagnostics = ts.getPreEmitDiagnostics(program, consumer);
   const statements = [...consumer.statements];
@@ -357,15 +578,15 @@ export function judgeWrites(
     (statement) =>
       ts.isVariableStatement(statement) &&
       statement.declarationList.declarations.some(
-        (one) => ts.isIdentifier(one.name) && one.name.text === 'value'
+        (one) => ts.isIdentifier(one.name) && one.name.text === '__writesFollow'
       )
   );
   const declared = statements[at];
-  if (declared === undefined) throw new Error('judgeWrites: the probe declared no value');
-  const prelude = diagnostics.find((one) => (one.start ?? 0) < declared.end);
-  if (prelude !== undefined)
+  if (declared === undefined) throw new Error('judgeWrites: the probe lost its prelude');
+  const broken = diagnostics.find((one) => (one.start ?? 0) < declared.end);
+  if (broken !== undefined)
     throw new Error(
-      `judgeWrites: the probe's prelude does not compile: ${ts.flattenDiagnosticMessageText(prelude.messageText, '\n')}`
+      `judgeWrites: the probe's prelude does not compile: ${ts.flattenDiagnosticMessageText(broken.messageText, '\n')}`
     );
   const attempted = statements.slice(at + 1);
   if (attempted.length !== writes.length)
@@ -376,7 +597,12 @@ export function judgeWrites(
 
   return attempted.map((statement, index) => {
     const write = writes[index] as string;
-    const expression = ts.isExpressionStatement(statement) ? statement.expression : undefined;
+    // A line under a guard — an `if` that narrows, a `for` that binds a call's
+    // result — is judged at the write it guards.
+    let guarded: ts.Statement = statement;
+    while (ts.isIfStatement(guarded) || ts.isForOfStatement(guarded))
+      guarded = ts.isIfStatement(guarded) ? guarded.thenStatement : guarded.statement;
+    const expression = ts.isExpressionStatement(guarded) ? guarded.expression : undefined;
     let receiver: ts.Expression;
     let refusedBy: ReadonlySet<number>;
     let push = false;
@@ -419,6 +645,40 @@ export function judgeWrites(
     return other === undefined
       ? { write, verdict: 'refused' }
       : { write, verdict: `not a refusal: TS${other.code}` };
+  });
+}
+
+/** A name a module exports, and how a consumer meets it. */
+export interface Exported {
+  readonly name: string;
+  /** `class`: a constructor and an instance type; `value`: a function or constant; `type`: a type alone. */
+  readonly kind: 'type' | 'class' | 'value';
+}
+
+/**
+ * Every name `specifier` exports, as the type checker resolves the module — so a
+ * re-export, an `export type { … } from` and an `export *` are each counted, and
+ * a name the source spells in a comment is not.
+ */
+export function exportsOf(specifier: string): Exported[] {
+  const { program, consumer } = programOver(
+    `import * as entry from '${specifier}';\nvoid entry;\n`
+  );
+  const checker = program.getTypeChecker();
+  const imported = consumer.statements.find(ts.isImportDeclaration);
+  const module =
+    imported === undefined ? undefined : checker.getSymbolAtLocation(imported.moduleSpecifier);
+  if (module === undefined) throw new Error(`exportsOf: ${specifier} did not resolve`);
+  return checker.getExportsOfModule(module).map((symbol) => {
+    const resolved =
+      symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+    const kind: Exported['kind'] =
+      resolved.flags & ts.SymbolFlags.Class
+        ? 'class'
+        : resolved.flags & (ts.SymbolFlags.Function | ts.SymbolFlags.Variable)
+          ? 'value'
+          : 'type';
+    return { name: symbol.getName(), kind };
   });
 }
 
