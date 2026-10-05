@@ -696,15 +696,23 @@ describe('the event a consumer holds is this library’s own', () => {
       expect(Reflect.ownKeys(perfect ?? {})).toEqual(['event']);
       expect(plainDataBreaches(perfect), 'the perfect forgery is plain, frozen data').toEqual([]);
 
-      // **On every path.** The fold returns early for an ephemeral event — once
-      // flagging the set, once leaving it as it is — and for a duplicate the
-      // incumbent wins, and it replaces an entry the newcomer wins. A refusal
-      // placed after any of those would let a forgery through there and only
-      // there. So the product is folded on each path, built from an event that
-      // takes it, and an owned packet on the same arrangement is the control
-      // that the path is the one named. A verdict has three answers — folded,
-      // refused by the fold's own `TypeError`, or threw for another reason — so
-      // the control cannot pass by failing.
+      // **On every path.** A refusal placed after any early return would let a
+      // forgery through there and only there, so the product is folded on
+      // every path the fold has, each arranged from an event that takes it. The
+      // paths are the product of two axes, so none is a sample:
+      // - the kind's class — regular (keyed by id), replaceable and
+      //   addressable (keyed by version) — against the newcomer's relation to
+      //   what the set holds: nothing; older; newer; as old with a larger id;
+      //   the incumbent again; as old with a smaller id, which are every
+      //   branch of `laterWins`;
+      // - an ephemeral event, which is never stored: the request's first, which
+      //   flags the set, and one after another, which leaves it as it is.
+      // An owned packet on the same arrangement is the control that the path is
+      // the one named, read by identity: what the set holds afterwards is
+      // exactly what it held, less the incumbent it replaces, plus that very
+      // packet — or the set is the same object. A verdict has three answers —
+      // folded, refused by the fold's own `TypeError`, or threw for another
+      // reason — so the control cannot pass by failing.
       const attempt = (set: CachedEventSet, packet: object): string => {
         try {
           foldEvent(set, packet as OwnedPacket);
@@ -715,19 +723,110 @@ describe('the event a consumer holds is this library’s own', () => {
             : `threw: ${String(error)}`;
         }
       };
-      const holds = (set: CachedEventSet, packet: OwnedPacket): boolean =>
-        [...set.entries.values()].includes(packet);
-      const older = fakeEventPacket({
-        id: 'oe14-old',
-        kind: 10002,
-        created_at: 1,
-        tags: [['r', 'a']]
-      });
-      const newer = fakeEventPacket({
-        id: 'oe14-new',
-        kind: 10002,
-        created_at: 2,
-        tags: [['r', 'b']]
+      type Outcome = 'stored alongside' | 'replaces the incumbent' | 'unchanged' | 'flagged';
+      const shows = (
+        outcome: Outcome,
+        before: CachedEventSet,
+        after: CachedEventSet,
+        basis: OwnedPacket,
+        incumbent: OwnedPacket | undefined
+      ): boolean => {
+        if (outcome === 'unchanged') return after === before;
+        if (outcome === 'flagged')
+          return (
+            before.ephemeralOmitted !== true &&
+            after.ephemeralOmitted === true &&
+            after.entries === before.entries
+          );
+        const expected = new Set<unknown>(before.entries.values());
+        if (outcome === 'replaces the incumbent') expected.delete(incumbent);
+        expected.add(basis);
+        const held = new Set<unknown>(after.entries.values());
+        return (
+          after !== before &&
+          held.size === expected.size &&
+          [...expected].every((one) => held.has(one))
+        );
+      };
+      const classes = {
+        'a regular event': { kind: 1, tag: 't', byVersion: false },
+        'a replaceable event': { kind: 10002, tag: 'r', byVersion: true },
+        'an addressable event': { kind: 30023, tag: 'd', byVersion: true }
+      };
+      const relations: {
+        relation: string;
+        held: boolean;
+        created_at: number;
+        id: string;
+        byId: Outcome;
+        byVersion: Outcome;
+      }[] = [
+        {
+          relation: 'into an empty set',
+          held: false,
+          created_at: 5,
+          id: 'm',
+          byId: 'stored alongside',
+          byVersion: 'stored alongside'
+        },
+        {
+          relation: 'older than the incumbent',
+          held: true,
+          created_at: 4,
+          id: 'z',
+          byId: 'stored alongside',
+          byVersion: 'unchanged'
+        },
+        {
+          relation: 'newer than the incumbent',
+          held: true,
+          created_at: 6,
+          id: 'a',
+          byId: 'stored alongside',
+          byVersion: 'replaces the incumbent'
+        },
+        {
+          relation: 'as old, with a larger id',
+          held: true,
+          created_at: 5,
+          id: 'n',
+          byId: 'stored alongside',
+          byVersion: 'unchanged'
+        },
+        {
+          relation: 'the incumbent again',
+          held: true,
+          created_at: 5,
+          id: 'm',
+          byId: 'unchanged',
+          byVersion: 'unchanged'
+        },
+        {
+          relation: 'as old, with a smaller id',
+          held: true,
+          created_at: 5,
+          id: 'b',
+          byId: 'stored alongside',
+          byVersion: 'replaces the incumbent'
+        }
+      ];
+      const paths = Object.entries(classes).flatMap(([what, { kind, tag, byVersion }]) => {
+        const version = (id: string, created_at: number): EventPacket =>
+          fakeEventPacket({ id: `oe14-${kind}-${id}`, kind, created_at, tags: [[tag, 'x']] });
+        const incumbentWire = version('m', 5);
+        const incumbent = ownedFrom(incumbentWire);
+        const holding = foldEvent(emptyEventSet, incumbent);
+        return relations.map(({ relation, held, created_at, id, byId, byVersion: versioned }) => {
+          const newcomer = id === 'm' && created_at === 5 ? incumbentWire : version(id, created_at);
+          return {
+            path: `${what}, ${relation}`,
+            set: held ? holding : emptyEventSet,
+            wire: newcomer,
+            basis: ownedFrom(newcomer),
+            incumbent: held ? incumbent : undefined,
+            outcome: byVersion ? versioned : byId
+          };
+        });
       });
       const ephemeral = fakeEventPacket({
         id: 'oe14-eph',
@@ -735,60 +834,32 @@ describe('the event a consumer holds is this library’s own', () => {
         created_at: 3,
         tags: [['t', 'x']]
       });
-      const olderOwned = ownedFrom(older);
-      const withOwned = foldEvent(emptyEventSet, ownedPacket);
-      const withOlder = foldEvent(emptyEventSet, olderOwned);
       const flagged = foldEvent(emptyEventSet, ownedFrom(fakeEventPacket({ kind: 20002 })));
-      const paths: {
-        path: string;
-        set: CachedEventSet;
-        wire: EventPacket;
-        basis: OwnedPacket;
-        reached: (after: CachedEventSet) => boolean;
-      }[] = [
-        {
-          path: 'inserted into an empty set',
-          set: emptyEventSet,
-          wire,
-          basis: ownedPacket,
-          reached: (after) => holds(after, ownedPacket) && after.entries.size === 1
-        },
-        {
-          path: 'a duplicate the incumbent wins',
-          set: withOwned,
-          wire,
-          basis: ownedFrom(wire),
-          reached: (after) => after === withOwned
-        },
-        {
-          path: 'a replacement the newcomer wins',
-          set: withOlder,
-          wire: newer,
-          basis: ownedFrom(newer),
-          reached: (after) =>
-            after.entries.size === 1 && !holds(after, olderOwned) && after !== withOlder
-        },
+      paths.push(
         {
           path: 'an ephemeral event, the request’s first',
           set: emptyEventSet,
           wire: ephemeral,
           basis: ownedFrom(ephemeral),
-          reached: (after) =>
-            after.ephemeralOmitted === true && after.entries === emptyEventSet.entries
+          incumbent: undefined,
+          outcome: 'flagged'
         },
         {
           path: 'an ephemeral event, after another',
           set: flagged,
           wire: ephemeral,
           basis: ownedFrom(ephemeral),
-          reached: (after) => after === flagged
+          incumbent: undefined,
+          outcome: 'unchanged'
         }
-      ];
-      for (const { path, set, wire: wirePacket, basis, reached } of paths) {
+      );
+      expect(paths, 'every cell of the paths').toHaveLength(20);
+      for (const { path, set, wire: wirePacket, basis, incumbent, outcome } of paths) {
         expect(attempt(set, basis), `${path}: the owned packet`).toBe('folded');
-        expect(reached(foldEvent(set, basis)), `${path}: the path the owned packet takes`).toBe(
-          true
-        );
+        expect(
+          shows(outcome, set, foldEvent(set, basis), basis, incumbent),
+          `${path}: the owned packet ${outcome}`
+        ).toBe(true);
         expect(
           forgeriesOf(wirePacket, basis)
             .map(({ name, packet }) => ({ name, verdict: attempt(set, packet) }))
