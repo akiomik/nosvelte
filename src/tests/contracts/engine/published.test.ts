@@ -449,8 +449,9 @@ void everyRejectionListed;
  * about a blind rule as about a closed value.
  */
 function disciplineControls(): void {
-  // Closed the way this library closes its own classes: each function on the
-  // prototype, the prototype, then the class.
+  // Closed the way this library closes its own classes — each function on the
+  // prototype, the prototype, then the class — and their setters too, since
+  // the controls below give one a class, which none of the library's has.
   const sealed = <T extends abstract new (...args: never[]) => unknown>(constructor: T): T => {
     for (const holder of [constructor.prototype as object, constructor]) {
       for (const key of Reflect.ownKeys(holder)) {

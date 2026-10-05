@@ -159,7 +159,8 @@ export function isOwnedByLibrary(value: unknown): boolean {
 /**
  * Close a live interface a hook hands out — a handle, `useRelayDiagnostics()`'s
  * object — and hand it back: every function on it first, each getter's and each
- * command, then the object itself (`B5-C8`).
+ * command, then the object itself (`B5-C8`). It closes no setter, because none
+ * of them has one, and `B5-C8`'s discipline reports a setter wherever it is.
  *
  * **`Object.freeze` closes an object's own slots and nothing they point at.** A
  * handle frozen alone would keep its getters' function objects open, and one of
@@ -172,27 +173,24 @@ export function sealInterface<T extends object>(value: T): T {
   for (const key of Reflect.ownKeys(value)) {
     const member = Reflect.getOwnPropertyDescriptor(value, key);
     if (member?.get !== undefined) Object.freeze(member.get);
-    // No interface and no class of this library has a setter today; a helper
-    // that `sealClass` promises closes every accessor's function would be the
-    // defect it exists for the day one gains one.
-    if (member?.set !== undefined) Object.freeze(member.set);
     if (typeof member?.value === 'function') Object.freeze(member.value);
   }
   return Object.freeze(value);
 }
 
 /**
- * Close one of this library's classes, and hand it back: its prototype — each
- * method's and accessor's function first, then the object — and the class
- * itself, with its statics (`B5-C8`).
+ * Close one of this library's classes, and hand it back: its prototype, which
+ * holds its class and nothing else, and the class itself (`B5-C8`).
  *
  * **A published Error inherits its class, and the class was open.** Every
  * instance reaches it as `error.constructor`, so one consumer's
  * `Object.defineProperty(error.constructor, Symbol.hasInstance, …)` rewrote
  * what this library's own `instanceof` answered — measured: the refused cache
- * key reads `RelayNotInScopeError` that way, and two unrelated requests then
+ * key read `RelayNotInScopeError` that way, and two unrelated requests then
  * shared one entry. Closing the instance closed nothing it inherits. The
- * platform's classes are not this library's to close; its own are.
+ * platform's classes are not this library's to close, so its decisions read a
+ * brand rather than `instanceof` (`reqerror.ts`); its own classes are closed
+ * besides.
  */
 export function sealClass<T extends abstract new (...args: never[]) => unknown>(constructor: T): T {
   sealInterface(constructor.prototype as object);
