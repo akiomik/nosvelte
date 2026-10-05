@@ -155,8 +155,8 @@ export function isOwnedByLibrary(value: unknown): boolean {
  * command, then the object itself (`B5-C8`).
  *
  * **`Object.freeze` closes an object's own slots and nothing they point at.** A
- * handle frozen alone kept its getters' function objects open, and one of them
- * is one call away for any consumer —
+ * handle frozen alone would keep its getters' function objects open, and one of
+ * them is one call away for any consumer —
  * `Object.getOwnPropertyDescriptor(handle, 'state').get` — so whatever one
  * consumer hung on it, every other reader of that handle read. What a getter
  * *returns* is not closed here: each projection freezes its own, on every read.
@@ -165,8 +165,26 @@ export function sealInterface<T extends object>(value: T): T {
   for (const key of Reflect.ownKeys(value)) {
     const member = Reflect.getOwnPropertyDescriptor(value, key);
     if (member?.get !== undefined) Object.freeze(member.get);
-    if (member?.set !== undefined) Object.freeze(member.set);
     if (typeof member?.value === 'function') Object.freeze(member.value);
   }
   return Object.freeze(value);
+}
+
+/**
+ * Close one of this library's classes, and hand it back: its prototype — each
+ * method's and accessor's function first, then the object — and the class
+ * itself, with its statics (`B5-C8`).
+ *
+ * **A published Error inherits its class, and the class was open.** Every
+ * instance reaches it as `error.constructor`, so one consumer's
+ * `Object.defineProperty(error.constructor, Symbol.hasInstance, …)` rewrote
+ * what this library's own `instanceof` answered — measured: the refused cache
+ * key reads `RelayNotInScopeError` that way, and two unrelated requests then
+ * shared one entry. Closing the instance closed nothing it inherits. The
+ * platform's classes are not this library's to close; its own are.
+ */
+export function sealClass<T extends abstract new (...args: never[]) => unknown>(constructor: T): T {
+  sealInterface(constructor.prototype as object);
+  sealInterface(constructor);
+  return constructor;
 }

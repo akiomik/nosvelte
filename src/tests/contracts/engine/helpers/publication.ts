@@ -5,18 +5,17 @@
  * The publication discipline `B5-C8` holds a published value to, read by
  * reflection rather than by writing.
  *
- * **Why not write and compare.** The instrument this replaces wrote to every own
- * member of every container it could reach and compared a snapshot of each
- * reader before and after. Five independent reviews found writes it never
- * attempted (adding a key, a numeric `length`, a `Map`'s operations, a
- * function's own members, a method replacement on a list) and observations its
- * snapshot could not make (a list's non-index members, two symbol keys
- * collapsing into one, every function equal to every other). Each was a
- * representative write standing in for a storage rule. This asks the storage
- * rules directly: a value whose every reachable object is closed — not
- * extensible, every own slot non-writable and non-configurable, no setter
- * anywhere on its own or inherited path — cannot be changed through any write a
- * consumer spells, so it cannot carry a write to the cache or another reader.
+ * **Why not write and compare.** The instrument this replaces, for one commit,
+ * wrote to every own member of every container it could reach and compared a
+ * snapshot of each reader before and after. It never attempted adding a key, a
+ * numeric `length`, a `Map`'s operations, a function's own members or a method
+ * replacement on a list, and its snapshot could not see a list's non-index
+ * members, told two symbol keys apart from one, or one function from another.
+ * Each write stood in for a storage rule. This asks the storage rules directly:
+ * a value whose every reachable object is closed — not extensible, every own
+ * slot non-writable and non-configurable, no setter anywhere on its own or
+ * inherited path — cannot be changed through any write a consumer spells, so it
+ * cannot carry a write to the cache or another reader.
  *
  * **What it is, and what it is not.** It enforces a *sufficient* discipline,
  * chosen so the guarantee is decidable here — not a decision procedure for the
@@ -25,27 +24,40 @@
  * `Proxy` over a closed record) because admitting them would need behaviour this
  * cannot read off a descriptor. And it cannot see behaviour at all: a frozen
  * function that changes a closure is a command, and a command's effects are its
- * own contract (`refresh()` is meant to change shared state). So functions are
- * admitted only where a live interface names a command, and what a command
- * resolves with is checked by calling it, in the arrangement, as a value.
+ * own contract (`refresh()` is meant to change shared state). So a function is
+ * admitted in three places only — a command a live interface names, a getter's
+ * own function object, and a live interface that is itself a function
+ * (`useSend()`'s) — and what a command resolves with is checked by calling it,
+ * in the arrangement, as a value.
  *
- * **Two roles.** A *snapshot* — a state, a diagnostics value, an outcome, an
- * Error, a refusal, an outlet's argument — is a closed graph of plain records,
- * lists and this library's own Errors, with no accessor and no function. A
- * *live interface* — a handle, `useRelayDiagnostics()`'s object — is closed
- * too, but may hold the getters and commands it names and nothing else; each
- * getter's function object is checked as an object, each getter is read once
- * and what it returns is checked under the same rules, and an exemption is one
- * named edge of one interface rather than a property name.
+ * **Two roles, and what they carry.** A *snapshot* — a state, a diagnostics
+ * value, an outcome, an Error, a refusal, an outlet's argument — is a closed
+ * graph of plain records, lists and this library's own Errors, with no
+ * accessor and no function of its own; it may carry a live interface by
+ * reference (an outlet's `request`), which is then judged as one. A *live
+ * interface* — a handle, `useRelayDiagnostics()`'s object — is a closed plain
+ * object holding the getters and commands it names and nothing else; each
+ * getter's function object is checked as an object, each getter is read twice
+ * and what it returns each time is checked under the same rules, and an
+ * exemption is one named edge of one interface rather than a property name.
  *
- * **Prototypes are out of scope, with two exceptions.** A consumer who rewrites
- * a shared prototype (an Error class's `toString`, `Array.prototype.map`)
+ * **The platform's prototypes are out of scope; this library's are not.** A
+ * consumer who rewrites `Array.prototype.map` or `Error.prototype.toString`
  * changes what every reader of every value computes, and that is not a write
  * *through a published value* — the same exclusion as tampering with
- * `WeakSet.prototype`. But an ordinary assignment reaches the prototype chain
- * without anyone rewriting it: an inherited **setter** runs on assignment even
- * when the receiver is frozen, and inherited **object data** on a library
- * prototype is shared by every instance. Both are read here, on every object.
+ * `WeakSet.prototype`. Every prototype on a value's chain that is not the
+ * platform's — this library's classes, reached as `error.constructor` — is read
+ * like any other object: closed, its methods and its class closed as functions,
+ * and no object data and no accessor every instance would inherit. And an
+ * inherited **setter** runs on assignment even when the receiver is frozen, so
+ * every setter on the chain is read, the platform's included.
+ *
+ * **What reflection cannot see.** A host object keeps its state in internal
+ * slots or private fields that no descriptor shows. Those `util.types` can name
+ * are refused even under a borrowed prototype; one it cannot — a `URL` whose
+ * prototype was swapped for `Object.prototype` — reads as a plain record. This
+ * library builds its records as literals, which is what the discipline leans on
+ * there.
  */
 import { types } from 'node:util';
 
@@ -72,14 +84,12 @@ export interface Discipline {
 
 /**
  * The setters every function inherits from `Function.prototype` — `caller` and
- * `arguments`, the language's restricted properties. They run only on a
- * function with no own member of that name, which is a strict one — every
- * function module code makes — and there they refuse every write; a sloppy
- * function shadows them with own members, which this walk reads like any
- * other. **Not `%ThrowTypeError%`**: the specification
- * installs that intrinsic here, and V8 installs a `get caller`/`set caller`
- * pair of its own for sloppy callers — measured, the identity check this
- * started with answered `false` on Node 26.
+ * `arguments`, the language's restricted properties. On Node 26 they refuse
+ * every write whatever the receiver: a strict function, a sloppy one (which has
+ * no own member of those names and reads them through the inherited getters),
+ * a record. **Not `%ThrowTypeError%`**: the specification installs that
+ * intrinsic here, and V8 installs a `get caller`/`set caller` pair of its own —
+ * measured, the identity check this started with answered `false`.
  */
 const RESTRICTED_SETTERS: ReadonlySet<unknown> = new Set(
   ['caller', 'arguments'].map(
@@ -95,21 +105,30 @@ const RESTRICTED_SETTERS: ReadonlySet<unknown> = new Set(
  */
 const PROTO_SETTER = Reflect.getOwnPropertyDescriptor(Object.prototype, '__proto__')?.set;
 
-/** The platform's own prototypes, whose data is the language's rather than this library's. */
+/**
+ * The platform's own objects on a published value's chain: out of scope, as
+ * the header says, except for the setters they hold. Each is on the chain of a
+ * value this library publishes — a record's, a list's, an Error's, a
+ * function's, an async function's, and a class's (`Error`, the constructor its
+ * own classes extend).
+ */
 const INTRINSIC: ReadonlySet<object> = new Set<object>([
   Object.prototype,
   Array.prototype,
   Function.prototype,
   Error.prototype,
+  Error,
   Object.getPrototypeOf(async () => undefined) as object
 ]);
 
 /**
- * Every host kind whose state lives in internal slots, which no descriptor
- * shows and a frozen shell does not close (`Map.prototype.set.call(held, …)`
- * writes into a frozen `Map`). **Enumerated from `util.types`**, not written out:
- * every predicate there but the four this discipline judges another way — a
- * `Proxy` first, an Error by its prototype, a function by its position.
+ * The host kinds whose state lives in internal slots `util.types` can name,
+ * which no descriptor shows and a frozen shell does not close
+ * (`Map.prototype.set.call(held, …)` writes into a frozen `Map`). **Enumerated
+ * from `util.types`**, not written out: every predicate there but the four this
+ * discipline judges another way — a `Proxy` first, an Error by its prototype, a
+ * function by its position. Asked of a value already admitted by its
+ * prototype, so it is what catches a host object wearing a borrowed one.
  */
 const SLOTTED = Object.entries(types)
   .filter(
@@ -124,77 +143,101 @@ const memberOf = (path: string, holder: object, key: string | symbol): string =>
   return `${path}.${key}`;
 };
 
+/** What a prototype's own `constructor` calls itself, read without running anything. */
+const nameOf = (prototype: object): string => {
+  const constructor: unknown = Reflect.getOwnPropertyDescriptor(prototype, 'constructor')?.value;
+  const name: unknown =
+    typeof constructor === 'function'
+      ? Reflect.getOwnPropertyDescriptor(constructor, 'name')?.value
+      : undefined;
+  return typeof name === 'string' && name !== '' ? name : 'a prototype';
+};
+
+/**
+ * How an object was reached, which decides what it may hold: a `value` is a
+ * snapshot or, when the arrangement names it, a live interface; a `function`
+ * is a command, a getter's own function object, or a class reached as a
+ * prototype's `constructor`; a `prototype` is a link of a chain, or a class's
+ * own `prototype`.
+ */
+type Role = 'value' | 'function' | 'prototype';
+
 /**
  * Every place under `root` where the discipline does not hold, as
  * `path: rule` — an empty list is the discipline kept.
  *
  * Reads descriptors, never data through a getter, except the getters a live
- * interface names; those are called once each, guarded, and a throw is a
- * finding rather than the end of the walk.
+ * interface names; those are called twice each, guarded, and a throw is a
+ * finding rather than the end of the walk. An object reached in two roles is
+ * judged in each, so the order of a value's keys decides nothing.
  */
 export function breachesOf(root: unknown, at: string, discipline: Discipline): string[] {
   const found: string[] = [];
-  const seen = new Set<object>();
-  const inheritedFrom = (value: object, path: string): void => {
+  const seen = new Map<object, Set<Role>>();
+  const first = (value: object, role: Role): boolean => {
+    let roles = seen.get(value);
+    if (roles === undefined) seen.set(value, (roles = new Set()));
+    if (roles.has(role)) return false;
+    roles.add(role);
+    return true;
+  };
+  // The chain: every setter on it, and every link that is not the platform's
+  // read as a prototype in its own right.
+  const chain = (value: object, path: string): void => {
     for (
-      let proto = Reflect.getPrototypeOf(value);
-      proto !== null;
-      proto = Reflect.getPrototypeOf(proto)
+      let link = Reflect.getPrototypeOf(value);
+      link !== null;
+      link = Reflect.getPrototypeOf(link)
     ) {
-      for (const key of Reflect.ownKeys(proto)) {
-        const slot = Reflect.getOwnPropertyDescriptor(proto, key);
-        if (slot === undefined) continue;
+      for (const key of Reflect.ownKeys(link)) {
+        const slot = Reflect.getOwnPropertyDescriptor(link, key);
+        if (slot?.set === undefined) continue;
         const refusing =
-          (proto === Function.prototype && RESTRICTED_SETTERS.has(slot.set)) ||
+          (link === Function.prototype && RESTRICTED_SETTERS.has(slot.set)) ||
           (slot.set === PROTO_SETTER && !Reflect.isExtensible(value));
-        if (slot.set !== undefined && !refusing)
-          found.push(`${path}: inherits a setter, ${String(key)}`);
-        if (
-          !INTRINSIC.has(proto) &&
-          'value' in slot &&
-          typeof slot.value === 'object' &&
-          slot.value !== null
-        )
-          found.push(`${path}: inherits data, ${String(key)}`);
+        if (!refusing) found.push(`${path}: inherits a setter, ${String(key)}`);
       }
+      if (!INTRINSIC.has(link))
+        visit(link, `${path} (inherited from ${nameOf(link)})`, 'prototype');
     }
   };
-  const visit = (value: unknown, path: string, admitted: 'value' | 'function'): void => {
+  const visit = (value: unknown, path: string, role: Role): void => {
     if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return;
-    if (seen.has(value)) return;
-    seen.add(value);
+    const named = discipline.interfaces.get(value);
+    // Before the role is remembered, so a function a command also holds is
+    // still a function in this snapshot.
+    if (typeof value === 'function' && role === 'value' && named === undefined)
+      found.push(`${path}: a function in a snapshot`);
+    if (!first(value, role)) return;
     // First, and alone: every other question below runs a trap on a proxy.
     if (types.isProxy(value)) {
       found.push(`${path}: a proxy`);
       return;
     }
-    const named = discipline.interfaces.get(value);
-    if (typeof value === 'function') {
-      if (admitted !== 'function' && named === undefined)
-        found.push(`${path}: a function in a snapshot`);
-    } else {
+    const isFunction = typeof value === 'function';
+    const isInterface = named !== undefined && !isFunction;
+    if (!isFunction && role === 'value') {
+      const proto = Reflect.getPrototypeOf(value);
+      const admitted = isInterface
+        ? proto === Object.prototype || proto === null
+        : proto === Object.prototype ||
+          proto === null ||
+          (Array.isArray(value) && proto === Array.prototype) ||
+          (proto !== null && discipline.errors.has(proto));
+      if (!admitted) {
+        found.push(`${path}: a kind this discipline does not admit`);
+        return;
+      }
       const slotted = SLOTTED.find(([, is]) => is(value));
       if (slotted !== undefined) {
         found.push(`${path}: a host object with internal state (${slotted[0]})`);
         return;
       }
-      const proto = Reflect.getPrototypeOf(value);
-      const admittedKind =
-        named !== undefined ||
-        proto === Object.prototype ||
-        proto === null ||
-        (Array.isArray(value) && proto === Array.prototype) ||
-        (proto !== null && discipline.errors.has(proto));
-      if (!admittedKind) {
-        found.push(`${path}: a kind this discipline does not admit`);
-        return;
-      }
     }
     if (Reflect.isExtensible(value)) found.push(`${path}: extensible`);
-    inheritedFrom(value, path);
+    chain(value, path);
 
     const keys = Reflect.ownKeys(value);
-    const isInterface = named !== undefined && typeof value !== 'function';
     if (isInterface) {
       for (const member of [...named.getters, ...named.commands])
         if (!keys.includes(member)) found.push(`${path}.${member}: named and absent`);
@@ -206,9 +249,22 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
       if (slot.configurable === true) found.push(`${where}: configurable`);
       if ('value' in slot) {
         if (slot.writable === true) found.push(`${where}: writable`);
-        const command = isInterface && typeof key === 'string' && named.commands.includes(key);
-        if (isInterface && !command) found.push(`${where}: a member the interface does not name`);
-        visit(slot.value, where, command ? 'function' : 'value');
+        const held: unknown = slot.value;
+        if (isFunction && key === 'prototype') {
+          visit(held, where, 'prototype');
+        } else if (isInterface) {
+          const command = typeof key === 'string' && named.commands.includes(key);
+          if (!command) found.push(`${where}: a member the interface does not name`);
+          else if (typeof held !== 'function')
+            found.push(`${where}: a command that is not a function`);
+          visit(held, where, command ? 'function' : 'value');
+        } else if (role === 'prototype' && !isFunction) {
+          if (typeof held === 'function') visit(held, where, 'function');
+          else if (typeof held === 'object' && held !== null)
+            found.push(`${where}: data every instance inherits`);
+        } else {
+          visit(held, where, 'value');
+        }
         continue;
       }
       if (slot.set !== undefined) {
@@ -218,19 +274,29 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
       const getter = isInterface && typeof key === 'string' && named.getters.includes(key);
       if (!getter)
         found.push(
-          `${where}: ${isInterface ? 'an accessor the interface does not name' : 'an accessor in a snapshot'}`
+          `${where}: ${
+            isInterface
+              ? 'an accessor the interface does not name'
+              : role === 'prototype' && !isFunction
+                ? 'an accessor every instance inherits'
+                : 'an accessor in a snapshot'
+          }`
         );
       if (slot.get === undefined) continue;
       visit(slot.get, `${where} (its getter)`, 'function');
       if (!getter || named.unwalked?.includes(key as string) === true) continue;
-      let output: unknown;
-      try {
-        output = Reflect.apply(slot.get, value, []);
-      } catch {
-        found.push(`${where}: a getter that throws`);
-        continue;
+      // **Twice**: a getter that hands out a closed value on its first read and
+      // an open one after is not kept to the discipline by one reading.
+      for (const read of ['', ' (read again)']) {
+        let output: unknown;
+        try {
+          output = Reflect.apply(slot.get, value, []);
+        } catch {
+          found.push(`${where}${read}: a getter that throws`);
+          continue;
+        }
+        visit(output, `${where}${read}`, 'value');
       }
-      visit(output, where, 'value');
     }
   };
   visit(root, at, 'value');

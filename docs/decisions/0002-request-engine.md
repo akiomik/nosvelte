@@ -2211,9 +2211,10 @@ and the handle `useStreamedReq` returns carries two members its own interface do
 `raw`, the query library's object and under it the cache's `Map`, and `projected`, one read's state
 and next expiry. Neither is reachable from the published entry — spike-v6 is absent from it entirely
 — so they are recorded here as what would have to be closed when it is published, rather than
-claimed as safe. `0004` says the same thing beside the interface, and `PO2` keeps the list at two.
-**What the cache holds is no longer part of this**: since the ownership boundary, an entry holds
-this library's own owned packets rather than the wire's objects (0003).
+claimed as safe. `0004` says the same thing beside the interface, and `PB13` names exactly these two
+beside the published members, so a third is a finding. **What the cache holds is no longer part of
+this**: since the ownership boundary, an entry holds this library's own owned packets rather than
+the wire's objects (0003).
 
 **What is not decided here is the mechanism.** Deferring a decision by a turn, and reading the
 per-relay table where the outcome is handed over rather than where it was queued, are two ways this

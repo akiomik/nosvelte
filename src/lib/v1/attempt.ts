@@ -48,7 +48,7 @@
  * with a clock. See {@link AttemptAbandonedError}.
  */
 
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type { ReqError } from './reqerror.js';
 
 /**
@@ -323,6 +323,7 @@ export class MissingRandomnessError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(MissingRandomnessError);
 
 const HEX = (byte: number): string => byte.toString(16).padStart(2, '0');
 
@@ -431,6 +432,7 @@ export class AttemptAbandonedError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(AttemptAbandonedError);
 
 /**
  * The accumulator returned, and left the engine with no attempt to report.
@@ -518,6 +520,7 @@ export class AccumulatorContractError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(AccumulatorContractError);
 
 /**
  * Settles when the attempt does, so that nothing a caller awaits outlives it.

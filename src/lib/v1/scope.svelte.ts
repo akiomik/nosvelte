@@ -25,7 +25,7 @@ import { untrack } from 'svelte';
 
 import { describeValue, InvalidDescriptorError } from './normalize.js';
 import { saidBy } from './own.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import { RelayNotInScopeError, RequestTransportIncompatibleError } from './reqerror.js';
 
 /**
@@ -267,6 +267,7 @@ export class RelayConfigurationError extends Error {
     // a write to one reaches.
   }
 }
+sealClass(RelayConfigurationError);
 
 /**
  * Constructed from a named object rather than from an ordered pair.
@@ -318,6 +319,7 @@ export class InvalidRelayScopeError extends RelayConfigurationError {
     if (new.target === InvalidRelayScopeError) Object.freeze(this);
   }
 }
+sealClass(InvalidRelayScopeError);
 
 /**
  * A relay input this library refuses to ask anybody about.
@@ -378,6 +380,7 @@ export class InvalidRelayInputError extends RelayConfigurationError {
     if (new.target === InvalidRelayInputError) Object.freeze(this);
   }
 }
+sealClass(InvalidRelayInputError);
 
 /**
  * The two names one relay would have, and the reason it is refused.
@@ -455,6 +458,7 @@ export class NonIdempotentRelayUrlError extends RelayConfigurationError {
     if (new.target === NonIdempotentRelayUrlError) Object.freeze(this);
   }
 }
+sealClass(NonIdempotentRelayUrlError);
 
 /**
  * What the transport would actually call these relays. **Where every name in a
@@ -720,6 +724,7 @@ export class TransportIncompatibleError extends RelayConfigurationError {
     if (new.target === TransportIncompatibleError) Object.freeze(this);
   }
 }
+sealClass(TransportIncompatibleError);
 
 /**
  * How the transport was questioned, in the message's own voice.
@@ -782,6 +787,7 @@ export class TransportKeyMismatchError extends RelayConfigurationError {
     if (new.target === TransportKeyMismatchError) Object.freeze(this);
   }
 }
+sealClass(TransportKeyMismatchError);
 
 /**
  * Two name lists for one relay set, compared as sets.

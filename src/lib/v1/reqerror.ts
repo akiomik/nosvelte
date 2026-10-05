@@ -46,7 +46,7 @@
 import type { IncompleteCauses } from './eventset.js';
 import { boundedMessage } from './normalize.js';
 import type { FailureSource } from './own.js';
-import { hardenOwned } from './owned.js';
+import { hardenOwned, sealClass } from './owned.js';
 
 /**
  * Everything this channel can hand a consumer, anywhere.
@@ -473,6 +473,7 @@ export class RelayNotInScopeError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(RelayNotInScopeError);
 
 /**
  * The request values of code `transport-incompatible`, by provenance.
@@ -508,3 +509,4 @@ export class RequestTransportIncompatibleError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(RequestTransportIncompatibleError);

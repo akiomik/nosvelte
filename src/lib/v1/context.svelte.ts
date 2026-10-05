@@ -40,7 +40,7 @@ import type { TransportCapability } from './lease.js';
 import { ownTransport } from './lease.js';
 import { LIBRARY_EOSE_TIMEOUT_MS, LIBRARY_OK_TIMEOUT_MS } from './normalize.js';
 import { providerDisposed } from './own.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type { ResumeHints } from './resume.svelte.js';
 import { createResumeHints } from './resume.svelte.js';
 import type { RelayInput, RelayScope, TransportKeys } from './scope.svelte.js';
@@ -437,6 +437,7 @@ export class MissingVerifierError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(MissingVerifierError);
 
 export class MissingProviderError extends Error {
   /**
@@ -497,6 +498,7 @@ export class MissingProviderError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(MissingProviderError);
 
 /**
  * The seams a test harness needs, enumerated — not the dependency's config.

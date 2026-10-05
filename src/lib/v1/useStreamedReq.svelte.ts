@@ -2900,12 +2900,13 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
   // **Not typed `ReqHandle`**, deliberately: what this returns carries `raw`
   // and `projected` beside the published members — the spike's inspection
   // seams, on no published list — and annotating the literal would refuse them.
-  // The contract is `ReqHandle` and `SUR10`/`PO2` are what hold the extras off
-  // the surface; this variable exists so the recovery can reach `refresh()`.
+  // The contract is `ReqHandle`: `SUR10` holds the extras off the surface, and
+  // `PB13` names them as the only two; this variable exists so the recovery can
+  // reach `refresh()`.
   const handle = {
     /**
      * The query library's own object — this repository's inspection seam, on no
-     * interface and on no published list (0002, 0004, `PO2`).
+     * interface and on no published list (0002, 0004, `PB13`).
      *
      * **Reading it is not free, and an arm that reads it before asserting on a
      * published member has changed what it is measuring.** Every property read

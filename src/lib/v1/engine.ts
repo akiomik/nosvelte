@@ -20,7 +20,7 @@ import type {
 } from './eventset.js';
 import { completionOf, completionOfRecord, project, refusalsOf } from './eventset.js';
 import type { Retention } from './normalize.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type {
   IncompleteError,
   RefreshOutcomeError,
@@ -306,6 +306,7 @@ export class IncompleteResultError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(IncompleteResultError);
 
 /**
  * One published Error per incomplete answer, keyed on the

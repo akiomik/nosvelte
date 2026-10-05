@@ -2,7 +2,9 @@
  * @license Apache-2.0
  * @copyright 2023 Akiomi Kamakura
  *
- * Nothing a consumer holds is a handle on this library's own state (`B5-C8`).
+ * Nothing a consumer holds is a way to write this library's state (`B5-C8`):
+ * what a hook hands out reaches the cache and the other readers only through
+ * the commands it names, such as `refresh()`.
  *
  * **The contract counted from the contract's side.** "A consumer's change
  * reaches neither the cache, nor another hook, nor a later projection" was
@@ -13,10 +15,13 @@
  * answered afterwards — measured — and the `causes` list is memoised per record
  * and published on two surfaces.
  *
- * So these arms do not name values. They drive a request to an outcome, walk
- * everything reachable from what the hooks publish, and require each container
- * to be frozen — and, where freezing is not the whole answer, write and read
- * back through a second reader.
+ * So these arms do not name values. They drive a request to an outcome and
+ * read everything reachable from what the hooks publish: the supporting arms
+ * require each container to be frozen, and `PB13` holds the publication
+ * discipline `helpers/publication.ts` reads by reflection — and, for the
+ * Errors two hooks share, writes and reads back through each reader, because
+ * `Object.isFrozen` answered `true` about an Error whose `stack` setter was
+ * live.
  *
  * `PB1`, `PB3`, `PB4`, `PB5` and `PB9` are the spike's `PO1`, `PO3`, `PO4`,
  * `PO5` and `PO9` from its `published-ownership` suite, renamed because an id
@@ -32,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 import { render } from '@testing-library/svelte';
 import type { RxNostr } from 'rx-nostr';
 import { QueryClient } from 'tanstack-svelte-query-v6';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import type { StreamAccumulator } from '$lib/v1/accumulate.js';
@@ -77,6 +82,7 @@ import { useStreamedReq, type UseStreamedReqOpts } from '$lib/v1/useStreamedReq.
 import Outlets from './fixtures/Outlets.svelte';
 import {
   consumerDiagnostics,
+  declaredHere,
   exportsOf,
   judgeWrites,
   judgeWritesEach,
@@ -270,7 +276,7 @@ function writeAndReadBack(
   return { before, reached };
 }
 
-/** This library's source, read for its classes. */
+/** This library's source: the components `PB13` reads its outlet premise off. */
 const LIBRARY = resolve(dirname(fileURLToPath(import.meta.url)), '../../../lib/v1');
 
 /**
@@ -345,6 +351,7 @@ const POPULATION = [
   'a refresh, not started because the handle was released',
   'a request settled with nothing',
   'its nodata outlet',
+  'its nodata outlet, for a single event',
   'a request incomplete, with refusals and causes',
   'an attempt that failed',
   'a refresh, error',
@@ -365,6 +372,7 @@ const POPULATION = [
   'a refresh, rejected with descriptor-unreadable',
   'a refresh, rejected with missing-provider',
   'an Error a hook throws, missing-provider',
+  'an Error a provider throws, missing-randomness',
   'useReq()',
   'a refresh through useReq(), incomplete',
   'useRelayDiagnostics()',
@@ -388,6 +396,21 @@ const POPULATION = [
   'a provider refusal, transport-key-mismatch',
   'a provider refusal, transport-incompatible'
 ];
+
+/**
+ * Every code a provider refuses a relay list with — `RelayConfigurationErrorCode`'s,
+ * tied to the type both ways.
+ */
+const RELAY_REFUSAL_CODES = [
+  'invalid-relay-input',
+  'conflicting-capabilities',
+  'non-idempotent-url',
+  'transport-key-mismatch',
+  'transport-incompatible'
+] as const satisfies readonly RelayConfigurationErrorCode[];
+const everyRefusalListed: (typeof RELAY_REFUSAL_CODES)[number] =
+  null as unknown as RelayConfigurationErrorCode;
+void everyRefusalListed;
 
 /** The readers `B5-C8` names for an Error two hooks share. */
 const READERS = [
@@ -422,18 +445,54 @@ void everyRejectionListed;
  * about a blind rule as about a closed value.
  */
 function disciplineControls(): void {
-  class Ours extends Error {}
-  class Theirs extends Error {}
-  // Two classes whose prototypes reach an ordinary assignment: a setter, which
-  // runs on a frozen receiver, and an object every instance shares.
-  class Setting extends Error {
-    set member(next: unknown) {
-      void next;
+  // Closed the way this library closes its own classes: each function on the
+  // prototype, the prototype, then the class.
+  const sealed = <T extends abstract new (...args: never[]) => unknown>(constructor: T): T => {
+    for (const holder of [constructor.prototype as object, constructor]) {
+      for (const key of Reflect.ownKeys(holder)) {
+        const member = Reflect.getOwnPropertyDescriptor(holder, key);
+        if (member?.get !== undefined) Object.freeze(member.get);
+        if (member?.set !== undefined) Object.freeze(member.set);
+        if (typeof member?.value === 'function') Object.freeze(member.value);
+      }
+      Object.freeze(holder);
+    }
+    return constructor;
+  };
+  const Ours = sealed(class Ours extends Error {});
+  const Theirs = sealed(class Theirs extends Error {});
+  // Classes whose prototypes reach an ordinary assignment or a second reader:
+  // a setter, which runs on a frozen receiver — on the class, and on its
+  // parent — an object every instance shares, a getter every instance
+  // inherits, and a method whose function object was left open.
+  const Setting = sealed(
+    class Setting extends Error {
+      set member(next: unknown) {
+        void next;
+      }
+    }
+  );
+  const Leaf = sealed(class Leaf extends Setting {});
+  class SharingClass extends Error {}
+  Object.defineProperty(SharingClass.prototype, 'shared', { value: {} });
+  const Sharing = sealed(SharingClass);
+  const Gotten = sealed(
+    class Gotten extends Error {
+      get extra(): number {
+        return 1;
+      }
+    }
+  );
+  class Methodical extends Error {
+    describe(): number {
+      return 1;
     }
   }
-  class Sharing extends Error {}
-  Object.defineProperty(Sharing.prototype, 'shared', { value: {} });
-  // Closed the way this library closes its own: `stack` made data, then frozen.
+  Object.freeze(Methodical.prototype);
+  Object.freeze(Methodical);
+  // And a class nobody closed, reached through what its instances inherit.
+  class Open extends Error {}
+  // Closed the way this library closes its own Errors: `stack` made data, then frozen.
   const owned = <T extends Error>(error: T): T => {
     Object.defineProperty(error, 'stack', { value: 'as it was', writable: false });
     return Object.freeze(error);
@@ -441,7 +500,9 @@ function disciplineControls(): void {
   const ours = owned(new Ours('as it was'));
   const control: Discipline = {
     interfaces: new Map(),
-    errors: new Set([Ours.prototype, Setting.prototype, Sharing.prototype])
+    errors: new Set(
+      [Ours, Setting, Leaf, Sharing, Gotten, Methodical, Open].map((one) => one.prototype as object)
+    )
   };
   const breaches = (value: unknown, discipline = control): string[] =>
     breachesOf(value, 'held', discipline);
@@ -482,7 +543,46 @@ function disciplineControls(): void {
       'held.one: an accessor in a snapshot'
     ],
     ['an inherited setter', owned(new Setting('x')), 'held: inherits a setter, member'],
-    ['inherited data', owned(new Sharing('x')), 'held: inherits data, shared'],
+    ['a setter two classes up', owned(new Leaf('x')), 'held: inherits a setter, member'],
+    [
+      'inherited data',
+      owned(new Sharing('x')),
+      'held (inherited from SharingClass).shared: data every instance inherits'
+    ],
+    [
+      'an inherited accessor',
+      owned(new Gotten('x')),
+      'held (inherited from Gotten).extra: an accessor every instance inherits'
+    ],
+    [
+      'an inherited method left open',
+      owned(new Methodical('x')),
+      'held (inherited from Methodical).describe: extensible'
+    ],
+    ['a class nobody closed', owned(new Open('x')), 'held (inherited from Open): extensible'],
+    ['a list’s `length`', Object.preventExtensions([]), 'held.length: writable'],
+    [
+      'a symbol-keyed slot',
+      Object.preventExtensions({ [Symbol('member')]: 1 }),
+      'held[Symbol(member)]: writable'
+    ],
+    [
+      'an Error’s own member',
+      Object.preventExtensions(
+        Object.defineProperty(new Ours('x'), 'stack', { value: 'x', writable: false })
+      ),
+      'held.message: writable'
+    ],
+    [
+      'a list of another class',
+      closed(new (class Listy extends Array<number> {})()),
+      'held: a kind this discipline does not admit'
+    ],
+    [
+      'a setter’s own function object',
+      closed(Object.defineProperty({}, 'one', { get: closed(() => 1), set: () => undefined })),
+      'held.one (its setter): extensible'
+    ],
     [
       'the prototype’s own setter, on an extensible record',
       {},
@@ -501,9 +601,9 @@ function disciplineControls(): void {
     ],
     ['a proxy', new Proxy(closed({ one: 1 }), {}), 'held: a proxy'],
     [
-      'a host object with internal state',
+      'a host object, under its own prototype',
       closed({ map: closed(new Map()) }),
-      'held.map: a host object with internal state (isMap)'
+      'held.map: a kind this discipline does not admit'
     ],
     [
       'internal state under a borrowed prototype',
@@ -546,7 +646,9 @@ function disciplineControls(): void {
   const kept = handle({
     state: getter(closed({ status: 'settled' })),
     raw: getter({ open: 'and not walked' }),
-    refresh: { value: command }
+    // An async function, as the handles' `refresh` is: its chain is the
+    // platform's own and has nothing to report.
+    refresh: { value: closed(async () => undefined) }
   });
   expect(over(kept), 'a live interface that keeps every rule').toEqual([]);
   const interfaceRules: [string, object, string, LiveInterface?][] = [
@@ -607,34 +709,130 @@ function disciplineControls(): void {
       kept,
       'held.raw: extensible',
       { getters: ['state', 'raw'], commands: ['refresh'] }
+    ],
+    [
+      'a command’s own writable member',
+      handle({
+        state: getter(1),
+        raw: getter(1),
+        refresh: { value: Object.preventExtensions(Object.assign(() => undefined, { tag: 1 })) }
+      }),
+      'held.refresh.tag: writable'
+    ],
+    [
+      'a command that is not a function',
+      handle({ state: getter(1), raw: getter(1), refresh: { value: closed({}) } }),
+      'held.refresh: a command that is not a function'
+    ],
+    [
+      'a getter that hands out a function',
+      handle({ state: getter(command), raw: getter(1), refresh: { value: command } }),
+      'held.state: a function in a snapshot'
+    ],
+    [
+      'a getter closed on its first read only',
+      handle({
+        state: {
+          get: closed(
+            (() => {
+              let reads = 0;
+              return () => ((reads += 1) === 1 ? closed({}) : {});
+            })()
+          )
+        },
+        raw: getter(1),
+        refresh: { value: command }
+      }),
+      'held.state (read again): extensible'
+    ],
+    [
+      'a snapshot holding the command, whichever key comes first',
+      handle({
+        refresh: { value: command },
+        state: getter(closed({ retry: command })),
+        raw: getter(1)
+      }),
+      'held.state.retry: a function in a snapshot'
+    ],
+    [
+      'an interface that is not a plain object',
+      closed(
+        Object.defineProperties(Object.create(closed({})) as object, {
+          state: getter(1),
+          raw: getter(1),
+          refresh: { value: command }
+        })
+      ),
+      'held: a kind this discipline does not admit'
+    ],
+    [
+      'a command whose prototype carries a getter',
+      handle({
+        state: getter(1),
+        raw: getter(1),
+        refresh: {
+          value: closed(
+            Object.setPrototypeOf(
+              async () => undefined,
+              closed(
+                Object.defineProperty(Object.create(Function.prototype) as object, 'ledger', {
+                  get: closed(() => ({}))
+                })
+              )
+            ) as object
+          )
+        }
+      }),
+      'held.refresh (inherited from a prototype).ledger: an accessor every instance inherits'
     ]
   ];
   for (const [rule, value, finding, interfaceSpec] of interfaceRules)
     expect(over(value, interfaceSpec), `the interface’s control: ${rule}`).toContain(finding);
-  // **And the exemption is an edge, not a name**: a `raw` on a snapshot is walked.
+  // Each host kind with internal state, under a borrowed prototype: admitted as
+  // a record by its prototype, and refused by its slots.
+  const hosts: [string, () => object][] = [
+    ['a map', () => new Map()],
+    ['a set', () => new Set()],
+    ['a weak map', () => new WeakMap()],
+    ['a weak set', () => new WeakSet()],
+    ['a date', () => new Date(0)],
+    ['a typed array', () => new Uint8Array(0)],
+    ['an array buffer', () => new ArrayBuffer(1)],
+    ['a promise', () => Promise.resolve()],
+    ['a boxed number', () => Object(1) as object],
+    ['a regular expression', () => /x/g]
+  ];
+  for (const [kind, make] of hosts)
+    expect(
+      breaches(closed({ host: closed(Object.setPrototypeOf(make(), Object.prototype) as object) })),
+      `the discipline’s control: ${kind}, under a borrowed prototype`
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^held\.host: a host object with internal state/)
+      ])
+    );
+  // **And a `raw` on a snapshot is walked like any other member**: the
+  // exemption is read on one interface's getter, which the control above
+  // takes away.
   expect(
     breaches(closed({ raw: { open: true } })),
-    'the exemption is one interface’s edge'
+    'a member named `raw`, on a snapshot'
   ).toContain('held.raw: extensible');
 }
 
-/**
- * What a consumer imports: the entry, and the outlets each component's props
- * are built from — and what a hook's answer is, as a value they hold. A hook
- * that answers a function (`useSend`) is held for what calling it resolves
- * with; one that answers a value is held for that value.
- */
+/** What a consumer imports: the entry, and the outlets each component's props are built from. */
 const PUBLISHED = [
   `import type * as Published from '$lib/v1/index.js';`,
-  `import type * as Outlets from '$lib/v1/components/outlets.js';`,
-  'type HookImage<F extends (...args: never[]) => unknown> = ReturnType<F> extends (...args: never[]) => infer R ? Awaited<R> : ReturnType<F>;'
+  `import type * as Outlets from '$lib/v1/components/outlets.js';`
 ].join('\n');
 
 /**
  * The published names this row is not about, each for a reason: written by the
- * consumer and handed in, not given out; a function a consumer calls rather than
- * a shape — what it resolves with is walked, as `useSend`'s answer; and the
- * event, whose type is `B5-C6`'s.
+ * consumer and handed in, not given out; and the event, whose type is
+ * `B5-C6`'s. `NostrSigner` is the consumer's, and so is what this library hands
+ * it to sign: a fresh template per call, which signers write to (a common one
+ * sets its `id`, `pubkey` and `sig` in place) and which is compared with a
+ * frozen copy afterwards, so it reaches no other reader.
  */
 const NOT_GIVEN_OUT: Readonly<Record<string, string>> = {
   ReqDescriptor: 'written by the consumer',
@@ -642,10 +840,9 @@ const NOT_GIVEN_OUT: Readonly<Record<string, string>> = {
   RelayConfig: 'written by the consumer',
   RelayInput: 'written by the consumer',
   EventTemplate: 'written by the consumer',
-  NostrSigner: 'supplied by the consumer',
+  NostrSigner: 'supplied by the consumer, and the template it is handed is its to write',
   SendInput: 'written by the consumer',
   SendOptions: 'written by the consumer',
-  Send: 'a function a consumer calls',
   ReqEvent: 'B5-C6’s'
 };
 
@@ -692,6 +889,18 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
     outletTypes.map((name) => `Outlets.${name}`)
   );
   expect(outlets.length, 'the outlets’ arguments, each a type of its own').toBeGreaterThan(3);
+  // **A class is two values a consumer holds**: its instances, walked here,
+  // and the class itself, exported by name and reached as `error.constructor`.
+  // Its static side is the platform's — `ErrorConstructor`'s members, as the
+  // default library and the host's typings declare them, `Function`'s, and the
+  // `prototype` TypeScript gives every class — so what this asks of it is that
+  // it holds nothing of this library's; at run time the class is sealed, and
+  // the discipline reads it through every instance's chain.
+  for (const one of exported.filter((each) => each.kind === 'class'))
+    expect(
+      declaredHere(PUBLISHED, `typeof Published.${one.name}`),
+      `${one.name}'s static side declares nothing of this library's`
+    ).toEqual([]);
   const shapes = [
     ...exported
       .filter((one) => one.kind !== 'value' && NOT_GIVEN_OUT[one.name] === undefined)
@@ -700,7 +909,7 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
           ? `InstanceType<typeof Published.${one.name}>`
           : `Published.${one.name}`
       ),
-    ...MAIN_SURFACE.hooks.map((hook) => `HookImage<typeof Published.${hook}>`),
+    ...MAIN_SURFACE.hooks.map((hook) => `ReturnType<typeof Published.${hook}>`),
     ...outlets
   ];
   const writes = writesThroughEach(PUBLISHED, shapes, { callables: 'api', depth: 6 });
@@ -714,7 +923,7 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
     expect(
       judged.some(
         (one) =>
-          one.line.startsWith(`HookImage<typeof Published.${hook}>:`) && one.verdict === 'refused'
+          one.line.startsWith(`ReturnType<typeof Published.${hook}>:`) && one.verdict === 'refused'
       ),
       `what ${hook} answers is walked`
     ).toBe(true);
@@ -724,10 +933,10 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
   // arrays rather than refuse that one write by type. Returned apart, so an arm
   // asserts it by name.
   const breaches = judged
-    .filter((one) => one.verdict !== 'refused' && one.verdict !== 'a standard method slot')
+    .filter((one) => one.verdict !== 'refused' && one.verdict !== 'a standard member slot')
     .map((one) => `${one.line} (${one.verdict})`);
   const exceptions = judged
-    .filter((one) => one.verdict === 'a standard method slot')
+    .filter((one) => one.verdict === 'a standard member slot')
     .map((one) => one.line);
   return { shapes, breaches, exceptions };
 }
@@ -757,10 +966,20 @@ function exceptionStated(exceptions: readonly string[]): void {
       exceptions.some((line) => line.includes(`.${list}!.map = `)),
       `the exception, on ${list}`
     ).toBe(true);
-  expect(
-    exceptions.some((line) => line.includes('.refresh!.call = ')),
-    'the exception, on a handle’s refresh'
-  ).toBe(true);
+  // And the members every value has: `Object`'s on a record, `Function`'s on
+  // a function — `prototype`, `caller` and `arguments` are data slots, and the
+  // exception is about whose declaration a member is, not whether it is called.
+  for (const universal of [
+    '.refresh!.call = ',
+    '.refresh!.prototype = ',
+    '.refresh!.caller = ',
+    '.diagnostics!.constructor = ',
+    '.diagnostics!.toString = '
+  ])
+    expect(
+      exceptions.some((line) => line.includes(universal)),
+      `the exception, on ${universal.slice(1, -3)}`
+    ).toBe(true);
 }
 
 describe('what a request publishes is the consumer’s to hold and nobody else’s', () => {
@@ -1300,6 +1519,12 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         interfaces: readonly (readonly [object, LiveInterface])[] = []
       ): void => {
         roster.push(name);
+        // A root with nothing in it keeps every rule by default, so a case that
+        // arranged nothing would count as one that passed.
+        expect(
+          typeof root === 'function' || (typeof root === 'object' && root !== null),
+          `${name}: the premise, a value to read`
+        ).toBe(true);
         breaches.push(...breachesOf(root, name, disciplineOver(interfaces)));
       };
       const engine = (handle: object): [object, LiveInterface][] => [[handle, ENGINE_HANDLE]];
@@ -1325,8 +1550,9 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         }
         throw new Error('the premise: refresh() rejects');
       };
-      // What each outlet was handed, rendered once over `request`.
-      const outlets = (request: object, single: boolean): Map<string, unknown> => {
+      // What one outlet was handed, rendered once over `request` — and the
+      // premise that it was rendered at all.
+      const outlet = (request: object, single: boolean, slot: string): unknown => {
         const handed = new Map<string, unknown>();
         const view = render(Outlets, {
           props: {
@@ -1339,7 +1565,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         });
         flush();
         view.unmount();
-        return handed;
+        expect([...handed.keys()], `the premise: the ${slot} outlet was rendered`).toEqual([slot]);
+        return handed.get(slot);
       };
       const options =
         (
@@ -1386,7 +1613,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const req = await waitForReq(server);
         expect(held.value.state.status, 'the premise: loading').toBe('loading');
         check('a request loading', held.value, engine(held.value));
-        check('its loading outlet', outlets(held.value, false).get('loading'), engine(held.value));
+        check('its loading outlet', outlet(held.value, false, 'loading'), engine(held.value));
 
         respondWithEvent(
           server,
@@ -1401,8 +1628,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await settle();
         expect(held.value.state.status, 'the premise: settled').toBe('settled');
         check('a request settled', held.value, engine(held.value));
-        check('its events outlet', outlets(held.value, false).get('events'), engine(held.value));
-        check('its event outlet', outlets(held.value, true).get('event'), engine(held.value));
+        check('its events outlet', outlet(held.value, false, 'events'), engine(held.value));
+        check('its event outlet', outlet(held.value, true, 'event'), engine(held.value));
 
         // Two callers of one refresh hold one object (C15), so it is checked once.
         const asked = held.value.refresh();
@@ -1445,7 +1672,12 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await settle();
         expect(held.value.state.status, 'the premise: settled with nothing').toBe('settled');
         check('a request settled with nothing', held.value, engine(held.value));
-        check('its nodata outlet', outlets(held.value, false).get('nodata'), engine(held.value));
+        check('its nodata outlet', outlet(held.value, false, 'nodata'), engine(held.value));
+        check(
+          'its nodata outlet, for a single event',
+          outlet(held.value, true, 'nodata'),
+          engine(held.value)
+        );
         held.destroy();
       }
 
@@ -1502,7 +1734,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await settle(150);
         expect(first.value.state.status, 'the premise: refused').toBe('error');
         check('a refused descriptor', first.value, engine(first.value));
-        check('its error outlet', outlets(first.value, false).get('error'), engine(first.value));
+        check('its error outlet', outlet(first.value, false, 'error'), engine(first.value));
         reached('unsupported-filter', (first.value.state as { error?: unknown }).error);
         const rejected = await rejectionOf(first.value.refresh());
         // **Not the object the state carries**: `refresh()` resolves the
@@ -1572,24 +1804,6 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         held.destroy();
       }
 
-      // A live request whose leg ended.
-      {
-        const { rxNostr, server } = createTestRelay(nextUrl());
-        const held = mount(() =>
-          useStreamedReq(options('pb13-ended', rxNostr, { live: true, retain: 'unbounded' }))
-        );
-        const req = await waitForReq(server);
-        respondWithEvent(server, req, fakeEvent({ id: 'pb13-c', created_at: 1 }));
-        respondWithEose(server, req);
-        await settle(150);
-        rxNostr.dispose();
-        await settle(200);
-        expect(held.value.diagnostics.legEnded?.kind, 'the premise: the leg ended').toBe('ended');
-        reached('relay-failed', held.value.diagnostics.legEnded?.error);
-        check('a live request whose leg ended', held.value, engine(held.value));
-        held.destroy();
-      }
-
       // **An Error under every code the library publishes one with.** The
       // refusals the boundary builds and the failures the engine builds, one
       // each — none needs a provider, and the last needs there to be none —
@@ -1603,10 +1817,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           }
         };
         const arranged: [string, () => UseStreamedReqOpts][] = [
-          [
-            'invalid-descriptor',
-            options('pb13-invalid', rxNostr, { deferred: 'yes' as unknown as boolean })
-          ],
+          ['invalid-descriptor', options('pb13-invalid', rxNostr, { settleTimeoutMs: -1 })],
           ['descriptor-unreadable', options('pb13-unreadable', rxNostr, { filters: [unreadable] })],
           [
             'accumulator-contract',
@@ -1670,7 +1881,58 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(thrown, 'the premise: a hook with no provider throws').toBeInstanceOf(
           MissingProviderError
         );
+        reached('missing-provider', thrown);
         check('an Error a hook throws, missing-provider', thrown);
+        // And what a provider throws at construction on a runtime with no
+        // randomness — `NostrApp` builds its attempt registry first thing.
+        vi.stubGlobal('crypto', {});
+        let unrandom: unknown;
+        try {
+          createAttemptRegistry();
+        } catch (caught) {
+          unrandom = caught;
+        } finally {
+          vi.unstubAllGlobals();
+        }
+        reached('missing-randomness', unrandom);
+        check('an Error a provider throws, missing-randomness', unrandom);
+      }
+
+      // A live request whose leg ended: its provider's one relay went away,
+      // and with nothing retrying, every relay in scope has stopped.
+      {
+        const url = nextUrl();
+        const server = new WS(url, { jsonProtocol: true });
+        const provider = mount(() => {
+          const built = createNostrContext({
+            relays: [url],
+            harness: HARNESS_DIVERGENCES,
+            verifyEvent: acceptAnyEvent
+          });
+          setNostrContext(built);
+          return built;
+        });
+        const held = mount(() =>
+          useStreamedReq(() => ({
+            namespace: 'pb13-ended',
+            filters: [{ kinds: [1] }],
+            live: true,
+            retain: 'unbounded',
+            reqIdBase: 'pb13-ended',
+            settleTimeoutMs: 300
+          }))
+        );
+        const req = String(((await nextOf(server, 'REQ')) as unknown[])[1]);
+        respondWithEvent(server, req, fakeEvent({ id: 'pb13-c', created_at: 1 }));
+        respondWithEose(server, req);
+        await settle(150);
+        server.error({ code: 1006, reason: 'gone', wasClean: false });
+        await settle(200);
+        expect(held.value.diagnostics.legEnded?.kind, 'the premise: the leg ended').toBe('ended');
+        reached('relay-failed', held.value.diagnostics.legEnded?.error);
+        check('a live request whose leg ended', held.value, engine(held.value));
+        held.destroy();
+        provider.destroy();
       }
 
       // Under a provider: the three published hooks, a send each way, a request
@@ -1718,18 +1980,19 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('useRelayDiagnostics()', diagnostics.value, [[diagnostics.value, RELAY_DIAGNOSTICS]]);
         // A relay's message is built at three sites: whole, cut at its bound,
         // and rendered from a value that was not text. One notice each.
-        const noticed = async (name: string, said: unknown, truncated: boolean): Promise<void> => {
+        const noticed = async (name: string, said: unknown, begins: string): Promise<void> => {
           server.send(['NOTICE', said]);
           await settle();
           const notice = Object.values(diagnostics.value.relays)[0]?.lastNotice;
-          expect(notice?.truncated, `the premise: ${name}`).toBe(truncated);
+          expect(notice?.truncated, `the premise: ${name}, cut`).toBe(true);
+          expect(notice?.text.startsWith(begins), `the premise: ${name}, what it says`).toBe(true);
           check(name, diagnostics.value, [[diagnostics.value, RELAY_DIAGNOSTICS]]);
         };
-        await noticed('useRelayDiagnostics(), a notice cut', 'x'.repeat(5000), true);
+        await noticed('useRelayDiagnostics(), a notice cut', 'x'.repeat(5000), 'xxx');
         await noticed(
           'useRelayDiagnostics(), a notice that was not text',
           { detail: 'x'.repeat(300) },
-          true
+          '{"detail"'
         );
 
         const sender = mount(() => useSend());
@@ -1750,7 +2013,12 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await nextOf(server, 'EVENT');
         server.send(['OK', signed.id, true, 'saved: thanks']);
         const settledSend = await sending;
-        expect(settledSend.status, 'the premise: a send settled').toBe('settled');
+        expect(
+          settledSend.status === 'settled'
+            ? settledSend.relays.map((one) => one.outcome)
+            : settledSend,
+          'the premise: a send its relay accepted'
+        ).toEqual(['accepted']);
         check('a send, settled', settledSend);
         // And one no relay answers, which the teardown below abandons.
         const unanswered = sender.value({
@@ -1932,7 +2200,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         });
         const diagnostics = mount(() => useRelayDiagnostics());
         const refusal = diagnostics.value.configurationError;
-        expect(refusal?.code, `the premise: ${code}`).toBe(code);
+        reached(code, refusal);
         expect(Object.getPrototypeOf(refusal), `the premise: ${code}, its class`).toBe(
           kind.prototype
         );
@@ -1944,8 +2212,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       }
 
       expect([...roster].sort(), 'the population, case by case').toEqual([...POPULATION].sort());
-      expect([...codes].sort(), 'an Error under every code the library publishes one with').toEqual(
-        [...REQ_ERROR_CODES].sort()
+      expect([...codes].sort(), 'an Error under every code a hook publishes one with').toEqual(
+        [...new Set([...REQ_ERROR_CODES, ...RELAY_REFUSAL_CODES, 'missing-randomness'])].sort()
       );
       expect([...rejections].sort(), 'and `refresh()` rejecting with every code it can').toEqual(
         [...REFRESH_REJECTIONS].sort()
@@ -1987,6 +2255,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       for (const [answer, first, second, cache] of observed) {
         const held = errorOf(first);
         expect(held, `${answer}: the premise, an Error to write to`).toBeInstanceOf(Error);
+        expect(errorOf(second), `${answer}: the premise, one Error two hooks share`).toBe(held);
         const readers: Record<string, () => unknown> = {
           'the value written to': () => held,
           'a second hook': () => errorOf(second),
@@ -2114,9 +2383,13 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'the probe’s control: an overloaded method'
       ).toMatch(/cannot call/);
       expect(
-        throwsOn('{ refresh(force: boolean): Promise<number> }'),
-        'the probe’s control: a method with a required argument'
-      ).toMatch(/cannot call/);
+        writesThrough(declarations, '{ send(input: string): Promise<{ n: number }> }', {
+          callables: 'api'
+        }),
+        'the probe’s control: a function with a required argument is walked, handed `never`'
+      ).toContain(
+        'for (const __result1 of [await value.send!(null as never)]) __result1.n = __result1.n!;'
+      );
       expect(
         throwsOn('{ seen: ReadonlyMap<string, { n: number }> }'),
         'the probe’s control: a collection’s payload'
@@ -2142,9 +2415,9 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'the probe’s control: a function’s member compiles, its `call` and a read-only list’s method are the exception, a mutable list’s is not'
       ).toEqual([
         'compiles',
-        'a standard method slot',
+        'a standard member slot',
         'compiles',
-        'a standard method slot',
+        'a standard member slot',
         'compiles'
       ]);
       // Distinct by type, as the compiler interns them: a named type handed by
@@ -2163,20 +2436,45 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // consumer's `$state.snapshot`, a non-empty tuple, and an `instanceof`
       // narrowing, compiled against the published types.
       const entry = "import type * as Published from '$lib/v1/index.js';";
+      // **Every list the entry publishes, each where it is published** — a
+      // check at one site holds that site, and a list type changed at another
+      // left it green. Each is snapshotted and mapped; each `causes` is taken
+      // as the non-empty tuple; and a narrowing by `instanceof` keeps them
+      // read-only.
+      const lists: [string, string][] = [
+        ["Extract<Published.ReqState, { status: 'streaming' }>", 'events'],
+        ["Extract<Published.ReqState, { status: 'settled' }>", 'events'],
+        ["Extract<Published.ReqState, { status: 'incomplete' }>", 'events'],
+        ["Extract<Published.ReqState, { status: 'error' }>", 'events'],
+        ["Extract<Published.ReqState, { status: 'incomplete' }>", 'causes'],
+        ["Extract<Published.RefreshOutcome, { kind: 'incomplete' }>", 'causes'],
+        ["Extract<Published.Completion, { kind: 'incomplete' }>", 'causes'],
+        ['InstanceType<typeof Published.IncompleteResultError>', 'incompleteCauses'],
+        ['Published.ReqDiagnostics', 'refusals'],
+        ['Published.RelayDiagnostic', 'configuredUrls'],
+        ["Extract<Published.SendResult, { status: 'settled' }>", 'relays'],
+        ['InstanceType<typeof Published.RelayConfigurationError>', 'urls'],
+        ['Published.ReqEvent', 'tags']
+      ];
+      const tuples = new Set(['causes', 'incompleteCauses']);
       expect(
         consumerDiagnostics(
           [
             entry,
-            "declare const settled: Extract<Published.ReqState, { status: 'settled' }>;",
-            "declare const incomplete: Extract<Published.ReqState, { status: 'incomplete' }>;",
-            'declare const diagnostics: Published.ReqDiagnostics;',
-            'export const ids: string[] = $state.snapshot(settled).events.map((event) => event.id);',
-            'export const causes: readonly [Published.IncompleteCause, ...Published.IncompleteCause[]] = incomplete.causes;',
-            'export const first: Published.IncompleteCause = incomplete.causes[0];',
-            'if (diagnostics.refusals instanceof Array) {',
-            '  // @ts-expect-error -- still read-only after the narrowing',
-            '  diagnostics.refusals.length = 0;',
-            '}'
+            ...lists.flatMap(([holder, list], at) => [
+              `declare const held${at}: ${holder};`,
+              `export const mapped${at} = $state.snapshot(held${at}).${list}.map((one) => one);`,
+              ...(tuples.has(list)
+                ? [
+                    `export const tuple${at}: readonly [Published.IncompleteCause, ...Published.IncompleteCause[]] = held${at}.${list};`,
+                    `export const head${at}: Published.IncompleteCause = held${at}.${list}[0];`
+                  ]
+                : []),
+              `if (held${at}.${list} instanceof Array) {`,
+              '  // @ts-expect-error -- still read-only after the narrowing',
+              `  held${at}.${list}.length = 0;`,
+              '}'
+            ])
           ].join('\n')
         ),
         'a consumer’s snapshot, tuple and narrowing'

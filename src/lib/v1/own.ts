@@ -68,7 +68,7 @@
 import { AccumulatorContractError } from './attempt.js';
 import type { RelayMessage } from './normalize.js';
 import { boundedMessage, describeValue } from './normalize.js';
-import { hardenOwned, isOwnedByLibrary, ownedByLibrary, sealOwned } from './owned.js';
+import { hardenOwned, isOwnedByLibrary, ownedByLibrary, sealClass, sealOwned } from './owned.js';
 import type {
   CapturedReqError,
   RefreshOutcomeError,
@@ -345,6 +345,7 @@ export class ReqFailure extends Error {
     // and is captured like any other foreign value when it reaches a boundary.
   }
 }
+sealClass(ReqFailure);
 
 /**
  * The provider this request was made under has been disposed.
@@ -379,6 +380,7 @@ class ProviderDisposedError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(ProviderDisposedError);
 
 /**
  * Build one, minted, sealed and typed as what the channel publishes.

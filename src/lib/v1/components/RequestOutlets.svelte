@@ -35,10 +35,7 @@
   let { request, event, events, loading, error, nodata }: Props = $props();
 
   const outlet = $derived(deriveOutlet(request.state));
-  // The argument each outlet is handed is a published value: frozen, as the
-  // list and everything else a hook hands out is (`B5-C8`).
-  const NONE: readonly never[] = Object.freeze([]);
-  const shown = $derived(request.state.status === 'loading' ? NONE : request.state.events);
+  const shown = $derived(request.state.status === 'loading' ? [] : request.state.events);
 </script>
 
 {#if outlet.slot === 'loading'}

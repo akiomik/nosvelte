@@ -4,7 +4,7 @@
  */
 
 import type { NormalizedDescriptor, ReadonlyFilter } from './normalize.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type { ReqError } from './reqerror.js';
 
 /**
@@ -182,6 +182,7 @@ export class UnsupportedFilterError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(UnsupportedFilterError);
 
 /**
  * Throws on anything the high-level API cannot honour end to end.

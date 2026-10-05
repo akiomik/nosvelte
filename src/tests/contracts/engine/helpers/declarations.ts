@@ -19,6 +19,18 @@ import ts from 'typescript';
 const ROOT = resolve(process.cwd());
 const CONSUMER = resolve(ROOT, 'src/tests/contracts/engine/__consumer__.ts');
 
+/**
+ * A value of the default library's `Object` and of its `CallableFunction`,
+ * declared beside every probe so the members TypeScript gives *every* object
+ * and every function can be enumerated: `getPropertiesOfType` answers a type's
+ * own members and never these, so a walk built on it alone never asked
+ * `state.constructor = …` or `handle.refresh.prototype = …` — both compile.
+ */
+const STANDARD = [
+  'export declare const __standardObject: Object;',
+  'export declare const __standardFunction: CallableFunction;'
+].join('\n');
+
 /** A diagnostic the compiler reported on a consumer's file, by line. */
 export interface ConsumerDiagnostic {
   /** The 1-based line of the consumer's file the diagnostic is on. */
@@ -198,12 +210,21 @@ export function writesThroughEach(
   const callables = options.callables ?? 'data';
   const roots = typeTexts.map((_, at) => rootOf(at, typeTexts.length));
   const { program, consumer } = programOver(
-    `${imports}\n${typeTexts.map((typeText, at) => `declare const ${roots[at]}: ${typeText};`).join('\n')}\n`
+    `${imports}\n${STANDARD}\n${typeTexts.map((typeText, at) => `declare const ${roots[at]}: ${typeText};`).join('\n')}\n`
   );
   const checker = program.getTypeChecker();
   const declarations = consumer.statements
     .filter(ts.isVariableStatement)
     .flatMap((statement) => statement.declarationList.declarations);
+  const standardOf = (name: string): readonly ts.Symbol[] => {
+    const declared = declarations.find(
+      (one) => ts.isIdentifier(one.name) && one.name.text === name
+    );
+    if (declared === undefined) throw new Error(`the probe declared no ${name}`);
+    return checker.getPropertiesOfType(checker.getTypeAtLocation(declared.name));
+  };
+  const objectMembers = standardOf('__standardObject');
+  const functionMembers = standardOf('__standardFunction');
   let writes: string[] = [];
   const isIdentifier = (name: string): boolean => /^[A-Za-z_$][\w$]*$/.test(name);
   // The type a `!` leaves — except that `NonNullable<unknown>` is `{}`, which
@@ -290,6 +311,37 @@ export function writesThroughEach(
   };
   const callable = (type: ts.Type): boolean =>
     type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0;
+  // How a consumer spells a member: by name, by a quoted name, or — keyed by a
+  // well-known symbol — through the symbol. One the probe cannot name is
+  // reported, since silence would read as "nothing writable".
+  const accessOf = (expression: string, property: ts.Symbol): string => {
+    const name = property.getName();
+    if (name.startsWith('__@')) {
+      const declaration = property.valueDeclaration ?? property.declarations?.[0];
+      const named = declaration === undefined ? undefined : ts.getNameOfDeclaration(declaration);
+      const symbol =
+        named !== undefined && ts.isComputedPropertyName(named) ? named.expression.getText() : '';
+      if (!/^Symbol\.\w+$/.test(symbol))
+        throw new Error(`writesThrough: ${expression} has a symbol member the probe cannot name`);
+      return `${expression}[${symbol}]`;
+    }
+    return isIdentifier(name) ? `${expression}.${name}` : `${expression}[${JSON.stringify(name)}]`;
+  };
+  // **The members every value has, and no type lists.** `Object`'s on every
+  // object, and `Function`'s on every function: each slot a consumer can spell
+  // is written to, and none is walked into — they are the language's, not the
+  // published value's. `judgeWrites` says which of them the types refuse.
+  const standardMembers = (expression: string, type: ts.Type, guard: string): void => {
+    const own = new Set(checker.getPropertiesOfType(type).map((one) => one.getName()));
+    const spelled = new Set<string>();
+    for (const property of [...objectMembers, ...(callable(type) ? functionMembers : [])]) {
+      const name = property.getName();
+      if (own.has(name) || spelled.has(name)) continue;
+      spelled.add(name);
+      const access = accessOf(expression, property);
+      writes.push(`${guard}${access} = ${access}!;`);
+    }
+  };
   // Every member of `type`: an assignment to each slot, and the value in it
   // walked — skipping, for a list, the positions its own branch wrote to.
   const members = (
@@ -305,23 +357,7 @@ export function writesThroughEach(
       // class, so it is the one member a consumer has no write to attempt.
       if (name.startsWith('__#')) continue;
       if (list && /^\d+$/.test(name)) continue;
-      let access: string;
-      if (name.startsWith('__@')) {
-        // A symbol-keyed member is written through the symbol, which a
-        // consumer can name when it is a well-known one. One the probe cannot
-        // name is not skipped: it is reported, since silence would read as
-        // "nothing writable".
-        const declaration = property.valueDeclaration ?? property.declarations?.[0];
-        const named = declaration === undefined ? undefined : ts.getNameOfDeclaration(declaration);
-        const symbol =
-          named !== undefined && ts.isComputedPropertyName(named) ? named.expression.getText() : '';
-        if (!/^Symbol\.\w+$/.test(symbol))
-          throw new Error(`writesThrough: ${expression} has a symbol member the probe cannot name`);
-        access = `${expression}[${symbol}]`;
-      } else
-        access = isIdentifier(name)
-          ? `${expression}.${name}`
-          : `${expression}[${JSON.stringify(name)}]`;
+      const access = accessOf(expression, property);
       writes.push(`${guard}${access} = ${access}!;`);
       const declared = library(property);
       if (declared === undefined)
@@ -420,8 +456,19 @@ export function writesThroughEach(
       // method is an assignable slot — `tags.map = () => []` compiled against
       // `readonly string[]` and threw against the frozen array.
       members(expression, type, level, true, guard);
+      standardMembers(expression, type, guard);
       return;
     }
+    // **A list is an array.** A type indexed by number that is not one — the
+    // mapped `ReadonlyList` this row gave up — stopped being a list to a
+    // consumer's `$state.snapshot`, tuple and narrowing, and is reported
+    // wherever the walk meets it rather than at the one site a check names.
+    if (
+      checker
+        .getIndexInfosOfType(type)
+        .some((info) => (info.keyType.getFlags() & ts.TypeFlags.NumberLike) !== 0)
+    )
+      throw new Error(`writesThrough: ${expression} is indexed by number and is not an array`);
     // **A collection's payload is not reached through its members.** A
     // `ReadonlyMap`'s methods are the default library's, so the walk writes to
     // their slots and does not walk into them — and the values the map holds
@@ -448,39 +495,36 @@ export function writesThroughEach(
       // A method of a published handle: what it resolves with is what the
       // consumer holds, so that is walked, as a value of its own.
       //
-      // **One signature, callable with nothing.** `find` stood here, and it
-      // walked the first overload a call with no arguments matched and passed
-      // over the rest — a second signature's result was never walked, and
-      // nothing said so. A method with several, or with a required argument, is
-      // reported: what each would resolve with is not one value to walk.
+      // **One signature.** `find` stood here, and it walked the first overload
+      // a call with no arguments matched and passed over the rest — a second
+      // signature's result was never walked, and nothing said so. A function
+      // with several is reported: what each would resolve with is not one
+      // value to walk. A required argument is handed `null as never`, which the
+      // signature takes whatever it asks for, so `useSend()`'s `send(input)` is
+      // walked as `refresh()` is.
       const signatures = [...type.getCallSignatures(), ...type.getConstructSignatures()];
       const [call] = signatures;
-      const callableWithNothing =
-        call !== undefined &&
-        call.getParameters().every((parameter) => {
-          const declaration = parameter.valueDeclaration;
-          return (
-            declaration !== undefined &&
-            ts.isParameter(declaration) &&
-            checker.isOptionalParameter(declaration)
-          );
-        });
-      if (signatures.length !== 1 || call === undefined || !callableWithNothing)
-        throw new Error(`writesThrough: ${expression} is a method the probe cannot call`);
+      if (signatures.length !== 1 || call === undefined)
+        throw new Error(`writesThrough: ${expression} is a function the probe cannot call`);
+      const required = call.getParameters().filter((parameter) => {
+        const declaration = parameter.valueDeclaration;
+        return (
+          declaration === undefined ||
+          !ts.isParameter(declaration) ||
+          !(checker.isOptionalParameter(declaration) || declaration.dotDotDotToken !== undefined)
+        );
+      }).length;
       // **And the function is a value too.** Its declared members are walked
-      // like any object's, and the members every function has —
-      // `Function`'s `call`, `apply` and `bind`, which the default library
-      // declares as methods — are written to: assignable slots in TypeScript's
-      // own declarations, which `judgeWrites` reports as such.
+      // like any object's, and the members every function has are written to.
       members(expression, type, level, false, guard);
-      for (const method of ['call', 'apply', 'bind'])
-        writes.push(`${guard}${expression}.${method} = ${expression}.${method}!;`);
+      standardMembers(expression, type, guard);
       const returned = call.getReturnType();
       const awaited = checker.getAwaitedType(returned) ?? returned;
       // Bound to a name each line, so a guard can narrow it: a call is a new
       // value every time it is written, and nothing narrows one.
       const name = `__result${(results += 1)}`;
-      const invoked = awaited === returned ? `${expression}()` : `await ${expression}()`;
+      const called = `${expression}(${Array.from({ length: required }, () => 'null as never').join(', ')})`;
+      const invoked = awaited === returned ? called : `await ${called}`;
       visit(name, present(awaited), level + 1, `${guard}for (const ${name} of [${invoked}]) `);
       return;
     }
@@ -506,6 +550,7 @@ export function writesThroughEach(
     // like. Returning would certify it as read.
     if (writes.length === emitted)
       throw new Error(`writesThrough: ${expression} has nothing the probe can enumerate`);
+    standardMembers(expression, type, guard);
   };
   return roots.map((root) => {
     const declaration = declarations.find(
@@ -537,20 +582,20 @@ export interface WriteVerdict {
    * `refused`: the compiler refused it with the code that kind of write gets
    * from a read-only receiver. `compiles`: no diagnostic. `through a union`: the
    * receiver's type, as the compiler gives the expression, is a union, so a
-   * refusal could be one constituent's. `a standard method slot`: it compiles,
-   * and it is an assignment to a method the default library's `ReadonlyArray`
-   * declares, on a read-only array or tuple — the one write TypeScript's own
-   * declarations let through a read-only list, which the published types keep
-   * rather than give up being arrays for (`B5-C6`, `B5-C8`). Otherwise the
-   * diagnostic that is not a refusal. A published function's `call`, `apply`
-   * and `bind` are the same kind of slot — `Function`'s and
-   * `CallableFunction`'s declarations — and are judged the same way.
+   * refusal could be one constituent's. `a standard member slot`: it compiles,
+   * and it is an assignment to a member the default library declares on every
+   * value of the receiver's kind — `Object`'s on any, `Function`'s and
+   * `CallableFunction`'s on a function, `ReadonlyArray`'s on a read-only list —
+   * and the receiver's own type does not: the writes TypeScript's own
+   * declarations let through every published value, which the published types
+   * keep rather than give up being arrays and functions for (`B5-C6`,
+   * `B5-C8`). Otherwise the diagnostic that is not a refusal.
    */
   readonly verdict:
     | 'refused'
     | 'compiles'
     | 'through a union'
-    | 'a standard method slot'
+    | 'a standard member slot'
     | `not a refusal: TS${number}`;
 }
 
@@ -618,7 +663,9 @@ const JUDGED_AT_ONCE = 300;
 const WRITES_FOLLOW = 'declare const __writesFollow: never;';
 
 function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
-  const { program, consumer } = programOver(`${prelude}\n${WRITES_FOLLOW}\n${writes.join('\n')}\n`);
+  const { program, consumer } = programOver(
+    `${prelude}\n${STANDARD}\n${WRITES_FOLLOW}\n${writes.join('\n')}\n`
+  );
   const checker = program.getTypeChecker();
   const diagnostics = ts.getPreEmitDiagnostics(program, consumer);
   const statements = [...consumer.statements];
@@ -642,38 +689,52 @@ function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
   const isReadonlyList = (type: ts.Type): boolean =>
     (checker.isTupleType(type) && ((type as ts.TypeReference).target as ts.TupleType).readonly) ||
     (checker.isArrayType(type) && type.getSymbol()?.getName() === 'ReadonlyArray');
-  // A method the default library's `ReadonlyArray` declares, and nothing else:
-  // a member anything else adds to the global array types, or an overload of
-  // one, has a declaration that is not the default library's.
-  const standardMethod = (
+  // The default library's universal members, enumerated as the walk did.
+  const standardIn = (name: string): readonly ts.Symbol[] => {
+    const declared = statements
+      .filter(ts.isVariableStatement)
+      .flatMap((statement) => statement.declarationList.declarations)
+      .find((one) => ts.isIdentifier(one.name) && one.name.text === name);
+    if (declared === undefined) throw new Error(`judgeWrites: the probe declared no ${name}`);
+    return checker.getPropertiesOfType(checker.getTypeAtLocation(declared.name));
+  };
+  const objectMembers = standardIn('__standardObject');
+  const functionMembers = standardIn('__standardFunction');
+  // **A member the default library declares on every value of its kind, and
+  // nothing else**: `Object`'s on any receiver, `Function`'s and
+  // `CallableFunction`'s on one that can be called, `ReadonlyArray`'s on a
+  // read-only list. A member anything else adds to those interfaces, or an
+  // overload of one, has a declaration that is not the default library's, and
+  // a member the receiver's own type declares is the published type's.
+  const standardMember = (
     target: ts.PropertyAccessExpression | ts.ElementAccessExpression,
     receiver: ts.Type
   ): boolean => {
+    const callable = receiver.getCallSignatures().length > 0;
     // An element access names its member by a key: a well-known symbol is
-    // found among the receiver's members by the name the checker gives it
-    // (`__@iterator@…`), and a string literal by itself.
+    // found by the name the checker gives it (`__@iterator@…`), among the
+    // receiver's members and the universal ones, and a string literal by itself.
     let symbol: ts.Symbol | undefined;
     if (ts.isPropertyAccessExpression(target)) symbol = checker.getSymbolAtLocation(target.name);
     else {
       const key = target.argumentExpression;
       const wellKnown = /^Symbol\.(\w+)$/.exec(key.getText());
-      symbol = checker
-        .getPropertiesOfType(receiver)
-        .find((one) =>
-          wellKnown !== null
-            ? one.getName().startsWith(`__@${wellKnown[1]}@`)
-            : ts.isStringLiteral(key) && one.getName() === key.text
-        );
+      symbol = [
+        ...checker.getPropertiesOfType(receiver),
+        ...objectMembers,
+        ...(callable ? functionMembers : [])
+      ].find((one) =>
+        wellKnown !== null
+          ? one.getName().startsWith(`__@${wellKnown[1]}@`)
+          : ts.isStringLiteral(key) && one.getName() === key.text
+      );
     }
     const declarations = symbol?.getDeclarations() ?? [];
-    // A read-only list's methods are `ReadonlyArray`'s; a function's are
-    // `Function`'s and `CallableFunction`'s, the interfaces every function type
-    // has its `call`, `apply` and `bind` from.
-    const declaring = isReadonlyList(receiver)
-      ? ['ReadonlyArray']
-      : receiver.getCallSignatures().length > 0
-        ? ['Function', 'CallableFunction']
-        : [];
+    const declaring = [
+      'Object',
+      ...(callable ? ['Function', 'CallableFunction'] : []),
+      ...(isReadonlyList(receiver) ? ['ReadonlyArray'] : [])
+    ];
     return (
       symbol !== undefined &&
       declarations.length > 0 &&
@@ -682,8 +743,7 @@ function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
           program.isSourceFileDefaultLibrary(one.getSourceFile()) &&
           ts.isInterfaceDeclaration(one.parent) &&
           declaring.includes(one.parent.name.text)
-      ) &&
-      checker.getTypeOfSymbol(symbol).getCallSignatures().length > 0
+      )
     );
   };
 
@@ -738,8 +798,8 @@ function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
       return {
         write,
         verdict:
-          target !== undefined && standardMethod(target, type)
-            ? 'a standard method slot'
+          target !== undefined && standardMember(target, type)
+            ? 'a standard member slot'
             : 'compiles'
       };
     const other = said.find((one) => !refusedBy.has(one.code) || (push && !isReadonlyList(type)));
@@ -856,15 +916,50 @@ export function snippetArgumentsOf(imports: string, typeTexts: readonly string[]
           `snippetArgumentsOf: ${property.getName()} is a snippet the probe cannot read`
         );
       const handed = checker.getTypeOfSymbol(parameter);
-      const [argument] = checker.isTupleType(handed)
-        ? checker.getTypeArguments(handed as ts.TypeReference)
-        : [];
-      if (argument === undefined || seen.has(argument)) continue;
-      seen.add(argument);
-      found.push(
-        `Parameters<NonNullable<(${typeTexts[at]})[${JSON.stringify(property.getName())}]>>[0]`
-      );
+      // **Every argument it is handed, not the first.** A snippet whose
+      // parameters are not a tuple is one the probe cannot read, and is
+      // reported rather than passed over as a snippet handed nothing.
+      if (!checker.isTupleType(handed))
+        throw new Error(
+          `snippetArgumentsOf: ${property.getName()} is handed something that is not a list of arguments`
+        );
+      for (const [position, argument] of checker
+        .getTypeArguments(handed as ts.TypeReference)
+        .entries()) {
+        if (seen.has(argument)) continue;
+        seen.add(argument);
+        found.push(
+          `Parameters<NonNullable<(${typeTexts[at]})[${JSON.stringify(property.getName())}]>>[${position}]`
+        );
+      }
     }
   }
   return found;
+}
+
+/**
+ * The members of `typeText` this repository declares — not the default
+ * library's, not a dependency's — by name. A class's static side is the
+ * platform's `ErrorConstructor`, `Function`'s members and the `prototype`
+ * TypeScript gives every class; this is how an arm says it holds nothing else.
+ */
+export function declaredHere(imports: string, typeText: string): string[] {
+  const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
+  const checker = program.getTypeChecker();
+  const declaration = consumer.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => statement.declarationList.declarations)
+    .find((one) => ts.isIdentifier(one.name) && one.name.text === 'value');
+  if (declaration === undefined) throw new Error('the probe declared no value');
+  return checker
+    .getPropertiesOfType(checker.getTypeAtLocation(declaration.name))
+    .filter((property) =>
+      (property.getDeclarations() ?? []).some((one) => {
+        const file = one.getSourceFile();
+        return (
+          !program.isSourceFileDefaultLibrary(file) && !file.fileName.includes('/node_modules/')
+        );
+      })
+    )
+    .map((property) => property.getName());
 }

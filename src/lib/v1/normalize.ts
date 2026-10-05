@@ -29,7 +29,7 @@
 import type Nostr from 'nostr-typedef';
 
 import { UnsupportedFilterError, validateFilter, validateFilterNames } from './key.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type { ReqError } from './reqerror.js';
 
 declare const normalized: unique symbol;
@@ -493,6 +493,7 @@ export class InvalidDescriptorError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(InvalidDescriptorError);
 
 /**
  * Integers, checked as one rule rather than as a list of the values seen so far.
