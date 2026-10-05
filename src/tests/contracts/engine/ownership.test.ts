@@ -29,7 +29,10 @@
  *
  * Port band 9820-9859, as the spike's suite had it.
  */
+import { types } from 'node:util';
+
 import type Nostr from 'nostr-typedef';
+import type { EventPacket } from 'rx-nostr';
 import { QueryClient } from 'tanstack-svelte-query-v6';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
@@ -37,6 +40,7 @@ import WS from 'vitest-websocket-mock';
 import { createAttemptRegistry } from '$lib/v1/attempt.js';
 import type { OwnedPacket, ReqEvent } from '$lib/v1/event.js';
 import { ownEvent, ownPacket } from '$lib/v1/event.js';
+import type { CachedEventSet } from '$lib/v1/eventset.js';
 import { emptyEventSet, foldEvent } from '$lib/v1/eventset.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
@@ -51,6 +55,7 @@ import {
   createTestRelay,
   fakeEvent,
   fakeEventPacket,
+  ownedFrom,
   respondWithEose,
   respondWithEvent
 } from './helpers/relay.js';
@@ -144,8 +149,9 @@ function reachable(root: unknown): Set<object> {
 
 /**
  * What makes `reachable` exact and what the boundary made unchangeable: every
- * object reachable from `root` is plain, frozen data — no accessor and no
- * function, whose closures reflection cannot read, no symbol key, no prototype
+ * object reachable from `root` is plain, frozen data — no proxy, no accessor
+ * and no function, whose traps and closures reflection cannot read, no symbol
+ * key, no prototype
  * but the built-in object and array ones, and nothing left open to a write.
  * Returns what breaks that, by path.
  */
@@ -153,6 +159,18 @@ function plainDataBreaches(root: unknown): string[] {
   const breaches: string[] = [];
   const seen = new Set<object>();
   const visit = (value: unknown, path: string): void => {
+    // A proxy is not data either, and reflection cannot tell: every
+    // descriptor, prototype and frozen state below is read through its traps,
+    // and a `get` trap answers `toJSON` for a property that is not there. The
+    // host can tell, so it is asked.
+    if (
+      (typeof value === 'object' || typeof value === 'function') &&
+      value !== null &&
+      types.isProxy(value)
+    ) {
+      breaches.push(`${path} is a proxy`);
+      return;
+    }
     // A function is not data: what it reaches is in a closure reflection
     // cannot read, and `toJSON` is called by every serialisation.
     if (typeof value === 'function') {
@@ -428,7 +446,7 @@ describe('the event a consumer holds is this library’s own', () => {
       respondWithEvent(server, req, fakeEvent(arrived));
       respondWithEose(server, req);
       await settle();
-      expect(eventsOf(first.value)).toHaveLength(1);
+      expect(eventsOf(first.value), 'the hook delivers the event').toHaveLength(1);
 
       // The event the consumer wrote to is one of the readers too: it refuses
       // the write, however the host refuses. A projection that handed out a
@@ -481,7 +499,8 @@ describe('the event a consumer holds is this library’s own', () => {
         },
         [Symbol('key')]: 0,
         own: Object.freeze(Object.create({}) as object),
-        open: {}
+        open: {},
+        proxied: new Proxy(Object.freeze({}), {})
       });
       expect(plainDataBreaches(impure), 'the plain-data check’s control').toEqual(
         expect.arrayContaining([
@@ -489,7 +508,8 @@ describe('the event a consumer holds is this library’s own', () => {
           'stored.accessor is an accessor',
           'stored has a symbol key',
           'stored.own has a prototype of its own',
-          'stored.open is not frozen'
+          'stored.open is not frozen',
+          'stored.proxied is a proxy'
         ])
       );
       const made = new Set<unknown>(vi.mocked(ownPacket).mock.results.map((one) => one.value));
@@ -572,7 +592,7 @@ describe('the event a consumer holds is this library’s own', () => {
       const mutable =
         '{ a: string; b: string[]; c: { d: number }; t: [string, ...number[][]]; x: any; m: { add(one: string): void } }';
       const open = writesThrough('', mutable);
-      expect(open).toEqual(
+      expect(open, 'the control’s lines, each asked for by name').toEqual(
         expect.arrayContaining([
           'value.b!.push(value.b![0]!);',
           'value.t![1]![0] = value.t![1]![0]!;',
@@ -590,7 +610,10 @@ describe('the event a consumer holds is this library’s own', () => {
       // from one type argument; the `push` onto it is TS2339 for the read-only
       // half and compiles for the other once a consumer narrows.
       const variadic = "{ t: readonly [...['t', ...string[]][], readonly ['p', ...string[]]] }";
-      expect(judgeWrites('', variadic, writesThrough('', variadic))).toContainEqual({
+      expect(
+        judgeWrites('', variadic, writesThrough('', variadic)),
+        'the judge’s control: a union receiver'
+      ).toContainEqual({
         write: 'value.t![0]!.push(value.t![0]![0]!);',
         verdict: 'through a union'
       });
@@ -609,47 +632,61 @@ describe('the event a consumer holds is this library’s own', () => {
       ]);
       // And where the probe cannot certify a type it throws, rather than
       // return having emitted nothing for it — each of those is asked for too.
-      expect(() => writesThrough('', '{ a: string[] | number }')).toThrow(/is a union/);
-      expect(() =>
-        writesThrough('declare const key: unique symbol;', '{ [key]: string[] }')
-      ).toThrow(/a symbol member the probe cannot name/);
-      expect(() => writesThrough('', '{ a: { b: { c: { d: { e: string[] } } } } }')).toThrow(
-        /is deeper than 4/
-      );
-      expect(() => writesThrough('', '{ a: unknown }')).toThrow(/is unknown/);
-      expect(() => writesThrough('', '{ a: object }')).toThrow(
-        /has nothing the probe can enumerate/
-      );
+      const certifies = {
+        'a union': ['', '{ a: string[] | number }', /is a union/],
+        'a symbol it cannot name': [
+          'declare const key: unique symbol;',
+          '{ [key]: string[] }',
+          /a symbol member the probe cannot name/
+        ],
+        'members past its depth': [
+          '',
+          '{ a: { b: { c: { d: { e: string[] } } } } }',
+          /is deeper than 4/
+        ],
+        'an unknown': ['', '{ a: unknown }', /is unknown/],
+        'an object with nothing to enumerate': [
+          '',
+          '{ a: object }',
+          /has nothing the probe can enumerate/
+        ]
+      } as const;
+      for (const [what, [imports, typeText, message]] of Object.entries(certifies))
+        expect(() => writesThrough(imports, typeText), `the control’s throw on ${what}`).toThrow(
+          message
+        );
 
       // **And at run time, past any type, the fold asks who made the packet,
-      // and nothing else.** A cast types anything, `structuredClone` is typed
-      // as the identity, and a spread keeps an owned event typed owned. So the
-      // forgeries are the whole product of what one can vary — whose event it
-      // holds (the owned event itself, a deep-frozen copy of it, a plain copy,
-      // the wire's), whether the event is alone or beside the transport's
-      // fields, and whether the packet is frozen — and no property the
-      // boundary's object also has can stand in for having made it. A refusal
-      // is the fold's own `TypeError`, not any throw. The control is the owned
-      // packet it takes.
+      // and nothing else, on every path through it.** A cast types anything,
+      // `structuredClone` is typed as the identity, and a spread keeps an owned
+      // event typed owned. So the forgeries are the whole product of what one
+      // can vary — whose event it holds (the owned event itself, a deep-frozen
+      // copy of it, a plain copy, the wire's), whether the event is alone or
+      // beside the transport's fields, and whether the packet is frozen — and
+      // no property the boundary's object also has can stand in for having
+      // made it.
+      const forgeriesOf = (wirePacket: EventPacket, basis: OwnedPacket) => {
+        const carried: Record<string, unknown> = {
+          'the owned event itself': basis.event,
+          'a deep-frozen copy of it': deepFreeze(structuredClone(basis.event)),
+          'a plain copy of it': structuredClone(basis.event),
+          'the wire’s event': wirePacket.event
+        };
+        const shaped: Record<string, (event: unknown) => object> = {
+          alone: (event) => ({ event }),
+          'beside the transport’s fields': (event) => ({ ...wirePacket, event })
+        };
+        return Object.entries(carried).flatMap(([what, event]) =>
+          Object.entries(shaped).flatMap(([how, shape]) =>
+            [false, true].map((frozen) => ({
+              name: `${what}, ${how}, ${frozen ? 'frozen' : 'not frozen'}`,
+              packet: frozen ? Object.freeze(shape(event)) : shape(event)
+            }))
+          )
+        );
+      };
       const ownedPacket = owned as OwnedPacket;
-      const carried: Record<string, unknown> = {
-        'the owned event itself': ownedPacket.event,
-        'a deep-frozen copy of it': deepFreeze(structuredClone(ownedPacket.event)),
-        'a plain copy of it': structuredClone(ownedPacket.event),
-        'the wire’s event': wire.event
-      };
-      const shaped: Record<string, (event: unknown) => object> = {
-        alone: (event) => ({ event }),
-        'beside the transport’s fields': (event) => ({ ...wire, event })
-      };
-      const forgeries = Object.entries(carried).flatMap(([what, event]) =>
-        Object.entries(shaped).flatMap(([how, shape]) =>
-          [false, true].map((frozen) => ({
-            name: `${what}, ${how}, ${frozen ? 'frozen' : 'not frozen'}`,
-            packet: frozen ? Object.freeze(shape(event)) : shape(event)
-          }))
-        )
-      );
+      const forgeries = forgeriesOf(wire, ownedPacket);
       expect(forgeries, 'every cell of the product').toHaveLength(16);
       // The cell that differs from the owned packet in nothing but who made it.
       const perfect = forgeries.find(
@@ -658,19 +695,107 @@ describe('the event a consumer holds is this library’s own', () => {
       expect(perfect, 'the perfect forgery is equal to the owned packet').toEqual(owned);
       expect(Reflect.ownKeys(perfect ?? {})).toEqual(['event']);
       expect(plainDataBreaches(perfect), 'the perfect forgery is plain, frozen data').toEqual([]);
-      const refused = (packet: object): boolean => {
+
+      // **On every path.** The fold returns early for an ephemeral event — once
+      // flagging the set, once leaving it as it is — and for a duplicate the
+      // incumbent wins, and it replaces an entry the newcomer wins. A refusal
+      // placed after any of those would let a forgery through there and only
+      // there. So the product is folded on each path, built from an event that
+      // takes it, and an owned packet on the same arrangement is the control
+      // that the path is the one named. A verdict has three answers — folded,
+      // refused by the fold's own `TypeError`, or threw for another reason — so
+      // the control cannot pass by failing.
+      const attempt = (set: CachedEventSet, packet: object): string => {
         try {
-          foldEvent(emptyEventSet, packet as OwnedPacket);
-          return false;
+          foldEvent(set, packet as OwnedPacket);
+          return 'folded';
         } catch (error) {
-          return error instanceof TypeError && /did not make/.test(error.message);
+          return error instanceof TypeError && /did not make/.test(error.message)
+            ? 'refused'
+            : `threw: ${String(error)}`;
         }
       };
-      expect(
-        forgeries.filter(({ packet }) => !refused(packet)).map(({ name }) => name),
-        'a packet the boundary did not make, taken by the fold'
-      ).toEqual([]);
-      expect(refused(ownedPacket), 'the owned packet, refused').toBe(false);
+      const holds = (set: CachedEventSet, packet: OwnedPacket): boolean =>
+        [...set.entries.values()].includes(packet);
+      const older = fakeEventPacket({
+        id: 'oe14-old',
+        kind: 10002,
+        created_at: 1,
+        tags: [['r', 'a']]
+      });
+      const newer = fakeEventPacket({
+        id: 'oe14-new',
+        kind: 10002,
+        created_at: 2,
+        tags: [['r', 'b']]
+      });
+      const ephemeral = fakeEventPacket({
+        id: 'oe14-eph',
+        kind: 20001,
+        created_at: 3,
+        tags: [['t', 'x']]
+      });
+      const olderOwned = ownedFrom(older);
+      const withOwned = foldEvent(emptyEventSet, ownedPacket);
+      const withOlder = foldEvent(emptyEventSet, olderOwned);
+      const flagged = foldEvent(emptyEventSet, ownedFrom(fakeEventPacket({ kind: 20002 })));
+      const paths: {
+        path: string;
+        set: CachedEventSet;
+        wire: EventPacket;
+        basis: OwnedPacket;
+        reached: (after: CachedEventSet) => boolean;
+      }[] = [
+        {
+          path: 'inserted into an empty set',
+          set: emptyEventSet,
+          wire,
+          basis: ownedPacket,
+          reached: (after) => holds(after, ownedPacket) && after.entries.size === 1
+        },
+        {
+          path: 'a duplicate the incumbent wins',
+          set: withOwned,
+          wire,
+          basis: ownedFrom(wire),
+          reached: (after) => after === withOwned
+        },
+        {
+          path: 'a replacement the newcomer wins',
+          set: withOlder,
+          wire: newer,
+          basis: ownedFrom(newer),
+          reached: (after) =>
+            after.entries.size === 1 && !holds(after, olderOwned) && after !== withOlder
+        },
+        {
+          path: 'an ephemeral event, the request’s first',
+          set: emptyEventSet,
+          wire: ephemeral,
+          basis: ownedFrom(ephemeral),
+          reached: (after) =>
+            after.ephemeralOmitted === true && after.entries === emptyEventSet.entries
+        },
+        {
+          path: 'an ephemeral event, after another',
+          set: flagged,
+          wire: ephemeral,
+          basis: ownedFrom(ephemeral),
+          reached: (after) => after === flagged
+        }
+      ];
+      for (const { path, set, wire: wirePacket, basis, reached } of paths) {
+        expect(attempt(set, basis), `${path}: the owned packet`).toBe('folded');
+        expect(reached(foldEvent(set, basis)), `${path}: the path the owned packet takes`).toBe(
+          true
+        );
+        expect(
+          forgeriesOf(wirePacket, basis)
+            .map(({ name, packet }) => ({ name, verdict: attempt(set, packet) }))
+            .filter(({ verdict }) => verdict !== 'refused'),
+          `${path}: a packet the boundary did not make, taken by the fold`
+        ).toEqual([]);
+      }
 
       const smuggled = refusedLines(SMUGGLES);
       const said = consumerDiagnostics(SMUGGLES);
