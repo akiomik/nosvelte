@@ -99,6 +99,63 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
   const present = (type: ts.Type): ts.Type =>
     type.getFlags() & ts.TypeFlags.Unknown ? type : checker.getNonNullableType(type);
 
+  // **The standard library's members are its own.** A list's members, a
+  // `Set`'s, are TypeScript's declarations: not the event's data, and shared
+  // by every value of the type, so the walk writes to their slots — which
+  // must be refused — and does not walk into them. Of those that can be
+  // called, a standard read-only array operation is admitted, and only that:
+  // a member every declaration of which is the default library's
+  // `ReadonlyArray`. `Array`'s `push` is reported, a `Set`'s `add` is, and so
+  // is a member, or an overload of one, that anything else declares on the
+  // global array types — its declaration is not the default library's.
+  const library = (property: ts.Symbol): readonly ts.Declaration[] | undefined => {
+    const declarations = property.getDeclarations() ?? [];
+    return declarations.length > 0 &&
+      declarations.every((one) => program.isSourceFileDefaultLibrary(one.getSourceFile()))
+      ? declarations
+      : undefined;
+  };
+  const standard = (declarations: readonly ts.Declaration[]): boolean =>
+    declarations.every(
+      (one) => ts.isInterfaceDeclaration(one.parent) && one.parent.name.text === 'ReadonlyArray'
+    );
+  const callable = (type: ts.Type): boolean =>
+    type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0;
+  // Every member of `type`: an assignment to each slot, and the value in it
+  // walked — skipping, for a list, the positions its own branch wrote to.
+  const members = (expression: string, type: ts.Type, level: number, list: boolean): void => {
+    for (const property of checker.getPropertiesOfType(type)) {
+      const name = property.getName();
+      // A private name (`#…`) cannot be written or called from outside its
+      // class, so it is the one member a consumer has no write to attempt.
+      if (name.startsWith('__#')) continue;
+      if (list && /^\d+$/.test(name)) continue;
+      let access: string;
+      if (name.startsWith('__@')) {
+        // A symbol-keyed member is written through the symbol, which a
+        // consumer can name when it is a well-known one. One the probe cannot
+        // name is not skipped: it is reported, since silence would read as
+        // "nothing writable".
+        const declaration = property.valueDeclaration ?? property.declarations?.[0];
+        const named = declaration === undefined ? undefined : ts.getNameOfDeclaration(declaration);
+        const symbol =
+          named !== undefined && ts.isComputedPropertyName(named) ? named.expression.getText() : '';
+        if (!/^Symbol\.\w+$/.test(symbol))
+          throw new Error(`writesThrough: ${expression} has a symbol member the probe cannot name`);
+        access = `${expression}[${symbol}]`;
+      } else
+        access = isIdentifier(name)
+          ? `${expression}.${name}`
+          : `${expression}[${JSON.stringify(name)}]`;
+      writes.push(`${access} = ${access}!;`);
+      const declared = library(property);
+      if (declared === undefined)
+        visit(`${access}!`, present(checker.getTypeOfSymbol(property)), level + 1);
+      else if (!standard(declared) && callable(checker.getTypeOfSymbol(property)))
+        writes.push(`void ${access}!.call;`);
+    }
+  };
+
   const visit = (expression: string, type: ts.Type, level: number): void => {
     const flags = type.getFlags();
     // **`any` is not "nothing writable".** It has no properties to enumerate,
@@ -141,6 +198,11 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
         writes.push(`${expression}[${at}] = ${expression}[${at}]!;`);
         visit(`${expression}[${at}]!`, element, level + 1);
       }
+      // And every member's slot, which the positions do not reach:
+      // TypeScript declares a read-only array's methods as methods, and a
+      // method is an assignable slot — `tags.map = () => []` compiled against
+      // `readonly string[]` and threw against the frozen array.
+      members(expression, type, level, true);
       return;
     }
     // **A value that can be called is reported, not walked.** What a call does
@@ -150,33 +212,8 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
     // compiles exactly when it is callable, which reads as a write the types
     // let through. Data has no such member.
     const emitted = writes.length;
-    if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0)
-      writes.push(`void ${expression}.call;`);
-    for (const property of checker.getPropertiesOfType(type)) {
-      const name = property.getName();
-      // A private name (`#…`) cannot be written or called from outside its
-      // class, so it is the one member a consumer has no write to attempt.
-      if (name.startsWith('__#')) continue;
-      let access: string;
-      if (name.startsWith('__@')) {
-        // A symbol-keyed member is written through the symbol, which a
-        // consumer can name when it is a well-known one. One the probe cannot
-        // name is not skipped: it is reported, since silence would read as
-        // "nothing writable".
-        const declaration = property.valueDeclaration ?? property.declarations?.[0];
-        const named = declaration === undefined ? undefined : ts.getNameOfDeclaration(declaration);
-        const symbol =
-          named !== undefined && ts.isComputedPropertyName(named) ? named.expression.getText() : '';
-        if (!/^Symbol\.\w+$/.test(symbol))
-          throw new Error(`writesThrough: ${expression} has a symbol member the probe cannot name`);
-        access = `${expression}[${symbol}]`;
-      } else
-        access = isIdentifier(name)
-          ? `${expression}.${name}`
-          : `${expression}[${JSON.stringify(name)}]`;
-      writes.push(`${access} = ${access}!;`);
-      visit(`${access}!`, present(checker.getTypeOfSymbol(property)), level + 1);
-    }
+    if (callable(type)) writes.push(`void ${expression}.call;`);
+    members(expression, type, level, false);
     // And a write through each index signature, under a key the type checker
     // cannot see — a dynamic key is a write a named property list never shows.
     for (const info of checker.getIndexInfosOfType(type)) {

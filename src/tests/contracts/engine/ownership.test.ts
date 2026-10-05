@@ -214,61 +214,98 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * What stands before the fold's ownership check, read off the source of
- * `eventset.ts`.
+ * What stands before the fold's ownership check, read off the sources of
+ * `eventset.ts` and `event.ts`.
  *
  * **"The check comes first" is a fact about order, and order is in the
  * source.** A run-time observer cannot see every read: `Array.isArray`,
  * `typeof` and an identity lookup touch an object without any proxy trap. So
- * the order is asked of the syntax tree:
- * - the exported `foldEvent` is the only declaration of that name;
+ * the order is asked of the syntax trees:
+ * - `foldEvent` is declared once, as an exported `const` holding a function —
+ *   a function declaration is an assignable binding, and a wrapper assigned to
+ *   it would be what every caller reaches;
  * - no parameter has a default or a pattern, which would run first;
  * - its first statement is `if (!isOwnedPacket(packet)) throw …`, with no
  *   `else`;
- * - `isOwnedPacket` is the one imported from `./event.js`, declared nowhere
- *   in the file.
+ * - that `isOwnedPacket` is the one imported from `./event.js`, redeclared
+ *   nowhere in the file, and declared there once, as an exported `const`.
  *
  * What the check does is not read here. The forgeries measure that.
  */
-function beforeTheCheck(source: string): string[] {
-  const file = ts.createSourceFile('eventset.ts', source, ts.ScriptTarget.Latest, true);
+function beforeTheCheck(eventset: string, event: string): string[] {
+  const parse = (name: string, text: string): ts.SourceFile =>
+    ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
   const breaches: string[] = [];
-  const folds = file.statements.filter(
-    (statement): statement is ts.FunctionDeclaration =>
-      ts.isFunctionDeclaration(statement) && statement.name?.text === 'foldEvent'
-  );
-  const [fold] = folds;
-  if (folds.length !== 1 || fold === undefined)
-    return [`${folds.length} declarations of foldEvent`];
-  if (!fold.modifiers?.some((one) => one.kind === ts.SyntaxKind.ExportKeyword))
-    breaches.push('foldEvent is not exported');
-  for (const parameter of fold.parameters) {
-    if (!ts.isIdentifier(parameter.name)) breaches.push('a parameter is a pattern');
-    if (parameter.initializer !== undefined)
-      breaches.push(`a default for ${parameter.name.getText()}`);
+  // The one top-level declaration of `name` in `file`: a `const` holding a
+  // function, exported, or a breach.
+  const constant = (
+    file: ts.SourceFile,
+    name: string
+  ): ts.ArrowFunction | ts.FunctionExpression | undefined => {
+    const found: ts.Node[] = [];
+    for (const statement of file.statements) {
+      if (ts.isFunctionDeclaration(statement) && statement.name?.text === name)
+        found.push(statement);
+      if (ts.isVariableStatement(statement))
+        for (const one of statement.declarationList.declarations)
+          if (ts.isIdentifier(one.name) && one.name.text === name) found.push(statement);
+    }
+    const [statement] = found;
+    if (found.length !== 1 || statement === undefined) {
+      breaches.push(`${found.length} declarations of ${name}`);
+      return undefined;
+    }
+    if (
+      !ts.isVariableStatement(statement) ||
+      !(statement.declarationList.flags & ts.NodeFlags.Const)
+    ) {
+      breaches.push(`${name} is not a const`);
+      return undefined;
+    }
+    if (!statement.modifiers?.some((one) => one.kind === ts.SyntaxKind.ExportKeyword))
+      breaches.push(`${name} is not exported`);
+    const initializer = statement.declarationList.declarations[0]?.initializer;
+    if (
+      initializer === undefined ||
+      !(ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))
+    ) {
+      breaches.push(`${name} does not hold a function`);
+      return undefined;
+    }
+    return initializer;
+  };
+
+  const file = parse('eventset.ts', eventset);
+  const fold = constant(file, 'foldEvent');
+  if (fold !== undefined) {
+    for (const parameter of fold.parameters) {
+      if (!ts.isIdentifier(parameter.name)) breaches.push('a parameter is a pattern');
+      if (parameter.initializer !== undefined)
+        breaches.push(`a default for ${parameter.name.getText()}`);
+    }
+    const packet = fold.parameters[1]?.name.getText();
+    const first = ts.isBlock(fold.body) ? fold.body.statements[0] : undefined;
+    const condition = first !== undefined && ts.isIfStatement(first) ? first.expression : undefined;
+    const call =
+      condition !== undefined &&
+      ts.isPrefixUnaryExpression(condition) &&
+      condition.operator === ts.SyntaxKind.ExclamationToken &&
+      ts.isCallExpression(condition.operand)
+        ? condition.operand
+        : undefined;
+    const isTheCheck =
+      first !== undefined &&
+      ts.isIfStatement(first) &&
+      call !== undefined &&
+      ts.isIdentifier(call.expression) &&
+      call.expression.text === 'isOwnedPacket' &&
+      call.arguments.length === 1 &&
+      call.arguments[0]?.getText() === packet &&
+      ts.isThrowStatement(first.thenStatement) &&
+      first.elseStatement === undefined;
+    if (!isTheCheck)
+      breaches.push(`the first statement is ${first?.getText().split('\n')[0] ?? 'nothing'}`);
   }
-  const packet = fold.parameters[1]?.name.getText();
-  const first = fold.body?.statements[0];
-  const condition = first !== undefined && ts.isIfStatement(first) ? first.expression : undefined;
-  const call =
-    condition !== undefined &&
-    ts.isPrefixUnaryExpression(condition) &&
-    condition.operator === ts.SyntaxKind.ExclamationToken &&
-    ts.isCallExpression(condition.operand)
-      ? condition.operand
-      : undefined;
-  const isTheCheck =
-    first !== undefined &&
-    ts.isIfStatement(first) &&
-    call !== undefined &&
-    ts.isIdentifier(call.expression) &&
-    call.expression.text === 'isOwnedPacket' &&
-    call.arguments.length === 1 &&
-    call.arguments[0]?.getText() === packet &&
-    ts.isThrowStatement(first.thenStatement) &&
-    first.elseStatement === undefined;
-  if (!isTheCheck)
-    breaches.push(`the first statement is ${first?.getText().split('\n')[0] ?? 'nothing'}`);
   const imported = file.statements.some(
     (statement) =>
       ts.isImportDeclaration(statement) &&
@@ -298,6 +335,7 @@ function beforeTheCheck(source: string): string[] {
   };
   walk(file);
   if (redeclared > 0) breaches.push('isOwnedPacket is redeclared in the file');
+  constant(parse('event.ts', event), 'isOwnedPacket');
   return breaches;
 }
 
@@ -673,6 +711,28 @@ describe('the event a consumer holds is this library’s own', () => {
         ).toEqual([]);
       }
 
+      // **And the surface stays readable.** The list type refuses every slot,
+      // and what a consumer does with a list of tags still compiles: iterate,
+      // spread, map, find, count, serialise, and hand the list or a tag to
+      // something that takes `readonly string[]`.
+      const reads = [
+        PUBLISHED,
+        'declare const event: Published.ReqEvent;',
+        'declare function takesTags(tags: readonly (readonly string[])[]): void;',
+        'declare function takesTag(tag: readonly string[]): void;',
+        'for (const tag of event.tags) takesTag(tag);',
+        'takesTags(event.tags);',
+        "const p: string | undefined = event.tags.find((tag) => tag[0] === 'p')?.[1];",
+        "const names: string[] = event.tags.map((tag) => tag[0] ?? '');",
+        'const copy: string[][] = event.tags.map((tag) => [...tag]);',
+        'const spread = [...event.tags];',
+        'const count: number = event.tags.length;',
+        'const json: string = JSON.stringify(event);',
+        'const from = Array.from(event.tags);',
+        'void [p, names, copy, spread, count, json, from];'
+      ].join('\n');
+      expect(consumerDiagnostics(reads), 'a consumer’s reads of the published event').toEqual([]);
+
       // Its positive control: the same probe over a type that permits every
       // write is refused nowhere, so a refusal above is the event's type
       // answering and not the probe failing to compile. The type reaches each
@@ -687,11 +747,18 @@ describe('the event a consumer holds is this library’s own', () => {
           'value.b!.push(value.b![0]!);',
           'value.t![1]![0] = value.t![1]![0]!;',
           'value.x!.anything = value.x!;',
+          'void value.b!.push!.call;',
           'void value.m!.add!.call;'
         ])
       );
+      // The one slot refused there is the standard library's own: it
+      // declares `[Symbol.unscopables]` read-only on every array.
       expect(
-        judgeWrites('', mutable, open).filter((one) => one.verdict !== 'compiles'),
+        judgeWrites('', mutable, open).filter(
+          (one) =>
+            one.verdict !== 'compiles' &&
+            !(one.verdict === 'refused' && one.write.endsWith('[Symbol.unscopables]!;'))
+        ),
         'a write through a mutable type was refused'
       ).toEqual([]);
       // The judge's own control: a refusal that one constituent of a union
@@ -707,6 +774,16 @@ describe('the event a consumer holds is this library’s own', () => {
         write: 'value.t![0]!.push(value.t![0]![0]!);',
         verdict: 'through a union'
       });
+      // The admission's control: a member something other than the standard
+      // library declares on the global array types is reported, though the
+      // array it is on is read-only.
+      const augmented = writesThrough(
+        'export {};\ndeclare global { interface ReadonlyArray<T> { fill(value: T): this } }',
+        '{ r: readonly string[] }'
+      );
+      expect(augmented, 'the admission’s control: a member added to ReadonlyArray').toContain(
+        'void value.r!.fill!.call;'
+      );
       // And its exactness: a diagnostic that is not a read-only refusal is not
       // counted as one — a `push` onto something that is no list at all, and
       // an assignment whose type is wrong.
@@ -818,6 +895,16 @@ describe('the event a consumer holds is this library’s own', () => {
         }
       };
       type Outcome = 'stored alongside' | 'replaces the incumbent' | 'unchanged' | 'flagged';
+      type Snapshot = {
+        fields: readonly (readonly [PropertyKey, unknown])[];
+        entries: readonly (readonly [string, unknown])[];
+      };
+      const snapshot = (set: CachedEventSet): Snapshot => ({
+        fields: Reflect.ownKeys(set).map(
+          (key) => [key, (set as unknown as Record<PropertyKey, unknown>)[key]] as const
+        ),
+        entries: [...set.entries]
+      });
       // Judged against what the set held before any fold, copied out first:
       // the set's own map is the thing a fold could change in place, so it
       // cannot also be the record of what it held. Every outcome requires the
@@ -825,15 +912,25 @@ describe('the event a consumer holds is this library’s own', () => {
       // be where it was, as the very object it was.
       const shows = (
         outcome: Outcome,
-        held: readonly (readonly [string, unknown])[],
+        held: Snapshot,
         before: CachedEventSet,
         after: CachedEventSet,
         basis: OwnedPacket,
         incumbent: OwnedPacket | undefined
       ): boolean => {
         const keeps = (entries: ReadonlyMap<string, unknown>, except?: unknown): boolean =>
-          held.every(([key, packet]) => packet === except || entries.get(key) === packet);
-        const intact = before.entries.size === held.length && keeps(before.entries);
+          held.entries.every(([key, packet]) => packet === except || entries.get(key) === packet);
+        // The input as it was: the same fields, each the same value — the
+        // flag a fold sets on the set it returns included — and its map
+        // holding what it held.
+        const fields = Reflect.ownKeys(before);
+        const intact =
+          fields.length === held.fields.length &&
+          held.fields.every(
+            ([key, value]) => (before as unknown as Record<PropertyKey, unknown>)[key] === value
+          ) &&
+          before.entries.size === held.entries.length &&
+          keeps(before.entries);
         if (outcome === 'unchanged') return intact && after === before;
         if (outcome === 'flagged')
           return (
@@ -845,12 +942,12 @@ describe('the event a consumer holds is this library’s own', () => {
         const values: unknown[] = [...after.entries.values()];
         return outcome === 'replaces the incumbent'
           ? intact &&
-              after.entries.size === held.length &&
+              after.entries.size === held.entries.length &&
               keeps(after.entries, incumbent) &&
               values.includes(basis) &&
               !values.includes(incumbent)
           : intact &&
-              after.entries.size === held.length + 1 &&
+              after.entries.size === held.entries.length + 1 &&
               keeps(after.entries) &&
               values.includes(basis);
       };
@@ -977,7 +1074,7 @@ describe('the event a consumer holds is this library’s own', () => {
       ]);
       expect(paths, 'every cell of the paths').toHaveLength(52);
       for (const { path, set, wire: wirePacket, basis, incumbent, outcome } of paths) {
-        const held = [...set.entries];
+        const held = snapshot(set);
         expect(attempt(set, basis), `${path}: the owned packet`).toBe('folded');
         expect(
           shows(outcome, held, set, foldEvent(set, basis), basis, incumbent),
@@ -990,6 +1087,15 @@ describe('the event a consumer holds is this library’s own', () => {
           `${path}: a packet the boundary did not make, taken by the fold`
         ).toEqual([]);
       }
+      // The snapshot's control: a fold that wrote a field of the set it was
+      // handed, and handed that same set back, is not "unchanged".
+      const handed = { ...emptyEventSet };
+      const handedBefore = snapshot(handed);
+      (handed as { ephemeralOmitted?: boolean }).ephemeralOmitted = true;
+      expect(
+        shows('unchanged', handedBefore, handed, handed, ownedPacket, undefined),
+        'the snapshot’s control: a field written in place'
+      ).toBe(false);
 
       // **And the check comes first**: nothing in the fold runs before it, so
       // no path through the fold — one above, or one added later — can
@@ -997,25 +1103,54 @@ describe('the event a consumer holds is this library’s own', () => {
       // (`beforeTheCheck`). Its controls are the same source with a statement
       // put before the check, a parameter default, and a redeclared
       // `isOwnedPacket`, each of which it reports.
-      const source = readFileSync('src/lib/v1/eventset.ts', 'utf8');
-      expect(beforeTheCheck(source), 'what runs before the fold’s check').toEqual([]);
+      const eventset = readFileSync('src/lib/v1/eventset.ts', 'utf8');
+      const event = readFileSync('src/lib/v1/event.ts', 'utf8');
+      expect(beforeTheCheck(eventset, event), 'what runs before the fold’s check').toEqual([]);
       const opening =
-        'export function foldEvent(set: CachedEventSet, packet: OwnedPacket): CachedEventSet {';
+        'export const foldEvent = (set: CachedEventSet, packet: OwnedPacket): CachedEventSet => {';
+      const predicate = 'export const isOwnedPacket = (packet: unknown): packet is OwnedPacket =>';
       expect(
-        source.split(opening),
+        eventset.split(opening),
         'the fold’s signature, as the controls rewrite it'
       ).toHaveLength(2);
-      const controls = {
-        'a statement before the check': source.replace(opening, `${opening}\n  void set;`),
-        'a parameter default': source.replace(
-          opening,
-          opening.replace('set: CachedEventSet', 'set: CachedEventSet = emptyEventSet')
-        ),
-        'a redeclared isOwnedPacket': `${source}\nconst isOwnedPacket = (packet: unknown): boolean => packet !== undefined;\n`
+      expect(
+        event.split(predicate),
+        'the check’s signature, as the controls rewrite it'
+      ).toHaveLength(2);
+      const controls: Record<string, [string, string]> = {
+        'a statement before the check': [
+          eventset.replace(opening, `${opening}\n  void set;`),
+          event
+        ],
+        'a parameter default': [
+          eventset.replace(
+            opening,
+            opening.replace('set: CachedEventSet', 'set: CachedEventSet = emptyEventSet')
+          ),
+          event
+        ],
+        'a redeclared isOwnedPacket': [
+          `${eventset}\nconst isOwnedPacket = (packet: unknown): boolean => packet !== undefined;\n`,
+          event
+        ],
+        'the fold as a function declaration': [
+          eventset.replace(
+            opening,
+            'export function foldEvent(set: CachedEventSet, packet: OwnedPacket): CachedEventSet {'
+          ),
+          event
+        ],
+        'the check as a function declaration': [
+          eventset,
+          event.replace(
+            predicate,
+            'export function isOwnedPacket(packet: unknown): packet is OwnedPacket { return'
+          )
+        ]
       };
-      for (const [what, rewritten] of Object.entries(controls))
+      for (const [what, [rewrittenSet, rewrittenEvent]] of Object.entries(controls))
         expect(
-          beforeTheCheck(rewritten).length,
+          beforeTheCheck(rewrittenSet, rewrittenEvent).length,
           `the order check’s control: ${what}`
         ).toBeGreaterThan(0);
 
