@@ -780,11 +780,12 @@ export function minimalPairs(): Case[] {
         });
   }
   // **Two packets of one id**, for every kind: everything the id commits to
-  // equal, and one field outside it different — another valid signature, or
-  // another `ots` — while every other optional field is absent, and present
-  // with one value on both. They are one event, and the first one folded is
-  // kept (0003). Built from `OUTSIDE_THE_ID` and `OPTIONAL`, so a field given
-  // either role is varied, and crossed with the others' presence, here.
+  // equal, and **every non-empty set of the fields outside it** different
+  // together — another valid signature, another `ots`, or both — while every
+  // other optional field is absent, and present with one value on both. They
+  // are one event, and the first one folded is kept whole (0003). Built from
+  // `OUTSIDE_THE_ID` and `OPTIONAL`, so a field given either role is varied
+  // alone and with every other, and crossed with the others' presence, here.
   const outside: Readonly<
     Record<string, readonly (readonly [string, Partial<Nostr.Event>, Partial<Nostr.Event>])[]>
   > = {
@@ -810,13 +811,41 @@ export function minimalPairs(): Case[] {
         ]),
       [['', {}]]
     );
-  for (const kind of CROSSINGS['same id'].kinds)
-    for (const field of OUTSIDE_THE_ID) {
+  /**
+   * The variations of a set of fields changed together: each field's own
+   * variations, taken index by index (the shorter list cycling), so every
+   * variation of every field in the set appears once.
+   */
+  const together = (
+    fields: readonly string[]
+  ): (readonly [string, Partial<Nostr.Event>, Partial<Nostr.Event>])[] => {
+    const lists = fields.map((field) => {
       const variants = outside[field];
       if (variants === undefined)
         throw new Error(`minimalPairs: no values outside the id for ${field}`);
-      for (const [label, x, y] of variants)
-        for (const [state, others] of statesOf(OPTIONAL.filter((other) => other !== field)))
+      return variants;
+    });
+    const length = Math.max(...lists.map((list) => list.length));
+    return Array.from({ length }, (_, at) => {
+      const picked = lists.map((list) => list[at % list.length] as (typeof list)[number]);
+      return [
+        picked.map(([label]) => label).join(' and '),
+        Object.assign({}, ...picked.map(([, x]) => x)) as Partial<Nostr.Event>,
+        Object.assign({}, ...picked.map(([, , y]) => y)) as Partial<Nostr.Event>
+      ] as const;
+    });
+  };
+  /** Every non-empty subset of `fields`. */
+  const subsets = (fields: readonly string[]): string[][] =>
+    fields
+      .reduce<string[][]>((all, field) => [...all, ...all.map((set) => [...set, field])], [[]])
+      .filter((set) => set.length > 0);
+  for (const kind of CROSSINGS['same id'].kinds)
+    for (const changed of subsets(OUTSIDE_THE_ID))
+      for (const [label, x, y] of together(changed))
+        for (const [state, others] of statesOf(
+          OPTIONAL.filter((other) => !changed.includes(other))
+        ))
           cases.push({
             label: `kind ${kind}, one id, ${label}${state}`,
             events: [base(kind, { ...others, ...x }), base(kind, { ...others, ...y })],
@@ -825,7 +854,6 @@ export function minimalPairs(): Case[] {
             kinds: [kind],
             relation: 'tie'
           });
-    }
   // **Both directions of every pair.** Each case above makes one side the
   // older; the swap keeps the ids and instants where they are and exchanges
   // everything else, so whatever the dimension changed is carried by the

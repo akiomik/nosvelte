@@ -775,6 +775,12 @@ const heldOf = (set: CachedEventSet): string[] =>
     .map(({ event }) => JSON.stringify(event))
     .sort();
 
+/** Every non-empty set of the fields outside the id. */
+const OUTSIDE_SETS = OUTSIDE_THE_ID.reduce<string[][]>(
+  (all, field) => [...all, ...all.map((set) => [...set, field])],
+  [[]]
+).filter((set) => set.length > 0);
+
 /** Another 128-digit signature than `sig`. */
 const run128 = (sig: string): string => (sig === 'f'.repeat(128) ? '0' : 'f').repeat(128);
 
@@ -833,9 +839,9 @@ const CASES = minimalPairs();
  * design's size is a fact the arms state; and the time they are given, which
  * is not what they are held to.
  */
-const ES3_REPLAYS = 707_840;
-const ES5_FOLDS = 707_840;
-const ES28_FOLDS = 176_960;
+const ES3_REPLAYS = 904_960;
+const ES5_FOLDS = 723_968;
+const ES28_FOLDS = 180_992;
 const ENUMERATED = 120_000;
 
 /** The packets for `events`, half of them from a second relay. */
@@ -1002,16 +1008,18 @@ describe('canonical event set', () => {
               event: structuredClone(packet.event)
             };
             replay(folded, elsewhere, `${label}: from another relay`);
-            // The same event with each field outside the id changed — another
-            // valid signature, another `ots` — is a replay too (0003).
-            for (const field of OUTSIDE_THE_ID) {
+            // The same event with every non-empty set of the fields outside the
+            // id changed — another valid signature, another `ots`, or both — is
+            // a replay too (0003).
+            for (const set of OUTSIDE_SETS) {
               const variant = structuredClone(packet.event) as unknown as Record<string, unknown>;
-              variant[field] =
-                field === 'sig' ? run128(packet.event.sig) : `${String(variant[field] ?? '')}+`;
+              for (const field of set)
+                variant[field] =
+                  field === 'sig' ? run128(packet.event.sig) : `${String(variant[field] ?? '')}+`;
               replay(
                 folded,
                 { ...elsewhere, event: variant as unknown as typeof packet.event },
-                `${label}: another ${field}`
+                `${label}: another ${set.join(' and ')}`
               );
             }
           }
@@ -1178,9 +1186,6 @@ describe('canonical event set', () => {
       );
       expect(changed, `${field}: a ranking variant`).toBe(true);
     }
-    // **And every field outside the id differs between two packets of one
-    // id** in some case, since the id cannot tell them apart and the rules
-    // have to.
     // **And every optional field is crossed with the variation of every other
     // field outside the id**: absent on both, and present with one value on
     // both. A signature that changes only where `ots` is absent is not a
@@ -1340,15 +1345,21 @@ describe('canonical event set', () => {
         .filter((field) => field !== 'id' && !(SERIALIZED as readonly string[]).includes(field))
         .sort()
     );
-    for (const field of OUTSIDE_THE_ID)
+    // **And every set of the fields outside the id differs, exactly, between
+    // two packets of one id** in some case, since the id cannot tell them
+    // apart and the rules have to — each alone, and together. Read from the
+    // events: the fields that differ are counted, not the label.
+    expect(OUTSIDE_SETS).toHaveLength(2 ** OUTSIDE_THE_ID.length - 1);
+    for (const set of OUTSIDE_SETS)
       expect(
-        CASES.some(
-          ({ dimension, events: [a, b] }) =>
-            dimension === 'same id' &&
-            a?.id === b?.id &&
-            JSON.stringify(a?.[field]) !== JSON.stringify(b?.[field])
-        ),
-        `${field}: two packets of one id`
+        CASES.some(({ dimension, events: [a, b] }) => {
+          if (dimension !== 'same id' || a?.id !== b?.id) return false;
+          const differ = OUTSIDE_THE_ID.filter(
+            (field) => JSON.stringify(a?.[field]) !== JSON.stringify(b?.[field])
+          );
+          return JSON.stringify(differ.sort()) === JSON.stringify([...set].sort());
+        }),
+        `${set.join(' and ')}: two packets of one id`
       ).toBe(true);
   });
 
