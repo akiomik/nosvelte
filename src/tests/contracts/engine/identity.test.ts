@@ -839,9 +839,9 @@ const CASES = minimalPairs();
  * design's size is a fact the arms state; and the time they are given, which
  * is not what they are held to.
  */
-const ES3_REPLAYS = 904_960;
-const ES5_FOLDS = 723_968;
-const ES28_FOLDS = 180_992;
+const ES3_REPLAYS = 925_120;
+const ES5_FOLDS = 740_096;
+const ES28_FOLDS = 185_024;
 const ENUMERATED = 120_000;
 
 /** The packets for `events`, half of them from a second relay. */
@@ -1349,18 +1349,44 @@ describe('canonical event set', () => {
     // two packets of one id** in some case, since the id cannot tell them
     // apart and the rules have to — each alone, and together. Read from the
     // events: the fields that differ are counted, not the label.
+    // **And in every combination of directions**: for each field of the set,
+    // either packet can hold the greater value — and, for an optional field,
+    // either packet can be the one that carries it — each independently of the
+    // others, so the first packet's `sig` being the higher says nothing about
+    // which one carries `ots`. Read from the events.
     expect(OUTSIDE_SETS).toHaveLength(2 ** OUTSIDE_THE_ID.length - 1);
-    for (const set of OUTSIDE_SETS)
-      expect(
-        CASES.some(({ dimension, events: [a, b] }) => {
-          if (dimension !== 'same id' || a?.id !== b?.id) return false;
-          const differ = OUTSIDE_THE_ID.filter(
-            (field) => JSON.stringify(a?.[field]) !== JSON.stringify(b?.[field])
-          );
-          return JSON.stringify(differ.sort()) === JSON.stringify([...set].sort());
-        }),
-        `${set.join(' and ')}: two packets of one id`
-      ).toBe(true);
+    const change = (a: unknown, b: unknown): string => {
+      if (a === undefined) return 'added';
+      if (b === undefined) return 'dropped';
+      return String(a) < String(b) ? 'rises' : 'falls';
+    };
+    const changesOf = (field: string): string[] =>
+      (OPTIONAL as readonly string[]).includes(field)
+        ? ['rises', 'falls', 'added', 'dropped']
+        : ['rises', 'falls'];
+    const seen = new Set(
+      CASES.flatMap(({ dimension, events: [a, b] }) => {
+        if (dimension !== 'same id' || a?.id !== b?.id) return [];
+        return [
+          OUTSIDE_THE_ID.filter((field) => a?.[field] !== b?.[field])
+            .map((field) => `${field} ${change(a?.[field], b?.[field])}`)
+            .join(', ')
+        ];
+      })
+    );
+    for (const set of OUTSIDE_SETS) {
+      const ordered = OUTSIDE_THE_ID.filter((field) => set.includes(field));
+      const combinations = ordered.reduce<string[][]>(
+        (all, field) =>
+          all.flatMap((prefix) => changesOf(field).map((one) => [...prefix, `${field} ${one}`])),
+        [[]]
+      );
+      for (const combination of combinations)
+        expect(
+          seen.has(combination.join(', ')),
+          `two packets of one id: ${combination.join(', ')}`
+        ).toBe(true);
+    }
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {

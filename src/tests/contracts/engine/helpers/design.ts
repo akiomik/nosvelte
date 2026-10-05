@@ -814,7 +814,10 @@ export function minimalPairs(): Case[] {
   /**
    * The variations of a set of fields changed together: each field's own
    * variations, taken index by index (the shorter list cycling), so every
-   * variation of every field in the set appears once.
+   * variation of every field in the set appears once — and **in every
+   * combination of directions**, each field's pair taken one way or the other
+   * independently of the first's, so which packet holds the greater value of
+   * one field says nothing about the others.
    */
   const together = (
     fields: readonly string[]
@@ -826,14 +829,27 @@ export function minimalPairs(): Case[] {
       return variants;
     });
     const length = Math.max(...lists.map((list) => list.length));
-    return Array.from({ length }, (_, at) => {
-      const picked = lists.map((list) => list[at % list.length] as (typeof list)[number]);
-      return [
-        picked.map(([label]) => label).join(' and '),
-        Object.assign({}, ...picked.map(([, x]) => x)) as Partial<Nostr.Event>,
-        Object.assign({}, ...picked.map(([, , y]) => y)) as Partial<Nostr.Event>
-      ] as const;
-    });
+    // The first field's direction is the swap's to reverse (every case also
+    // runs with everything but the ids and instants exchanged), so it is held
+    // and the others are crossed against it.
+    const directions = Array.from({ length: 2 ** (fields.length - 1) }, (_, mask) =>
+      fields.map((_field, at) => at > 0 && (mask >> (at - 1)) % 2 === 1)
+    );
+    return directions.flatMap((reversed) =>
+      Array.from({ length }, (_, at) => {
+        const picked = lists.map((list, which) => {
+          const [label, x, y] = list[at % list.length] as (typeof list)[number];
+          return reversed[which]
+            ? ([`${label} reversed`, y, x] as const)
+            : ([label, x, y] as const);
+        });
+        return [
+          picked.map(([label]) => label).join(' and '),
+          Object.assign({}, ...picked.map(([, x]) => x)) as Partial<Nostr.Event>,
+          Object.assign({}, ...picked.map(([, , y]) => y)) as Partial<Nostr.Event>
+        ] as const;
+      })
+    );
   };
   /** Every non-empty subset of `fields`. */
   const subsets = (fields: readonly string[]): string[][] =>
