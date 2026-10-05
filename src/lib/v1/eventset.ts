@@ -7,6 +7,7 @@ import type { AttemptId } from './attempt.js';
 import { isOlderAttempt } from './attempt.js';
 import type { UnixSeconds } from './clock.svelte.js';
 import type { OwnedPacket, ReqEvent } from './event.js';
+import { isOwnedPacket } from './event.js';
 import type { RelayMessage, Retention } from './normalize.js';
 import { isEphemeralKind } from './normalize.js';
 import { capture, recordedFailure } from './own.js';
@@ -845,8 +846,22 @@ export interface RetentionOptions {
  * slot its recency earns it. **Not last in the queue for one**, which is what
  * this said while expiry still ranked: the bound reads no clock (B6, B7b), so
  * an expired event can hold a slot a valid older one would have taken.
+ *
+ * **A `const`, and its check is its first statement.** A function declaration
+ * is an assignable binding: a wrapper assigned to it at module level would be
+ * what every caller reaches, reading the packet before any check. As a `const`
+ * nothing can rebind it, and the check before anything else is what lets no
+ * path through the fold, today's or a later one, precede it.
  */
-export function foldEvent(set: CachedEventSet, packet: OwnedPacket): CachedEventSet {
+export const foldEvent = (set: CachedEventSet, packet: OwnedPacket): CachedEventSet => {
+  // **Only the packets this library made are stored, checked at run time too.**
+  // The type refuses a wire packet and a rebuilt one; a cast, a
+  // `structuredClone` or a spread that keeps an owned event beside the
+  // transport's fields gets past any type, so the fold asks the set the
+  // ownership boundary writes to. A foreign packet here is a defect in this
+  // library, not an input.
+  if (!isOwnedPacket(packet))
+    throw new TypeError('foldEvent was handed a packet this library did not make');
   // **Dropped and recorded, never dropped silently.** See the docblock: the
   // boundary now accepts a non-live request with no `kinds`, so an ephemeral
   // event can reach here, and there is no surface that could show one. The flag
@@ -867,7 +882,7 @@ export function foldEvent(set: CachedEventSet, packet: OwnedPacket): CachedEvent
   const entries = new Map(set.entries);
   entries.set(key, packet);
   return { ...set, entries };
-}
+};
 
 /**
  * Keep the newest `retain` entries, under the order the views use (B6).

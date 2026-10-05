@@ -37,6 +37,18 @@ import type * as Nostr from 'nostr-typedef';
 import type { EventPacket } from 'rx-nostr';
 
 /**
+ * A list a consumer can read and cannot write to — not even a method's slot.
+ *
+ * `readonly T[]` takes the mutating methods away, but TypeScript declares the
+ * read-only ones as methods, and a method is an assignable slot:
+ * `event.tags.map = () => []` compiled against it and threw against the frozen
+ * array, which is legal-looking code failing where nothing warned. Mapping
+ * every member of `ReadonlyArray<T>` with `readonly` keeps each read and refuses
+ * each slot, and the type stays assignable to and from `readonly T[]`.
+ */
+export type ReadonlyList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };
+
+/**
  * An event as this library publishes it: immutable to the depth a consumer can
  * reach, and **written out rather than derived from the dependency's type**.
  *
@@ -54,7 +66,7 @@ export interface ReqEvent {
   readonly pubkey: string;
   readonly content: string;
   readonly created_at: number;
-  readonly tags: readonly (readonly string[])[];
+  readonly tags: ReadonlyList<ReadonlyList<string>>;
   /** @deprecated by NIP-03; carried when the wire had one. */
   readonly ots?: string;
 }
@@ -194,8 +206,27 @@ export function ownEvent(value: unknown): ReqEvent | undefined {
  * field, so `const owned: OwnedPacket = wirePacket` compiled and the records'
  * "the types carry it" was false. A brand no other module can produce is what
  * closes it, and the cast that makes one lives in {@link ownPacket} alone.
+ *
+ * **The brand is on the event, and it is nominal.** On the packet it left the
+ * payload open to replacement: `{ ...owned, ...wirePacket }` kept the packet's
+ * brand, swapped in the wire's event, and type-checked as an `OwnedPacket` with
+ * no cast — and folded, the cache held the transport's object. Moved onto the
+ * event as a property, it was copied by the next spread out:
+ * `{ event: { ...owned.event, ...wirePacket.event } }` kept the brand and the
+ * wire's tag arrays. A brand any spread copies is a property, and a property is
+ * structure. So the brand is a class's private field, which TypeScript treats
+ * nominally and a spread does not copy: an event or a packet rebuilt by spread
+ * is not owned, whatever it was built from. The class is declared, never
+ * defined, so there is nothing at run time.
  */
-declare const ownership: unique symbol;
+declare class OwnedBrand {
+  // A type-level brand, read by nothing at run time: that is the point of it.
+  // eslint-disable-next-line no-unused-private-class-members
+  #owned: true;
+}
+
+/** An event this library copied and froze: the only kind the cache stores. */
+export type OwnedEvent = ReqEvent & OwnedBrand;
 
 /**
  * What the cache stores: an event this library owns, and nothing else.
@@ -207,9 +238,31 @@ declare const ownership: unique symbol;
  * projections read is `event`; that is the whole type.
  */
 export interface OwnedPacket {
-  readonly [ownership]: 'nosvelte';
-  readonly event: ReqEvent;
+  readonly event: OwnedEvent;
 }
+
+/**
+ * Every packet {@link ownPacket} made, held weakly: ownership's run-time half.
+ *
+ * The brand on the type cannot be forged by a spread, but a cast forges any
+ * type, `structuredClone` is typed as the identity, and a spread that keeps an
+ * owned event can still carry the transport's fields beside it —
+ * `{ ...wirePacket, ...owned }` is typed owned, and its `message` holds the
+ * wire's event. So the fold also asks this set, which only {@link ownPacket}
+ * writes to and which a value cannot answer for itself: what the cache stores
+ * is the very object the boundary made, or nothing.
+ */
+const OWNED_PACKETS = new WeakSet<object>();
+
+/**
+ * Whether `packet` is the object {@link ownPacket} made — whatever its type says.
+ *
+ * A `const`, as {@link foldEvent} is, so that nothing in this module can rebind
+ * what the fold calls: a function declaration is an assignable binding, and a
+ * wrapper assigned to it would answer in its place.
+ */
+export const isOwnedPacket = (packet: unknown): packet is OwnedPacket =>
+  typeof packet === 'object' && packet !== null && OWNED_PACKETS.has(packet);
 
 /** The wire's packet, reduced to this library's copy of the event — or nothing. */
 export function ownPacket(packet: EventPacket): OwnedPacket | undefined {
@@ -217,5 +270,7 @@ export function ownPacket(packet: EventPacket): OwnedPacket | undefined {
   if (event === undefined) return undefined;
   // The one cast in the module, and the reason the brand is worth having: it is
   // here, in the factory, rather than at every call site.
-  return Object.freeze({ event }) as OwnedPacket;
+  const owned = Object.freeze({ event: event as OwnedEvent });
+  OWNED_PACKETS.add(owned);
+  return owned;
 }

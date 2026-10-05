@@ -146,6 +146,17 @@ export function ownedEventPacket(overrides: Partial<Nostr.Event> = {}): OwnedPac
   return owned;
 }
 
+/**
+ * The same event as `event`, as another relay would deliver it: a parsed copy
+ * that shares nothing with it — not even its tag arrays — made through the
+ * ownership boundary, the way every packet the fold sees is made. A spread or a
+ * cast of an owned packet is not one: the fold refuses an event this library
+ * did not copy.
+ */
+export function ownedCopy(event: object): OwnedPacket {
+  return ownedEventPacket(structuredClone(event) as Partial<Nostr.Event>);
+}
+
 /** The same, from a packet a test built itself. */
 export function ownedFrom(packet: EventPacket): OwnedPacket {
   const owned = ownPacket(packet);
