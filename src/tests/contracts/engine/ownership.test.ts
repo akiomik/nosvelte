@@ -392,8 +392,9 @@ describe('the event a consumer holds is this library’s own', () => {
     async () => {
       // **Every clause of the row in one arm.** At run time: a consumer who
       // writes to an event they were handed — its content, its tag list, one
-      // tag — changes nothing that this hook reads again, that a second hook on
-      // the same key reads, or that the list reads after a `refresh()`; what
+      // tag — changes neither that event, nor what this hook reads again, what
+      // a second hook on the same key reads, or what the list reads after a
+      // `refresh()`; what
       // the cache stores is the event alone, plain data with no path back to
       // the transport's packet; and the fold refuses an event this library did
       // not copy, whatever its type. At compile time: the published event's
@@ -429,8 +430,15 @@ describe('the event a consumer holds is this library’s own', () => {
       await settle();
       expect(eventsOf(first.value)).toHaveLength(1);
 
-      scribbleOn(eventsOf(first.value)[0] as ReqEvent);
+      // The event the consumer wrote to is one of the readers too: it refuses
+      // the write, however the host refuses. A projection that handed out a
+      // fresh, writable copy each time would keep every other reader clean and
+      // let the consumer's own event change.
+      const written = eventsOf(first.value)[0] as ReqEvent;
+      scribbleOn(written);
       await settle();
+      expect(written.content, 'the event written to: content').toBe(arrived.content);
+      expect(written.tags, 'the event written to: tags').toEqual(arrived.tags);
       const unchanged = (handle: typeof first.value, reader: string) => {
         const [event] = eventsOf(handle);
         expect(event?.content, `${reader}: content`).toBe(arrived.content);
@@ -613,40 +621,56 @@ describe('the event a consumer holds is this library’s own', () => {
         /has nothing the probe can enumerate/
       );
 
-      // And at run time, past any type: a clone of an owned event is typed owned
-      // — `structuredClone` is typed as the identity — and a cast types anything,
-      // so the fold asks who made the event. The control is the owned packet it
-      // takes.
-      const clone = { event: structuredClone(owned?.event) } as OwnedPacket;
-      expect(() => foldEvent(emptyEventSet, clone), 'a clone of an owned event').toThrow(TypeError);
+      // **And at run time, past any type, the fold asks who made the packet,
+      // and nothing else.** A cast types anything, `structuredClone` is typed
+      // as the identity, and a spread keeps an owned event typed owned. So the
+      // forgeries are the whole product of what one can vary — whose event it
+      // holds (the owned event itself, a deep-frozen copy of it, a plain copy,
+      // the wire's), whether the event is alone or beside the transport's
+      // fields, and whether the packet is frozen — and no property the
+      // boundary's object also has can stand in for having made it. A refusal
+      // is the fold's own `TypeError`, not any throw. The control is the owned
+      // packet it takes.
+      const ownedPacket = owned as OwnedPacket;
+      const carried: Record<string, unknown> = {
+        'the owned event itself': ownedPacket.event,
+        'a deep-frozen copy of it': deepFreeze(structuredClone(ownedPacket.event)),
+        'a plain copy of it': structuredClone(ownedPacket.event),
+        'the wire’s event': wire.event
+      };
+      const shaped: Record<string, (event: unknown) => object> = {
+        alone: (event) => ({ event }),
+        'beside the transport’s fields': (event) => ({ ...wire, event })
+      };
+      const forgeries = Object.entries(carried).flatMap(([what, event]) =>
+        Object.entries(shaped).flatMap(([how, shape]) =>
+          [false, true].map((frozen) => ({
+            name: `${what}, ${how}, ${frozen ? 'frozen' : 'not frozen'}`,
+            packet: frozen ? Object.freeze(shape(event)) : shape(event)
+          }))
+        )
+      );
+      expect(forgeries, 'every cell of the product').toHaveLength(16);
+      // The cell that differs from the owned packet in nothing but who made it.
+      const perfect = forgeries.find(
+        (one) => one.name === 'a deep-frozen copy of it, alone, frozen'
+      )?.packet;
+      expect(perfect, 'the perfect forgery is equal to the owned packet').toEqual(owned);
+      expect(Reflect.ownKeys(perfect ?? {})).toEqual(['event']);
+      expect(plainDataBreaches(perfect), 'the perfect forgery is plain, frozen data').toEqual([]);
+      const refused = (packet: object): boolean => {
+        try {
+          foldEvent(emptyEventSet, packet as OwnedPacket);
+          return false;
+        } catch (error) {
+          return error instanceof TypeError && /did not make/.test(error.message);
+        }
+      };
       expect(
-        () => foldEvent(emptyEventSet, wire as unknown as OwnedPacket),
-        'the wire’s packet, cast'
-      ).toThrow(TypeError);
-      // The spread no type refuses: an owned event beside the transport's
-      // fields, typed owned, with `message` holding the wire's event.
-      expect(
-        () => foldEvent(emptyEventSet, { ...wire, ...(owned as OwnedPacket) }),
-        'an owned event wrapped in the wire’s packet'
-      ).toThrow(TypeError);
-      // **Provenance, not any property the boundary's object also has.** A
-      // frozen wrapper around the wire's event, and a forgery that is the owned
-      // packet in every respect but who made it: a deep-frozen structural
-      // copy, plain data keyed `event` alone, equal to it.
-      const forgery = deepFreeze(structuredClone(owned as OwnedPacket));
-      expect(forgery, 'the forgery is equal to the owned packet').toEqual(owned);
-      expect(Reflect.ownKeys(forgery)).toEqual(['event']);
-      expect(plainDataBreaches(forgery), 'the forgery is plain, frozen data').toEqual([]);
-      expect(
-        () => foldEvent(emptyEventSet, forgery),
-        'a deep-frozen copy of an owned packet'
-      ).toThrow(TypeError);
-      expect(
-        () =>
-          foldEvent(emptyEventSet, Object.freeze({ event: wire.event }) as unknown as OwnedPacket),
-        'the wire’s event in a frozen wrapper'
-      ).toThrow(TypeError);
-      expect(() => foldEvent(emptyEventSet, owned as OwnedPacket)).not.toThrow();
+        forgeries.filter(({ packet }) => !refused(packet)).map(({ name }) => name),
+        'a packet the boundary did not make, taken by the fold'
+      ).toEqual([]);
+      expect(refused(ownedPacket), 'the owned packet, refused').toBe(false);
 
       const smuggled = refusedLines(SMUGGLES);
       const said = consumerDiagnostics(SMUGGLES);
