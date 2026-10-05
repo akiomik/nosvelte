@@ -55,7 +55,12 @@ import { UnsupportedFilterError } from '$lib/v1/key.js';
 import { InvalidDescriptorError } from '$lib/v1/normalize.js';
 import { capture, providerDisposed, ReqFailure } from '$lib/v1/own.js';
 import { useReq } from '$lib/v1/req.svelte.js';
-import { RelayNotInScopeError, RequestTransportIncompatibleError } from '$lib/v1/reqerror.js';
+import {
+  type RefreshRejection,
+  RelayNotInScopeError,
+  REQ_ERROR_CODES,
+  RequestTransportIncompatibleError
+} from '$lib/v1/reqerror.js';
 import {
   InvalidRelayInputError,
   InvalidRelayScopeError,
@@ -345,27 +350,70 @@ const POPULATION = [
   'a refresh, error',
   'a refused descriptor',
   'its error outlet',
-  'a refresh, rejected with the refusal',
+  'a refresh, rejected with unsupported-filter',
   'a refused descriptor, on a server',
   'a refresh, not started on a server',
   'a deferred request',
   'a refresh, not started because the plan is deferred',
   'a live request whose leg ended',
+  'an Error, invalid-descriptor',
+  'an Error, descriptor-unreadable',
+  'an Error, accumulator-contract',
+  'an Error, accumulator-contract, from a relay’s failure',
+  'an Error, missing-provider',
+  'a refresh, rejected with invalid-descriptor',
+  'a refresh, rejected with descriptor-unreadable',
+  'a refresh, rejected with missing-provider',
+  'an Error a hook throws, missing-provider',
   'useReq()',
   'a refresh through useReq(), incomplete',
   'useRelayDiagnostics()',
+  'useRelayDiagnostics(), a notice cut',
+  'useRelayDiagnostics(), a notice that was not text',
   'useSend()',
   'a send, refused',
   'a send, settled',
   'a refresh, not started with no readable relay',
   'a refresh, cancelled because the provider was disposed',
   'a refresh, rejected because the provider was disposed',
+  'a send, settled with no answer',
+  'an Error, relay-not-in-scope',
+  'an Error, transport-incompatible',
+  'a refresh, rejected with relay-not-in-scope',
+  'a refresh, rejected with transport-incompatible',
+  'useRelayDiagnostics(), after its provider is gone',
   'a provider refusal, conflicting-capabilities',
   'a provider refusal, invalid-relay-input',
   'a provider refusal, non-idempotent-url',
   'a provider refusal, transport-key-mismatch',
   'a provider refusal, transport-incompatible'
 ];
+
+/** The readers `B5-C8` names for an Error two hooks share. */
+const READERS = [
+  'the value written to',
+  'a second hook',
+  'its diagnostics',
+  'the same hook, read again',
+  'the cache'
+];
+
+/**
+ * Every code `refresh()` rejects with — `RefreshRejection`'s, listed here and
+ * tied to the type both ways, so a code added to it is a compile error here.
+ */
+const REFRESH_REJECTIONS = [
+  'invalid-descriptor',
+  'unsupported-filter',
+  'relay-not-in-scope',
+  'transport-incompatible',
+  'descriptor-unreadable',
+  'missing-provider',
+  'provider-disposed'
+] as const satisfies readonly RefreshRejection['code'][];
+const everyRejectionListed: (typeof REFRESH_REJECTIONS)[number] =
+  null as unknown as RefreshRejection['code'];
+void everyRejectionListed;
 
 /**
  * The discipline's controls: each rule, over a value built to break it and
@@ -660,6 +708,16 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
   const judged = shapes.flatMap((typeText, at) =>
     (verdicts[at] ?? []).map((one) => ({ ...one, line: `${typeText}: ${one.write}` }))
   );
+  // What each hook answers is walked, and something in it is refused — so a
+  // hook whose answer fell out of the walk is a failure, not one type fewer.
+  for (const hook of MAIN_SURFACE.hooks)
+    expect(
+      judged.some(
+        (one) =>
+          one.line.startsWith(`HookImage<typeof Published.${hook}>:`) && one.verdict === 'refused'
+      ),
+      `what ${hook} answers is walked`
+    ).toBe(true);
   // **One exception, stated in the row rather than hidden here**: a standard
   // method's slot — a read-only list's, a function's `call`, `apply` and
   // `bind` — is assignable in TypeScript's own declarations, and the lists stay
@@ -1245,6 +1303,28 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         breaches.push(...breachesOf(root, name, disciplineOver(interfaces)));
       };
       const engine = (handle: object): [object, LiveInterface][] => [[handle, ENGINE_HANDLE]];
+      // The codes a published Error was reached under, and those `refresh()`
+      // rejected with — each set compared at the end with the library's own
+      // list, so a code nobody arranged is a missing name rather than a
+      // quieter green.
+      const codes = new Set<string>();
+      const reached = (code: string, error: unknown): void => {
+        expect((error as { code?: unknown } | undefined)?.code, `the premise: ${code}`).toBe(code);
+        codes.add(code);
+      };
+      const rejections = new Set<string>();
+      const rejectedWith = (code: string, rejected: unknown): void => {
+        reached(code, rejected);
+        rejections.add(code);
+      };
+      const rejectionOf = async (pending: Promise<unknown>): Promise<unknown> => {
+        try {
+          await pending;
+        } catch (thrown) {
+          return thrown;
+        }
+        throw new Error('the premise: refresh() rejects');
+      };
       // What each outlet was handed, rendered once over `request`.
       const outlets = (request: object, single: boolean): Map<string, unknown> => {
         const handed = new Map<string, unknown>();
@@ -1384,6 +1464,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await settle(400);
         expect(first.value.state.status, 'the premise: incomplete').toBe('incomplete');
         expect(first.value.diagnostics.refusals, 'with a refusal').toHaveLength(1);
+        reached('incomplete-result', (first.value.state as { error?: unknown }).error);
         check('a request incomplete, with refusals and causes', first.value, engine(first.value));
         return { first, second };
       })();
@@ -1400,6 +1481,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         );
         await settle(150);
         expect(first.value.state.status, 'the premise: a failed attempt').toBe('error');
+        reached('unspecified', (first.value.state as { error?: unknown }).error);
         check('an attempt that failed', first.value, engine(first.value));
         const outcome = await first.value.refresh();
         expect(outcome.kind, 'the premise: error').toBe('error');
@@ -1421,12 +1503,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(first.value.state.status, 'the premise: refused').toBe('error');
         check('a refused descriptor', first.value, engine(first.value));
         check('its error outlet', outlets(first.value, false).get('error'), engine(first.value));
-        let rejected: unknown;
-        try {
-          await first.value.refresh();
-        } catch (thrown) {
-          rejected = thrown;
-        }
+        reached('unsupported-filter', (first.value.state as { error?: unknown }).error);
+        const rejected = await rejectionOf(first.value.refresh());
         // **Not the object the state carries**: `refresh()` resolves the
         // descriptor again, and the refusal it throws is built on that call —
         // the same class and words, and a published value of its own, so it is
@@ -1438,7 +1516,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect((rejected as Error).message, 'the same refusal the state carries').toBe(
           carried?.message
         );
-        check('a refresh, rejected with the refusal', rejected);
+        rejectedWith('unsupported-filter', rejected);
+        check('a refresh, rejected with unsupported-filter', rejected);
         return { first, second };
       })();
 
@@ -1453,12 +1532,21 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
             })
           )
         );
+        // **Before the query delivers the refusal**, which is the window this
+        // path is for: on a server no subscription ever delivers it, so the
+        // projection publishes it itself. Under jsdom a subscription does,
+        // one tick later — read after that, this case took the browser's
+        // path and a ledger entry that left the server's path open survived.
+        expect(
+          (refused.value.raw as { status: string }).status,
+          'the premise: the query has not delivered it'
+        ).not.toBe('error');
+        expect(refused.value.state.status, 'the premise: refused on a server').toBe('error');
+        check('a refused descriptor, on a server', refused.value, engine(refused.value));
         const asked = mount(() =>
           useStreamedReq(options('pb13-server', rxNostr, { environment: 'server' }))
         );
         await settle();
-        expect(refused.value.state.status, 'the premise: refused on a server').toBe('error');
-        check('a refused descriptor, on a server', refused.value, engine(refused.value));
         const outcome = await asked.value.refresh();
         expect(outcome, 'the premise: a server').toEqual({ kind: 'not-started', reason: 'server' });
         check('a refresh, not started on a server', outcome);
@@ -1497,8 +1585,92 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         rxNostr.dispose();
         await settle(200);
         expect(held.value.diagnostics.legEnded?.kind, 'the premise: the leg ended').toBe('ended');
+        reached('relay-failed', held.value.diagnostics.legEnded?.error);
         check('a live request whose leg ended', held.value, engine(held.value));
         held.destroy();
+      }
+
+      // **An Error under every code the library publishes one with.** The
+      // refusals the boundary builds and the failures the engine builds, one
+      // each — none needs a provider, and the last needs there to be none —
+      // and what `refresh()` rejects with on each, which the boundary builds
+      // again on that call.
+      {
+        const { rxNostr } = createTestRelay(nextUrl());
+        const unreadable = {
+          get kinds(): number[] {
+            throw new Error('a consumer’s getter threw');
+          }
+        };
+        const arranged: [string, () => UseStreamedReqOpts][] = [
+          [
+            'invalid-descriptor',
+            options('pb13-invalid', rxNostr, { deferred: 'yes' as unknown as boolean })
+          ],
+          ['descriptor-unreadable', options('pb13-unreadable', rxNostr, { filters: [unreadable] })],
+          [
+            'accumulator-contract',
+            options('pb13-contract', rxNostr, { accumulator: () => async () => emptyEventSet })
+          ],
+          [
+            'missing-provider',
+            () => ({
+              namespace: 'pb13-unowned',
+              filters: [{ kinds: [1] }],
+              reqIdBase: 'pb13-unowned'
+            })
+          ]
+        ];
+        const held = arranged.map(
+          ([code, given]) => [code, mount(() => useStreamedReq(given))] as const
+        );
+        await settle(150);
+        for (const [code, hook] of held) {
+          reached(code, (hook.value.state as { error?: unknown }).error);
+          check(`an Error, ${code}`, hook.value, engine(hook.value));
+          if (code !== 'accumulator-contract') {
+            const rejected = await rejectionOf(hook.value.refresh());
+            rejectedWith(code, rejected);
+            check(`a refresh, rejected with ${code}`, rejected);
+          }
+          hook.destroy();
+        }
+        // **And the one built after the channel's own freeze**: a relay's
+        // failure that comes back out of the accumulator seam is re-derived
+        // into an `accumulator-contract` on its way to the state, past the
+        // point where `capture` freezes what it is handed.
+        const relayed = mount(() =>
+          useStreamedReq(
+            options('pb13-relayed', rxNostr, {
+              accumulator: () => async () => {
+                throw capture(new Error('a relay gave out'), 'relay');
+              }
+            })
+          )
+        );
+        await settle(150);
+        reached('accumulator-contract', (relayed.value.state as { error?: unknown }).error);
+        check(
+          'an Error, accumulator-contract, from a relay’s failure',
+          relayed.value,
+          engine(relayed.value)
+        );
+        relayed.destroy();
+
+        // **And thrown rather than published on a state**: a hook with no
+        // provider above it, which is a value handed to the consumer's `catch`.
+        // Called where a consumer's component would call it rather than inside
+        // an effect root, which catches what its function throws.
+        let thrown: unknown;
+        try {
+          useRelayDiagnostics();
+        } catch (caught) {
+          thrown = caught;
+        }
+        expect(thrown, 'the premise: a hook with no provider throws').toBeInstanceOf(
+          MissingProviderError
+        );
+        check('an Error a hook throws, missing-provider', thrown);
       }
 
       // Under a provider: the three published hooks, a send each way, a request
@@ -1544,6 +1716,21 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(row?.lastNotice, 'the premise: a notice on the row').toBeDefined();
         expect(row?.lastRefusal, 'and a refusal').toBeDefined();
         check('useRelayDiagnostics()', diagnostics.value, [[diagnostics.value, RELAY_DIAGNOSTICS]]);
+        // A relay's message is built at three sites: whole, cut at its bound,
+        // and rendered from a value that was not text. One notice each.
+        const noticed = async (name: string, said: unknown, truncated: boolean): Promise<void> => {
+          server.send(['NOTICE', said]);
+          await settle();
+          const notice = Object.values(diagnostics.value.relays)[0]?.lastNotice;
+          expect(notice?.truncated, `the premise: ${name}`).toBe(truncated);
+          check(name, diagnostics.value, [[diagnostics.value, RELAY_DIAGNOSTICS]]);
+        };
+        await noticed('useRelayDiagnostics(), a notice cut', 'x'.repeat(5000), true);
+        await noticed(
+          'useRelayDiagnostics(), a notice that was not text',
+          { detail: 'x'.repeat(300) },
+          true
+        );
 
         const sender = mount(() => useSend());
         check('useSend()', sender.value, [[sender.value, SEND]]);
@@ -1565,6 +1752,13 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const settledSend = await sending;
         expect(settledSend.status, 'the premise: a send settled').toBe('settled');
         check('a send, settled', settledSend);
+        // And one no relay answers, which the teardown below abandons.
+        const unanswered = sender.value({
+          ...signed,
+          id: 'd'.repeat(64),
+          content: 'pb13-unanswered'
+        });
+        await nextOf(server, 'EVENT');
 
         const nowhere = mount(() =>
           useStreamedReq(() => ({
@@ -1605,17 +1799,72 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           reason: 'provider-disposed'
         });
         check('a refresh, cancelled because the provider was disposed', disposed);
-        let rejected: unknown;
-        try {
-          await outliving.value.refresh();
-        } catch (thrown) {
-          rejected = thrown;
-        }
-        expect(rejected, 'the premise: a refresh after the teardown').toMatchObject({
-          code: 'provider-disposed'
-        });
+        const rejected = await rejectionOf(outliving.value.refresh());
+        rejectedWith('provider-disposed', rejected);
         check('a refresh, rejected because the provider was disposed', rejected);
         outliving.destroy();
+        const abandoned = await unanswered;
+        expect(
+          abandoned.status === 'settled' ? abandoned.relays.map((one) => one.outcome) : abandoned,
+          'the premise: a send the teardown abandoned'
+        ).toEqual(['aborted']);
+        check('a send, settled with no answer', abandoned);
+        // And the diagnostics a consumer went on holding past the teardown,
+        // which answer an empty map of their own.
+        expect(
+          Object.keys(diagnostics.value.relays),
+          'the premise: the provider is gone, and so are its relays'
+        ).toEqual([]);
+        check('useRelayDiagnostics(), after its provider is gone', diagnostics.value, [
+          [diagnostics.value, RELAY_DIAGNOSTICS]
+        ]);
+      }
+
+      // A provider whose transport cannot name one relay: a request naming it
+      // is refused as the transport's, and a request naming a relay the
+      // provider does not hold is refused as outside its scope.
+      {
+        const UNNAMEABLE = 'wss://unnameable.example';
+        const provider = mount(() => {
+          const built = createNostrContext({
+            relays: ['wss://a.example'],
+            harness: HARNESS_DIVERGENCES,
+            verifyEvent: acceptAnyEvent,
+            transportKeys: (urls) => {
+              if (urls.includes(UNNAMEABLE)) throw new Error('this transport cannot name it');
+              return [...urls];
+            }
+          });
+          setNostrContext(built);
+          return built;
+        });
+        const asking = (code: string, relay: string) =>
+          [
+            code,
+            mount(() =>
+              useStreamedReq(() => ({
+                namespace: `pb13-${code}`,
+                filters: [{ kinds: [1] }],
+                relays: [relay],
+                reqIdBase: `pb13-${code}`,
+                settleTimeoutMs: 300
+              }))
+            )
+          ] as const;
+        const held = [
+          asking('relay-not-in-scope', 'wss://b.example'),
+          asking('transport-incompatible', UNNAMEABLE)
+        ];
+        await settle(150);
+        for (const [code, hook] of held) {
+          reached(code, (hook.value.state as { error?: unknown }).error);
+          check(`an Error, ${code}`, hook.value, engine(hook.value));
+          const rejected = await rejectionOf(hook.value.refresh());
+          rejectedWith(code, rejected);
+          check(`a refresh, rejected with ${code}`, rejected);
+          hook.destroy();
+        }
+        provider.destroy();
       }
 
       // The refusal a provider publishes, one of each class, read through the
@@ -1695,6 +1944,12 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       }
 
       expect([...roster].sort(), 'the population, case by case').toEqual([...POPULATION].sort());
+      expect([...codes].sort(), 'an Error under every code the library publishes one with').toEqual(
+        [...REQ_ERROR_CODES].sort()
+      );
+      expect([...rejections].sort(), 'and `refresh()` rejecting with every code it can').toEqual(
+        [...REFRESH_REJECTIONS].sort()
+      );
       expect(breaches, 'a published value that does not keep the discipline').toEqual([]);
 
       // **The Errors, written to and read back.** Every member a consumer can
@@ -1739,6 +1994,11 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           'the same hook, read again': () => errorOf(first),
           ...(cache === undefined ? {} : { 'the cache': cache })
         };
+        // The readers the row names, and the cache wherever it holds the Error:
+        // an observation that quietly lost one would read as one more green.
+        expect(Object.keys(readers), `${answer}: the readers`).toEqual(
+          answer === 'an incomplete answer' ? READERS.filter((one) => one !== 'the cache') : READERS
+        );
         const { before, reached } = writeAndReadBack(held as object, readers);
         for (const reader of Object.keys(readers))
           expect(
@@ -1759,13 +2019,15 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           .reached,
         'the write-back’s control: a live setter'
       ).toEqual(['the value written to: stack', 'a reader: stack']);
+      const marker = Symbol('member');
       const nested = Object.freeze({
-        cause: Object.defineProperty({}, 'note', { value: 'as it was', configurable: true })
+        cause: Object.defineProperty({}, 'note', { value: 'as it was', configurable: true }),
+        [marker]: Object.defineProperty({}, 'note', { value: 'as it was', configurable: true })
       });
       expect(
         writeAndReadBack(nested, { 'a reader': () => nested }).reached,
         'the write-back’s control: a redefinition, one level down'
-      ).toEqual(['a reader: cause.note']);
+      ).toEqual(['a reader: cause.note', 'a reader: Symbol(member).note']);
 
       // **The stated exception, at run time.** A method slot the list type
       // admits is a write the frozen list refuses: the list gains no member of
