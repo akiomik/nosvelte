@@ -19,6 +19,7 @@ import type {
   Refusal
 } from './eventset.js';
 import { completionOf, completionOfRecord, project, refusalsOf } from './eventset.js';
+import type { ReadonlyList } from './list.js';
 import type { Retention } from './normalize.js';
 import { hardenOwned, ownedByLibrary } from './owned.js';
 import type {
@@ -485,7 +486,7 @@ export type RefreshOutcome =
 
 export type ReqState =
   | { readonly status: 'loading' }
-  | { readonly status: 'streaming'; readonly events: readonly ReqEvent[] }
+  | { readonly status: 'streaming'; readonly events: ReadonlyList<ReqEvent> }
   /**
    * The backlog ended and brought everything it was going to bring.
    *
@@ -572,7 +573,7 @@ export type ReqState =
    */
   | {
       readonly status: 'settled';
-      readonly events: readonly ReqEvent[];
+      readonly events: ReadonlyList<ReqEvent>;
       readonly hasMatchEvidence: boolean;
     }
   /**
@@ -594,7 +595,7 @@ export type ReqState =
    */
   | {
       readonly status: 'incomplete';
-      readonly events: readonly ReqEvent[];
+      readonly events: ReadonlyList<ReqEvent>;
       readonly causes: IncompleteCauses;
       readonly error: IncompleteError;
     }
@@ -609,7 +610,7 @@ export type ReqState =
    */
   | {
       readonly status: 'error';
-      readonly events: readonly ReqEvent[];
+      readonly events: ReadonlyList<ReqEvent>;
       readonly error: ReqStateError;
     };
 
@@ -858,7 +859,7 @@ export interface ReqDiagnostics {
    */
   readonly legEnded: LegEnd | undefined;
   /** Every relay that refused, with what it said. A5's fifth event. */
-  readonly refusals: readonly Refusal[];
+  readonly refusals: ReadonlyList<Refusal>;
 }
 
 export function deriveDiagnostics(
@@ -1146,6 +1147,11 @@ export interface ReqHandle {
    * {@link EngineRequest.accumulator} is the seam now, and both sides of it run
    * on the same cache entry. Nothing here gives a caller an outcome belonging to
    * an attempt of a request it did not ask for.
+   *
+   * **A property, not a method**: TypeScript declares a method as an
+   * assignable slot, so `handle.refresh = …` compiled against this interface
+   * — a write into a published value the run time refuses. Declared `readonly`,
+   * the slot is refused and the call is the same call.
    */
-  refresh(): Promise<RefreshOutcome>;
+  readonly refresh: () => Promise<RefreshOutcome>;
 }

@@ -8,6 +8,7 @@ import { isOlderAttempt } from './attempt.js';
 import type { UnixSeconds } from './clock.svelte.js';
 import type { OwnedPacket, ReqEvent } from './event.js';
 import { isOwnedPacket } from './event.js';
+import type { NonEmptyList } from './list.js';
 import type { RelayMessage, Retention } from './normalize.js';
 import { isEphemeralKind } from './normalize.js';
 import { capture, recordedFailure } from './own.js';
@@ -583,7 +584,7 @@ export type IncompleteCause =
  * function a consumer can apply, and one that can be added without changing
  * what is stored.
  */
-export type IncompleteCauses = readonly [IncompleteCause, ...IncompleteCause[]];
+export type IncompleteCauses = NonEmptyList<IncompleteCause>;
 
 export type Completion =
   | { readonly kind: 'complete' }

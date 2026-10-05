@@ -56,6 +56,7 @@ import { untrack } from 'svelte';
 
 import type { UnixSeconds } from './clock.svelte.js';
 import { getNostrContext } from './context.svelte.js';
+import type { ReadonlyList } from './list.js';
 import type { RelayMessage } from './normalize.js';
 import { relayMessage } from './normalize.js';
 import type { RefusalReason } from './refusal.js';
@@ -161,7 +162,7 @@ export interface RelayDiagnostic {
    * *accepted* scope. A refused update's URLs are not here, and should not be —
    * they are not relays this provider has.
    */
-  readonly configuredUrls: readonly string[];
+  readonly configuredUrls: ReadonlyList<string>;
   readonly connection: RelayConnection;
   /**
    * What the accepted scope says this relay may be used for.

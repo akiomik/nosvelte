@@ -39,6 +39,7 @@ import type Nostr from 'nostr-typedef';
 import type { NostrContext } from './context.svelte.js';
 import { getNostrContext } from './context.svelte.js';
 import type { ReqEvent } from './event.js';
+import type { ReadonlyList } from './list.js';
 import type { RelayMessage } from './normalize.js';
 import { relayMessage } from './normalize.js';
 import { resolveRelayName, TransportIncompatibleError, unnameableRelay } from './scope.svelte.js';
@@ -124,7 +125,7 @@ export type SendResult =
       /** The event that went out, as this library's own frozen copy. */
       readonly event: ReqEvent;
       /** One per target relay, in the order the targets were resolved. */
-      readonly relays: readonly SendRelayOutcome[];
+      readonly relays: ReadonlyList<SendRelayOutcome>;
     };
 
 export type Send = (input: SendInput, options?: SendOptions) => Promise<SendResult>;

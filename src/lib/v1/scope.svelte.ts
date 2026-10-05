@@ -23,6 +23,7 @@ import type { RxNostr } from 'rx-nostr';
 import { createRxNostr } from 'rx-nostr';
 import { untrack } from 'svelte';
 
+import type { ReadonlyList } from './list.js';
 import { describeValue, InvalidDescriptorError } from './normalize.js';
 import { saidBy } from './own.js';
 import { hardenOwned, ownedByLibrary } from './owned.js';
@@ -236,7 +237,7 @@ export class RelayConfigurationError extends Error {
   declare readonly cause?: undefined;
 
   readonly code: RelayConfigurationErrorCode;
-  readonly urls: readonly string[];
+  readonly urls: ReadonlyList<string>;
 
   constructor(code: RelayConfigurationErrorCode, urls: readonly string[], message: string) {
     super(message);
