@@ -56,6 +56,46 @@ import type { ReqError } from '$lib/v1/reqerror.js';
 import { createRelayScope, type RelayScope } from '$lib/v1/scope.svelte.js';
 import { entryKeyOf } from '$lib/v1/useStreamedReq.svelte.js';
 
+import {
+  base,
+  type Case,
+  COORDINATE_KINDS,
+  CROSSINGS,
+  D_LOOKALIKES,
+  type Dimension,
+  DIRECTIONS,
+  DOMAINS,
+  FIELD_ROLES,
+  firstD,
+  type Fold,
+  FOLDS,
+  HEX_PAIRS,
+  INSTANTS,
+  minimalPairs,
+  NOT_FOR_TAG_NAMES,
+  OPTIONAL,
+  OUTSIDE_THE_ID,
+  PAYLOAD_DOMAINS,
+  PAYLOAD_FIELDS,
+  PAYLOAD_STRING_POSITIONS,
+  type PayloadPosition,
+  permutations,
+  place,
+  rankingVariants,
+  RELATIONS,
+  SERIALIZATION_ESCAPED,
+  STRING_PAIRS,
+  TIE_INSTANTS
+} from './helpers/design.js';
+import {
+  arbitraryEvents,
+  coordinateOf,
+  isEphemeral,
+  SERIALIZED,
+  shuffled,
+  winnersOf
+} from './helpers/nip01.js';
+
 /**
  * A value from outside, handed to a door whose published type is `ReqError`.
  *
@@ -726,6 +766,154 @@ const foldAll = (packets: OwnedPacket[]): CachedEventSet =>
 
 const idsOf = (set: CachedEventSet) => selectMany(set).map((p) => p.event.id);
 
+/**
+ * What a set holds, each event whole: an id kept with another revision's
+ * content or tags is a different event, so nothing is projected away.
+ */
+const heldOf = (set: CachedEventSet): string[] =>
+  selectMany(set)
+    .map(({ event }) => JSON.stringify(event))
+    .sort();
+
+/** Every non-empty set of the fields outside the id. */
+const OUTSIDE_SETS = OUTSIDE_THE_ID.reduce<string[][]>(
+  (all, field) => [...all, ...all.map((set) => [...set, field])],
+  [[]]
+).filter((set) => set.length > 0);
+
+/** How one field outside the id changes from `a` to `b`: rises, falls, or is added or dropped. */
+const changeOf = (a: unknown, b: unknown): string => {
+  if (a === undefined) return 'added';
+  if (b === undefined) return 'dropped';
+  return String(a) < String(b) ? 'rises' : 'falls';
+};
+
+/** What changes outside the id between two events, as `field change, …`. */
+const combinationOf = (a: object, b: object): string => {
+  const [x, y] = [a, b] as Record<string, unknown>[];
+  return OUTSIDE_THE_ID.filter((field) => x?.[field] !== y?.[field])
+    .map((field) => `${field} ${changeOf(x?.[field], y?.[field])}`)
+    .join(', ');
+};
+
+/**
+ * Every combination of changes a non-empty set of the fields outside the id
+ * can make: each field rises or falls, and an optional one is also added or
+ * dropped, independently of the others.
+ */
+const COMBINATIONS = OUTSIDE_SETS.flatMap((set) =>
+  OUTSIDE_THE_ID.filter((field) => set.includes(field))
+    .reduce<string[][]>(
+      (all, field) =>
+        all.flatMap((prefix) =>
+          ((OPTIONAL as readonly string[]).includes(field)
+            ? ['rises', 'falls', 'added', 'dropped']
+            : ['rises', 'falls']
+          ).map((one) => [...prefix, `${field} ${one}`])
+        ),
+      [[]]
+    )
+    .map((combination) => combination.join(', '))
+);
+
+/**
+ * Every replay of `event` with a non-empty set of the fields outside the id
+ * changed, each field every way it can change from the value it has: a
+ * signature lower and higher; `ots` added where it is absent, and dropped,
+ * lower and higher where it is present.
+ */
+const outsideVariants = <T extends object>(event: T): T[] => {
+  const alternatives = (field: string): unknown[] => {
+    const value = (event as unknown as Record<string, unknown>)[field];
+    if (field === 'sig') return ['0'.repeat(128), 'f'.repeat(128)].filter((one) => one !== value);
+    if (value === undefined) return ['s'];
+    return [undefined, '', `${String(value)}+`].filter((one) => one !== value);
+  };
+  return OUTSIDE_SETS.flatMap((set) =>
+    set
+      .reduce<Record<string, unknown>[]>(
+        (all, field) =>
+          all.flatMap((prefix) => alternatives(field).map((one) => ({ ...prefix, [field]: one }))),
+        [{}]
+      )
+      .map((changes) => {
+        const variant = { ...structuredClone(event), ...changes } as Record<string, unknown>;
+        for (const [field, value] of Object.entries(changes))
+          if (value === undefined) delete variant[field];
+        return variant as unknown as T;
+      })
+  );
+};
+
+/**
+ * The value an event holds at a payload position, read without `place`: the
+ * field; or the last tag, or the `d` tag, when it is exactly long enough for
+ * the position's element to be its last.
+ */
+const atPosition = (event: Partial<Nostr.Event>, position: PayloadPosition): string | undefined => {
+  const where = PAYLOAD_STRING_POSITIONS[position];
+  if (where.field !== 'tags') return event[where.field];
+  const tag = where.tag === 'd' ? event.tags?.find(([name]) => name === 'd') : event.tags?.at(-1);
+  return tag?.length === where.element + 1 ? tag[where.element] : undefined;
+};
+
+/** Held events with the fields outside the id taken out: what the id commits to. */
+const committedOf = (held: readonly string[]): string[] =>
+  held
+    .map((json) => {
+      const event = JSON.parse(json) as Record<string, unknown>;
+      for (const field of OUTSIDE_THE_ID) delete event[field];
+      return JSON.stringify(event);
+    })
+    .sort();
+
+/** What NIP-01 keeps of `packets`, each event whole, by `helpers/nip01.ts`. */
+const keptOf = (packets: readonly OwnedPacket[]): string[] =>
+  [...winnersOf(packets.map(({ event }) => event)).values()]
+    .map((event) => JSON.stringify(event))
+    .sort();
+
+/**
+ * The packets of an enumerated case, the last of them from another relay when
+ * `elsewhere`, as a parsed copy that shares nothing with the others.
+ */
+const packetsOfCase = (
+  events: readonly Partial<Nostr.Event>[],
+  elsewhere: boolean
+): OwnedPacket[] =>
+  events.map((fields, at) => {
+    const packet = ev(fields);
+    return elsewhere && at === events.length - 1
+      ? ({
+          ...packet,
+          from: 'wss://elsewhere/',
+          event: structuredClone(packet.event)
+        } as OwnedPacket)
+      : packet;
+  });
+
+/** The enumerated design, built once. */
+const CASES = minimalPairs();
+
+/**
+ * How many folds or replays each enumerated arm runs, asserted exactly, so the
+ * design's size is a fact the arms state; and the time they are given, which
+ * is not what they are held to.
+ */
+const ES3_REPLAYS = 2_208_396;
+const ES5_FOLDS = 740_096;
+const ES28_FOLDS = 185_024;
+const ENUMERATED = 120_000;
+
+/** The packets for `events`, half of them from a second relay. */
+const packetsOf = (events: readonly Partial<Nostr.Event>[], rand: () => number): OwnedPacket[] =>
+  events.map((fields) => {
+    const packet = ev(fields);
+    return rand() < 0.5
+      ? packet
+      : ({ ...packet, from: 'wss://elsewhere/', event: { ...packet.event } } as OwnedPacket);
+  });
+
 describe('canonical event set', () => {
   it('ES1: kinds are classified by the NIP-01 ranges', () => {
     expect(classifyKind(0)).toBe('replaceable');
@@ -738,11 +926,24 @@ describe('canonical event set', () => {
     expect(classifyKind(30023)).toBe('addressable');
   });
 
-  it('ES1b: every range boundary is pinned', () => {
+  // @contracts B5-C7
+  it('ES1b: every range boundary is pinned, and the two specials beside their neighbours', () => {
     // The ranges are the whole content of the classifier, so an off-by-one at
     // any edge is the failure to guard against. Examples in the middle of a
     // range cannot see one.
+    // NIP-01's regular ranges, both sides of each edge: 1, 2, 4–44 and
+    // 1000–9999.
+    expect(classifyKind(1)).toBe('regular');
+    expect(classifyKind(2)).toBe('regular');
+    expect(classifyKind(4)).toBe('regular');
+    expect(classifyKind(44)).toBe('regular');
+    expect(classifyKind(1000)).toBe('regular');
     expect(classifyKind(9999)).toBe('regular');
+    // The kinds NIP-01 leaves unclassified — 45–999 and 40000–65535 — are kept
+    // as regular events by this library's decision (0003), not the protocol's.
+    expect(classifyKind(45)).toBe('regular');
+    expect(classifyKind(999)).toBe('regular');
+    expect(classifyKind(65535)).toBe('regular');
     expect(classifyKind(10000)).toBe('replaceable');
     expect(classifyKind(19999)).toBe('replaceable');
     expect(classifyKind(20000)).toBe('ephemeral');
@@ -750,15 +951,14 @@ describe('canonical event set', () => {
     expect(classifyKind(30000)).toBe('addressable');
     expect(classifyKind(39999)).toBe('addressable');
     expect(classifyKind(40000)).toBe('regular');
-  });
 
-  it('ES1c: the two specials are exceptions to a range, and their neighbours are not', () => {
     // **`0` and `3` are not explained by any range.** Both sit inside the span
     // the classifier answers `regular` for, and both are `replaceable` by a
-    // clause of their own — NIP-01 names them rather than deriving them. A
-    // witness that only walks the range edges cannot see them: a classifier
-    // that dropped the special line would keep every boundary in `E1b` and
-    // start replacing nothing for a profile or a contact list.
+    // clause of their own — NIP-01 names them rather than deriving them. The
+    // range edges above cannot see them: a classifier that dropped the special
+    // line keeps every one of those assertions green and starts replacing
+    // nothing for a profile or a contact list, which is why they are asserted
+    // here, beside the edges.
     expect(classifyKind(0)).toBe('replaceable');
     expect(classifyKind(3)).toBe('replaceable');
 
@@ -789,27 +989,456 @@ describe('canonical event set', () => {
     expect(replacementKey(ev({ kind: 30023, tags: [] }).event)).toBe('30023:p1:');
   });
 
-  it('ES3: the fold is idempotent, and a replay does not even rebuild the set', () => {
-    const a = ev();
-    const b = ev({ kind: 0 });
-    expect(idsOf(foldAll([a, b, a, b, a]))).toEqual(idsOf(foldAll([a, b])));
+  // @contracts B5-C3
+  it(
+    'ES3: the fold is idempotent, and a replay does not even rebuild the set',
+    () => {
+      const a = ev();
+      const b = ev({ kind: 0 });
+      expect(idsOf(foldAll([a, b, a, b, a]))).toEqual(idsOf(foldAll([a, b])));
 
-    // Comparing ids only says the *value* is unchanged, which the Map gives for
-    // free — no mutation of the fold could break it, so that assertion defends
-    // nothing. Replaying must also return the identical set: a fold that
-    // rebuilds on a replay makes every consumer of the cache value re-render on
-    // a duplicate packet, and duplicates are the normal case with several
-    // relays. This direction is breakable, and it is the one worth pinning.
-    const set = foldAll([a, b]);
-    expect(foldEvent(set, a)).toBe(set);
-    expect(foldEvent(set, b)).toBe(set);
+      // Comparing ids only says the *value* is unchanged, which the Map gives for
+      // free — no mutation of the fold could break it, so that assertion defends
+      // nothing. Replaying must also return the identical set: a fold that
+      // rebuilds on a replay makes every consumer of the cache value re-render on
+      // a duplicate packet, and duplicates are the normal case with several
+      // relays. This direction is breakable, and it is the one worth pinning.
+      const set = foldAll([a, b]);
+      expect(foldEvent(set, a)).toBe(set);
+      expect(foldEvent(set, b)).toBe(set);
 
-    // The duplicate that actually occurs is the same event delivered by a second
-    // relay: an equal event in a different packet object. Re-folding the
-    // identical object proves nothing about the comparison, because reference
-    // equality short-circuits it either way.
-    const fromAnotherRelay = { ...b, from: 'wss://other/', event: { ...b.event } };
-    expect(foldEvent(set, fromAnotherRelay)).toBe(set);
+      // The duplicate that actually occurs is the same event delivered by a second
+      // relay: an equal event in a different packet object. Re-folding the
+      // identical object proves nothing about the comparison, because reference
+      // equality short-circuits it either way.
+      const fromAnotherRelay = { ...b, from: 'wss://other/', event: structuredClone(b.event) };
+      expect(foldEvent(set, fromAnotherRelay)).toBe(set);
+      const regularElsewhere = { ...a, from: 'wss://other/', event: structuredClone(a.event) };
+      expect(foldEvent(set, regularElsewhere)).toBe(set);
+      // From another relay, in every class with a coordinate as well: a tie-break
+      // that let an equal event replace the incumbent for one class alone would
+      // rebuild the set there and nowhere else.
+      for (const kind of [3, 10002, 19999]) {
+        const held = ev({ kind });
+        const holding = foldEvent(set, held);
+        const elsewhere = { ...held, from: 'wss://other/', event: structuredClone(held.event) };
+        expect(foldEvent(holding, elsewhere), `${kind}`).toBe(holding);
+      }
+
+      // Every path a replay can take returns what it was given: an addressable
+      // event, from either relay, and an ephemeral one once it has been noted.
+      // **A replay from another relay is a separate object all the way down** —
+      // `structuredClone`, not a spread — since a relay hands over a parsed copy
+      // and shares nothing with the incumbent, not even its tag arrays.
+      const addressable = ev({ kind: 30023, tags: [['d', 's']] });
+      const withIt = foldEvent(set, addressable);
+      expect(foldEvent(withIt, addressable)).toBe(withIt);
+      const addressableElsewhere = {
+        ...addressable,
+        from: 'wss://other/',
+        event: structuredClone(addressable.event)
+      };
+      expect(foldEvent(withIt, addressableElsewhere)).toBe(withIt);
+      const ephemeral = ev({ kind: 20001 });
+      const noted = foldEvent(set, ephemeral);
+      expect(foldEvent(noted, ephemeral)).toBe(noted);
+      expect(foldEvent(noted, { ...ephemeral, event: structuredClone(ephemeral.event) })).toBe(
+        noted
+      );
+
+      // **And every enumerated case** (`helpers/design.ts`), in both orders, at
+      // each step: the first event folded alone, then both. At each step every
+      // event held is replayed — the same object, a parsed copy from another
+      // relay, and that copy with every set of the fields outside the id
+      // changed every way it can change — and, where the case's two events
+      // share an id, the second is replayed onto the set holding only the
+      // first: the first conflicting replay, asserted before both are folded.
+      // A revision replayed after it was superseded is among them. Each replay
+      // returns the set it was given.
+      const offenders: string[] = [];
+      const changed = new Set<string>();
+      let replays = 0;
+      const replay = (set: CachedEventSet, packet: OwnedPacket, what: string) => {
+        replays += 1;
+        if (foldEvent(set, packet) !== set) offenders.push(what);
+      };
+      const replayAll = (set: CachedEventSet, packet: OwnedPacket, label: string) => {
+        replay(set, packet, `${label}: the same object`);
+        const elsewhere = {
+          ...packet,
+          from: 'wss://elsewhere/',
+          event: structuredClone(packet.event)
+        };
+        replay(set, elsewhere, `${label}: from another relay`);
+        for (const variant of outsideVariants(packet.event)) {
+          const combination = combinationOf(packet.event, variant);
+          changed.add(combination);
+          replay(set, { ...elsewhere, event: variant }, `${label}: ${combination}`);
+        }
+      };
+      for (const { label, events } of CASES) {
+        const packets = events.map((fields) => ev(fields));
+        for (const order of [packets, [...packets].reverse()]) {
+          const [first, second] = order as [OwnedPacket, OwnedPacket];
+          const alone = foldAll([first]);
+          replayAll(alone, first, `${label}, the first alone`);
+          if (first.event.id === second.event.id) {
+            replay(alone, second, `${label}: the first conflicting replay`);
+            replay(
+              alone,
+              {
+                ...second,
+                from: 'wss://elsewhere/',
+                event: structuredClone(second.event)
+              } as OwnedPacket,
+              `${label}: the first conflicting replay, from another relay`
+            );
+          }
+          const both = foldAll(order);
+          for (const packet of order) replayAll(both, packet, label);
+        }
+      }
+      // Every combination of changes outside the id was replayed.
+      expect(COMBINATIONS.filter((combination) => !changed.has(combination))).toEqual([]);
+      expect(offenders).toEqual([]);
+      expect(replays, 'the enumerated replays').toBe(ES3_REPLAYS);
+
+      // A seeded sweep over drawn events beside it, for combinations of several
+      // coordinates the pairs above do not build. It claims no coverage.
+      const draws = mulberry32(0xb5c3);
+      for (let trial = 0; trial < 200; trial += 1) {
+        const packets = arbitraryEvents(draws, 3 + Math.floor(draws() * 8)).map((fields) =>
+          ev(fields)
+        );
+        const folded = foldAll(packets);
+        for (const packet of shuffled(packets, draws)) {
+          const replayed = {
+            ...packet,
+            from: 'wss://elsewhere/',
+            event: structuredClone(packet.event)
+          };
+          expect(foldEvent(folded, replayed), `trial ${trial}: ${packet.event.id}`).toBe(folded);
+        }
+      }
+    },
+    ENUMERATED
+  );
+
+  it('ES29: every domain the design draws from shows every folding in the catalogue', () => {
+    // An instrument, not a landing: what it holds is `helpers/design.ts`. For
+    // each transformation a careless reader applies (`FOLDS`), the domain it
+    // would be applied to must hold the input that shows it — a pair it merges
+    // for an identifier, a value it changes for a payload, an ordered pair it
+    // reorders for an instant. A folding found next is one line in `FOLDS`, and
+    // this refuses a domain that cannot show it rather than letting the landings
+    // pass on inputs that never meet it.
+    // The `d` tag lists the design pairs, for the choice among several.
+    const tagPairs = CASES.filter(
+      (one) => one.dimension === 'd shape' && one.kinds.every((kind) => kind >= 30000)
+    ).map(({ events }) => events.map(({ tags }) => tags ?? []) as [string[][], string[][]]);
+    const shows = (fold: Fold): boolean => {
+      switch (fold.domain) {
+        case 'instant':
+          return INSTANTS.some((older, at) =>
+            INSTANTS.slice(at + 1).some((newer) => !(fold.key(older) < fold.key(newer)))
+          );
+        case 'hex order':
+          return HEX_PAIRS.some(([a, b]) => fold.key(a) < fold.key(b) !== a < b);
+        case 'd selection':
+          return tagPairs.some(
+            ([a, b]) => (fold.select(a) === fold.select(b)) !== (firstD(a) === firstD(b))
+          );
+        case 'payload string':
+          return DOMAINS[fold.domain].flat().some((value) => fold.apply(value) !== value);
+        case 'identifier string':
+        case 'tag name':
+        case 'hex':
+          return (DOMAINS[fold.domain] as readonly (readonly [string, string])[]).some(
+            ([a, b]) => a !== b && fold.apply(a) === fold.apply(b)
+          );
+        default:
+          return fold satisfies never;
+      }
+    };
+    for (const fold of FOLDS) expect(shows(fold), `${fold.domain}: ${fold.name}`).toBe(true);
+
+    // The positive controls, **one per domain** — the type refuses a domain
+    // without one: a transformation that keeps what the rules read shows
+    // nothing, so no check is satisfied by any function at all.
+    const injective = (value: string): string => `<${value}>`;
+    const controls = {
+      'identifier string': { name: 'injective', domain: 'identifier string', apply: injective },
+      'payload string': {
+        name: 'unchanged',
+        domain: 'payload string',
+        apply: (value: string) => value
+      },
+      'tag name': { name: 'injective', domain: 'tag name', apply: injective },
+      hex: { name: 'injective', domain: 'hex', apply: injective },
+      instant: { name: 'unchanged', domain: 'instant', key: (value: number) => value },
+      'hex order': { name: 'unchanged', domain: 'hex order', key: (value: string) => value },
+      'd selection': { name: 'the first', domain: 'd selection', select: firstD }
+    } satisfies { readonly [D in Fold['domain']]: Fold & { readonly domain: D } };
+    for (const control of Object.values(controls))
+      expect(shows(control), `control ${control.domain}`).toBe(false);
+
+    // **Tag names are strings, so every string fold is a tag-name fold** unless
+    // `NOT_FOR_TAG_NAMES` exempts it with a reason: the two partition the
+    // string catalogue. Each exemption is searched for a counterexample among
+    // every string of one code unit, `d` beside each, the lookalikes and every
+    // string the design pairs — the search finds `D` for lower case, so it is
+    // not blind.
+    const named = (domain: Fold['domain']): string[] =>
+      FOLDS.filter((fold) => fold.domain === domain).map(({ name }) => name);
+    const exempt = Object.keys(NOT_FOR_TAG_NAMES);
+    expect([...named('tag name'), ...exempt].sort()).toEqual(named('identifier string').sort());
+    expect(named('tag name').filter((name) => exempt.includes(name))).toEqual([]);
+    const units = Array.from({ length: 0x10000 }, (_, code) => String.fromCharCode(code));
+    const candidates = [
+      ...units,
+      ...units.map((unit) => `d${unit}`),
+      ...units.map((unit) => `${unit}d`),
+      ...D_LOOKALIKES,
+      ...STRING_PAIRS.flat()
+    ];
+    const mergesWithD = (name: string): boolean => {
+      const fold = FOLDS.find((one) => one.domain === 'identifier string' && one.name === name);
+      if (fold === undefined || !('apply' in fold)) throw new Error(`no string fold ${name}`);
+      const target = fold.apply('d');
+      return candidates.some((candidate) => candidate !== 'd' && fold.apply(candidate) === target);
+    };
+    for (const name of exempt)
+      expect(mergesWithD(name), `exempt for tag names: ${name}`).toBe(false);
+    expect(mergesWithD('lower case'), 'the search finds a witness').toBe(true);
+
+    // **Every crossing the design promises has a case**: each dimension, over
+    // each kind `CROSSINGS` lists for it, at every relation and in both
+    // directions. A product narrowed by hand — ties for two kinds only — is
+    // refused here by name, rather than left for a reviewer to notice.
+    const missing = (cases: readonly Case[]): string[] =>
+      (Object.entries(CROSSINGS) as [Dimension, (typeof CROSSINGS)[Dimension]][]).flatMap(
+        ([dimension, { kinds, relations }]) =>
+          kinds.flatMap((kind) =>
+            relations.flatMap((relation) =>
+              DIRECTIONS.filter(
+                (direction) =>
+                  !cases.some(
+                    (one) =>
+                      one.dimension === dimension &&
+                      one.kinds.includes(kind) &&
+                      one.relation === relation &&
+                      one.direction === direction
+                  )
+              ).map((direction) => `${dimension} / kind ${kind} / ${relation} / ${direction}`)
+            )
+          )
+      );
+    expect(missing(CASES)).toEqual([]);
+    // Its control: the design with kind 3's ties taken out is refused.
+    expect(
+      missing(CASES.filter((one) => !(one.kinds.includes(3) && one.relation === 'tie')))
+    ).toContain('instant / kind 3 / tie / as built');
+    // And a relation is crossed only where it can be: two packets of one id tie.
+    expect(CROSSINGS['same id'].relations).toEqual(['tie']);
+    expect(
+      [...new Set(Object.values(CROSSINGS).flatMap(({ relations }) => relations))].sort()
+    ).toEqual([...RELATIONS].sort());
+
+    // **Every field of an event has a role, and every payload field is a
+    // dimension and a ranking variant.** `FIELD_ROLES` is checked against the
+    // event type when it compiles; here, against an event as built, and the
+    // payload fields against what the design and the bound's variants change.
+    expect(Object.keys(base(1, { ots: 'o' })).sort()).toEqual(Object.keys(FIELD_ROLES).sort());
+    const payload = (Object.entries(FIELD_ROLES) as [string, readonly string[]][])
+      .filter(([, roles]) => roles.includes('payload'))
+      .map(([field]) => field);
+    expect([...payload].sort()).toEqual([...PAYLOAD_FIELDS].sort());
+    for (const field of PAYLOAD_FIELDS) {
+      expect(Object.keys(CROSSINGS), `${field}: a dimension`).toContain(field);
+      const probe = base(1, { ots: 'o' });
+      const changed = rankingVariants().some(
+        ([winner]) => JSON.stringify(winner(probe)[field]) !== JSON.stringify(probe[field])
+      );
+      expect(changed, `${field}: a ranking variant`).toBe(true);
+    }
+    // **And every optional field is crossed with the variation of every other
+    // field outside the id**: absent on both, and present with one value on
+    // both. A signature that changes only where `ots` is absent is not a
+    // signature that changes.
+    for (const field of OUTSIDE_THE_ID)
+      for (const other of OPTIONAL.filter((one) => one !== field))
+        for (const present of [false, true])
+          expect(
+            CASES.some(
+              ({ dimension, events: [a, b] }) =>
+                dimension === 'same id' &&
+                a?.id === b?.id &&
+                JSON.stringify(a?.[field]) !== JSON.stringify(b?.[field]) &&
+                a?.[other] === b?.[other] &&
+                (a?.[other] !== undefined) === present
+            ),
+            `${field} varied with ${other} ${present ? 'present' : 'absent'}`
+          ).toBe(true);
+
+    // **Every payload string position meets every pair of strings**, and every
+    // payload field holding strings has a position: a tag name is carried as
+    // well as read, and a fold of what is stored is a fold of it too.
+    for (const [field, domain] of Object.entries(PAYLOAD_DOMAINS))
+      if (domain === 'string')
+        expect(
+          Object.values(PAYLOAD_STRING_POSITIONS).map((position) => position.field),
+          `${field}: a payload string position`
+        ).toContain(field);
+    // A tag is "an array of one or more strings" whose first is its name, its
+    // second its value, and the rest further elements (NIP-01): each is a place,
+    // in an unrelated tag and — after its name and value, which are the
+    // identifier — in the `d` tag. NIP-01's own longest example is four
+    // elements; one place in each is beyond it.
+    for (const [tag, payloadElements] of [
+      ['unrelated', [0, 1, 2]],
+      ['d', [2]]
+    ] as const) {
+      const elements = Object.values(PAYLOAD_STRING_POSITIONS).flatMap((position) =>
+        position.field === 'tags' && position.tag === tag ? [position.element] : []
+      );
+      expect(elements.filter((element) => element <= 2).sort(), tag).toEqual([...payloadElements]);
+      expect(
+        elements.some((element) => element >= 4),
+        `${tag}: beyond four`
+      ).toBe(true);
+    }
+    // NIP-01's escaped characters, written out again by code point: the pairs,
+    // folds and lookalikes are derived from `SERIALIZATION_ESCAPED`, so one
+    // dropped from it would drop all three together and nothing else would see.
+    expect([...SERIALIZATION_ESCAPED]).toEqual([
+      '\u000a',
+      '\u0022',
+      '\u005c',
+      '\u000d',
+      '\u0009',
+      '\u0008',
+      '\u000c'
+    ]);
+    // `place` pinned to events written out by hand, so a materialiser that
+    // drifts — a value at the wrong element — cannot agree with itself.
+    expect(place(30023, 'content', 'X')).toEqual({ content: 'X' });
+    expect(place(0, 'tag name', 'X')).toEqual({ tags: [['X']] });
+    expect(place(30023, 'tag value', 'X')).toEqual({
+      tags: [
+        ['d', 's'],
+        ['t', 'X']
+      ]
+    });
+    expect(place(30023, 'tag element far after the value', 'X')).toEqual({
+      tags: [
+        ['d', 's'],
+        ['t', 'v', '2', '3', '4', '5', '6', '7', '8', 'X']
+      ]
+    });
+    expect(place(0, 'd tag element after the value', 'X')).toEqual({ tags: [['d', 's', 'X']] });
+    expect(place(30023, 'd tag element far after the value', 'X')).toEqual({
+      tags: [['d', 's', '2', '3', '4', '5', '6', '7', '8', 'X']]
+    });
+    for (const position of Object.keys(PAYLOAD_STRING_POSITIONS))
+      for (const pair of STRING_PAIRS)
+        expect(
+          CASES.some((one) => one.payload?.position === position && one.payload.pair === pair),
+          `${position}: ${JSON.stringify(pair)}`
+        ).toBe(true);
+
+    // **And what each case says of itself is what its events are.** Every
+    // check above reads a case's labels, so each label is derived again from
+    // the events and compared: a builder that drifts from its label — a pair
+    // normalised on the way in — is refused here rather than counted.
+    const drift: string[] = [];
+    const byLabel = new Map(CASES.map((one) => [one.label, one]));
+    // A label names one case, or the swap below finds the wrong twin.
+    expect(byLabel.size, 'one case per label').toBe(CASES.length);
+    for (const one of CASES) {
+      const [a, b] = one.events as [Partial<Nostr.Event>, Partial<Nostr.Event>];
+      const kinds = [...new Set(one.events.map(({ kind }) => kind))].sort();
+      if (JSON.stringify(kinds) !== JSON.stringify([...one.kinds].sort()))
+        drift.push(`${one.label}: kinds`);
+      if ((a.created_at === b.created_at ? 'tie' : 'newer') !== one.relation)
+        drift.push(`${one.label}: relation`);
+      if (one.dimension === 'same id' && a.id !== b.id) drift.push(`${one.label}: one id`);
+      if (one.payload !== undefined) {
+        const [x, y] =
+          one.direction === 'as built' ? one.payload.pair : [...one.payload.pair].reverse();
+        if (atPosition(a, one.payload.position) !== x || atPosition(b, one.payload.position) !== y)
+          drift.push(`${one.label}: the pair where its position says`);
+      }
+      if (one.direction === 'as built') {
+        const twin = byLabel.get(`${one.label}, swapped`);
+        const exchanged = [
+          { ...b, id: a.id, created_at: a.created_at },
+          { ...a, id: b.id, created_at: b.created_at }
+        ];
+        if (twin === undefined || JSON.stringify(twin.events) !== JSON.stringify(exchanged))
+          drift.push(`${one.label}: its swap`);
+      }
+    }
+    expect(drift).toEqual([]);
+
+    // **The instants the recency cases use are the catalogue's, by value**:
+    // for every kind with a coordinate, every ordered pair of `INSTANTS` with
+    // the ids in both orders, and a tie at each of `TIE_INSTANTS` — read from
+    // the events, not from the labels.
+    for (const kind of COORDINATE_KINDS) {
+      const recency = CASES.filter(
+        (one) =>
+          one.dimension === 'instant' && one.direction === 'as built' && one.kinds.includes(kind)
+      ).map(({ events: [a, b] }) => [a?.created_at, b?.created_at, (a?.id ?? '') < (b?.id ?? '')]);
+      const newer = recency.filter(([x, y]) => x !== y).map((row) => JSON.stringify(row));
+      const expected = INSTANTS.flatMap((x, at) =>
+        INSTANTS.slice(at + 1).flatMap((y) => [true, false].map((up) => JSON.stringify([x, y, up])))
+      );
+      expect(newer.sort(), `kind ${kind}: ordered pairs`).toEqual(expected.sort());
+      const tied = [...new Set(recency.filter(([x, y]) => x === y).map(([x]) => x))].sort();
+      expect(tied, `kind ${kind}: ties`).toEqual([...TIE_INSTANTS].sort());
+    }
+
+    // **And each ranking variant orders its field against the ids both ways**:
+    // the winner's value above the competitor's above the superseded one's,
+    // and the reverse — compared as the bound could read them.
+    const probe = base(1, { ots: 'o' });
+    for (const field of PAYLOAD_FIELDS) {
+      const orders = rankingVariants().map((variant) =>
+        variant.map((rewrite) => JSON.stringify(rewrite(probe)[field]))
+      );
+      const above = ([w, l, c]: string[]) =>
+        (w as string) > (c as string) && (c as string) > (l as string);
+      const below = ([w, l, c]: string[]) =>
+        (l as string) > (c as string) && (c as string) > (w as string);
+      expect(orders.some(above), `${field}: winner above`).toBe(true);
+      expect(orders.some(below), `${field}: winner below`).toBe(true);
+    }
+
+    // Which fields are outside the id is NIP-01's serialization, not a choice.
+    expect([...OUTSIDE_THE_ID].sort()).toEqual(
+      Object.keys(FIELD_ROLES)
+        .filter((field) => field !== 'id' && !(SERIALIZED as readonly string[]).includes(field))
+        .sort()
+    );
+    // **And every set of the fields outside the id differs, exactly, between
+    // two packets of one id** in some case, since the id cannot tell them
+    // apart and the rules have to — each alone, and together. Read from the
+    // events: the fields that differ are counted, not the label.
+    // **And in every combination of directions**: for each field of the set,
+    // either packet can hold the greater value — and, for an optional field,
+    // either packet can be the one that carries it — each independently of the
+    // others, so the first packet's `sig` being the higher says nothing about
+    // which one carries `ots`. Read from the events.
+    expect(OUTSIDE_SETS).toHaveLength(2 ** OUTSIDE_THE_ID.length - 1);
+    const seen = new Set(
+      CASES.flatMap(({ dimension, events: [a, b] }) =>
+        dimension === 'same id' && a?.id === b?.id && a !== undefined && b !== undefined
+          ? [combinationOf(a, b)]
+          : []
+      )
+    );
+    for (const combination of COMBINATIONS)
+      expect(seen.has(combination), `two packets of one id: ${combination}`).toBe(true);
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {
@@ -825,40 +1454,123 @@ describe('canonical event set', () => {
     expect(laterWins(tieLow.event, tieHigh.event).id).toBe('aaa');
   });
 
-  it('ES5: randomised — any permutation of the same packets folds to the same set', () => {
-    const rand = mulberry32(0xc0ffee);
-    const packets = [
-      // The tie has to decide the final set, or the permutation sweep says
-      // nothing about the tie-break. Previously a third, newer metadata event
-      // beat both of these regardless of order, so removing the tie-break left
-      // this test passing — the coverage was vacuous.
-      ev({ kind: 0, created_at: 5, id: 'm1' }),
-      ev({ kind: 0, created_at: 5, id: 'm0' }),
-      ev({ kind: 0, created_at: 2, id: 'm2' }),
-      ev({ kind: 1, created_at: 1, id: 'n1' }),
-      ev({ kind: 1, created_at: 2, id: 'n2' }),
-      ev({ kind: 30023, created_at: 3, id: 'a1', tags: [['d', 's']] }),
-      ev({ kind: 30023, created_at: 4, id: 'a2', tags: [['d', 's']] }),
-      ev({ kind: 30023, created_at: 4, id: 'a3', tags: [['d', 'other']] })
-    ];
-    const expected = ['m0', 'a2', 'a3', 'n2', 'n1'];
-    // **Written out rather than derived from the fold.** It was
-    // `idsOf(foldAll(packets))` — the implementation under test producing its
-    // own oracle — so an implementation that stored nothing agreed with itself
-    // two hundred times: measured, with `entries.set` removed this arm passed
-    // and `E4` died. What the row claims is that every order gives *this* set,
-    // and the tie is what makes the claim non-trivial: `aaa` and `zzz` share a
-    // `created_at`, and the lower id has to win from either direction.
+  // @contracts B5-C2
+  it(
+    'ES5: randomised — any permutation of the same packets folds to the same set',
+    () => {
+      const rand = mulberry32(0xc0ffee);
+      const packets = [
+        // The tie has to decide the final set, or the permutation sweep says
+        // nothing about the tie-break. Previously a third, newer metadata event
+        // beat both of these regardless of order, so removing the tie-break left
+        // this test passing — the coverage was vacuous.
+        ev({ kind: 0, created_at: 5, id: 'm1', content: 'content of m1' }),
+        ev({ kind: 0, created_at: 5, id: 'm0', content: 'content of m0' }),
+        ev({ kind: 0, created_at: 2, id: 'm2', content: 'content of m2' }),
+        ev({ kind: 1, created_at: 1, id: 'n1', content: 'content of n1' }),
+        ev({ kind: 1, created_at: 2, id: 'n2', content: 'content of n2' }),
+        ev({ kind: 30023, created_at: 3, id: 'a1', content: 'content of a1', tags: [['d', 's']] }),
+        ev({ kind: 30023, created_at: 4, id: 'a2', content: 'content of a2', tags: [['d', 's']] }),
+        ev({
+          kind: 30023,
+          created_at: 4,
+          id: 'a3',
+          content: 'content of a3',
+          tags: [['d', 'other']]
+        }),
+        // And a tie in each other class with a coordinate: a replaceable kind
+        // from the range, and an addressable one under one `d`. A tie-break
+        // written for one class alone is an order-dependent fold for the rest.
+        ev({ kind: 10002, created_at: 7, id: 'r1', content: 'content of r1' }),
+        ev({ kind: 10002, created_at: 7, id: 'r0', content: 'content of r0' }),
+        ev({ kind: 30023, created_at: 8, id: 'b1', content: 'content of b1', tags: [['d', 'u']] }),
+        ev({ kind: 30023, created_at: 8, id: 'b0', content: 'content of b0', tags: [['d', 'u']] })
+      ];
+      const expected = ['b0', 'r0', 'm0', 'a2', 'a3', 'n2', 'n1'];
+      // **Written out rather than derived from the fold.** It was
+      // `idsOf(foldAll(packets))` — the implementation under test producing its
+      // own oracle — so an implementation that stored nothing agreed with itself
+      // two hundred times: measured, with `entries.set` removed this arm passed
+      // and `E4` died. What the row claims is that every order gives *this* set,
+      // and the ties are what make the claim non-trivial: `m0`/`m1`, `r0`/`r1`
+      // and `b0`/`b1` each share a coordinate and a `created_at`, and the lower
+      // id has to win from either direction. Two hundred seeded shuffles, not
+      // every order of twelve packets.
 
-    for (let i = 0; i < 200; i += 1) {
-      const shuffled = [...packets];
-      for (let j = shuffled.length - 1; j > 0; j -= 1) {
-        const k = Math.floor(rand() * (j + 1));
-        [shuffled[j], shuffled[k]] = [shuffled[k] as OwnedPacket, shuffled[j] as OwnedPacket];
+      for (let i = 0; i < 200; i += 1) {
+        const shuffled = [...packets];
+        for (let j = shuffled.length - 1; j > 0; j -= 1) {
+          const k = Math.floor(rand() * (j + 1));
+          [shuffled[j], shuffled[k]] = [shuffled[k] as OwnedPacket, shuffled[j] as OwnedPacket];
+        }
+        expect(idsOf(foldAll(shuffled))).toEqual(expected);
+        // And the payload: the id kept is kept with its own content.
+        expect(
+          selectMany(foldAll(shuffled)).every(
+            ({ event }) => event.content === `content of ${event.id}`
+          ),
+          'an id kept with another revision’s content'
+        ).toBe(true);
       }
-      expect(idsOf(foldAll(shuffled))).toEqual(expected);
-    }
-  });
+
+      // **And every order of every enumerated case** (`helpers/design.ts`) — each
+      // a minimal pair that changes one dimension, alone and beside an ephemeral
+      // event the fold drops — folds to the one set the rules name, each event
+      // whole, with the drop noted the same way.
+      //
+      // **Two packets of one id are the exception, and it is contracted** (0003):
+      // they are one event, the first one folded is kept whole, and so which
+      // signature and which `ots` the set shows follows the fold order. The
+      // set is the same by everything the id commits to, and the kept packet is
+      // the first — both halves are compared.
+      const offenders: string[] = [];
+      let folds = 0;
+      for (const { label, events, dimension } of CASES)
+        for (const set of [events, [...events, base(20001, { id: 'e'.repeat(64) })]])
+          for (const elsewhere of [false, true]) {
+            const packets = packetsOfCase(set, elsewhere);
+            const expected = keptOf(packets);
+            const dropped = packets.some(({ event }) => isEphemeral(event.kind));
+            for (const order of permutations(packets)) {
+              folds += 1;
+              const folded = foldAll(order);
+              const held = JSON.stringify(heldOf(folded));
+              if (dimension === 'same id') {
+                if (
+                  JSON.stringify(committedOf(heldOf(folded))) !==
+                  JSON.stringify(committedOf(expected))
+                )
+                  offenders.push(label);
+                if (held !== JSON.stringify(keptOf(order)))
+                  offenders.push(`${label}: the first kept`);
+              } else if (held !== JSON.stringify(expected)) offenders.push(label);
+              if ((folded.ephemeralOmitted === true) !== dropped)
+                offenders.push(`${label}: the drop noted`);
+            }
+          }
+      expect(offenders).toEqual([]);
+      expect(folds, 'the enumerated folds').toBe(ES5_FOLDS);
+
+      // A seeded sweep over drawn events beside it, for combinations of several
+      // coordinates the pairs above do not build. It claims no coverage: what is
+      // covered is what the design lists.
+      const draws = mulberry32(0xb5c2);
+      for (let trial = 0; trial < 100; trial += 1) {
+        const packets = packetsOf(
+          arbitraryEvents(draws, 3 + Math.floor(draws() * 8), { ephemeral: true }),
+          draws
+        );
+        const expected = keptOf(packets);
+        const dropped = packets.some(({ event }) => isEphemeral(event.kind));
+        for (let order = 0; order < 10; order += 1) {
+          const folded = foldAll(shuffled(packets, draws));
+          expect(heldOf(folded), `trial ${trial}`).toEqual(expected);
+          expect(folded.ephemeralOmitted === true, `trial ${trial}: the drop noted`).toBe(dropped);
+        }
+      }
+    },
+    ENUMERATED
+  );
 
   it('ES6: the fold is monotonic — replaying everything can only keep or replace', () => {
     const first = foldAll([ev({ kind: 1, id: 'r1' }), ev({ kind: 0, created_at: 1, id: 'm1' })]);
@@ -873,6 +1585,138 @@ describe('canonical event set', () => {
     expect(idsOf(superseded)).not.toContain('m1');
     expect(idsOf(superseded)).toContain('r1');
   });
+
+  // @contracts B5-C1
+  it(
+    'ES28: two revisions of one replaceable event fold to the newer, under the identity its class dictates',
+    () => {
+      // Every class that has a coordinate, at the edges of its range and in the
+      // middle: the two specials, the replaceable range, and the addressable one.
+      // Each with the `d` tag after another tag, so the identifier is the `d`
+      // tag's and not the first tag's.
+      const tags = [
+        ['title', 't'],
+        ['d', 's']
+      ];
+      const KINDS = [0, 3, 10000, 10002, 19999, 30000, 30023, 39999];
+      // **Each pair twice, with the ids in both orders**, so the newer winning is
+      // recency and neither id order: a fold that let the lower id win, or the
+      // higher, picks the older revision in one of the two.
+      const ORDERS = [
+        ['a-older', 'b-newer'],
+        ['y-older', 'x-newer']
+      ] as const;
+      for (const kind of KINDS) {
+        for (const [olderId, newerId] of ORDERS) {
+          const older = ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags });
+          const newer = ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags });
+          // The newer, whichever revision arrives first.
+          expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-${newerId}`]);
+          expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-${newerId}`]);
+          // And whichever relay each came from: the relay is not the coordinate.
+          const fromAnother = { ...newer, from: 'wss://another/', event: { ...newer.event } };
+          expect(idsOf(foldAll([older, fromAnother])), `${kind}: another relay`).toEqual([
+            `${kind}-${newerId}`
+          ]);
+        }
+        // Another author's revision is another event.
+        const older = ev({ kind, created_at: 10, id: `${kind}-a-older`, tags });
+        const theirs = ev({ kind, created_at: 20, id: `${kind}-theirs`, pubkey: 'p2', tags });
+        expect(idsOf(foldAll([older, theirs])).sort(), `${kind}: another author`).toEqual(
+          [`${kind}-a-older`, `${kind}-theirs`].sort()
+        );
+      }
+      // **And every kind's revisions in one set**, so the kind is part of the
+      // identity too: one author's lists of two replaceable kinds, or two
+      // addressable kinds under one `d`, are two coordinates and not one.
+      for (const [olderId, newerId] of ORDERS) {
+        const together = KINDS.flatMap((kind) => [
+          ev({ kind, created_at: 10, id: `${kind}-${olderId}`, tags }),
+          ev({ kind, created_at: 20, id: `${kind}-${newerId}`, tags })
+        ]);
+        expect(idsOf(foldAll(together)).sort(), 'one coordinate per kind').toEqual(
+          KINDS.map((kind) => `${kind}-${newerId}`).sort()
+        );
+      }
+      // Addressable: the `d` tag is part of the coordinate, so a revision under
+      // another `d` is another event — with the same first tag, so only the `d`
+      // tells them apart — and a revision with no `d` at all is the one whose `d`
+      // is empty. Replaceable: the `d` tag is not, so a revision that carries
+      // another one is still a revision.
+      const otherD = [
+        ['title', 't'],
+        ['d', 'other']
+      ];
+      for (const kind of [30000, 30023, 39999]) {
+        const here = ev({ kind, created_at: 20, id: `${kind}-here`, tags });
+        const elsewhere = ev({ kind, created_at: 10, id: `${kind}-elsewhere`, tags: otherD });
+        expect(idsOf(foldAll([here, elsewhere])).sort(), `${kind}: another d`).toEqual(
+          [`${kind}-elsewhere`, `${kind}-here`].sort()
+        );
+        const unnamed = ev({ kind, created_at: 10, id: `${kind}-unnamed`, tags: [] });
+        const emptyD = ev({ kind, created_at: 20, id: `${kind}-empty-d`, tags: [['d', '']] });
+        expect(idsOf(foldAll([unnamed, emptyD])), `${kind}: no d is the empty d`).toEqual([
+          `${kind}-empty-d`
+        ]);
+      }
+      for (const kind of [0, 10002]) {
+        const before = ev({ kind, created_at: 10, id: `${kind}-a-before`, tags });
+        const after = ev({ kind, created_at: 20, id: `${kind}-b-after`, tags: otherD });
+        expect(idsOf(foldAll([before, after])), `${kind}: d is not its identity`).toEqual([
+          `${kind}-b-after`
+        ]);
+      }
+      // A regular kind has no revisions: one author and one kind are two events.
+      for (const kind of [1, 9999, 40000]) {
+        const first = ev({ kind, created_at: 10, id: `${kind}-first` });
+        const second = ev({ kind, created_at: 20, id: `${kind}-second` });
+        expect(idsOf(foldAll([first, second])).sort(), `${kind}`).toEqual(
+          [`${kind}-first`, `${kind}-second`].sort()
+        );
+      }
+
+      // **And every enumerated case** (`helpers/design.ts`): each changes one
+      // dimension of a base event — kind, author, `d` value or shape, a tag name
+      // that only looks like `d`, content, `sig`, an unrelated tag, recency over
+      // every ordered pair of instants, a tie — and states whether the two share
+      // a coordinate. The oracle has to agree with that statement, and the fold
+      // with the oracle, in both orders and with the later one from another relay,
+      // each event compared whole.
+      const offenders: string[] = [];
+      let folds = 0;
+      for (const { label, events, sameCoordinate } of CASES) {
+        const owned = events.map((fields) => ev(fields).event);
+        const [first, second] = owned as [(typeof owned)[number], (typeof owned)[number]];
+        if ((coordinateOf(first) === coordinateOf(second)) !== sameCoordinate)
+          offenders.push(`${label}: the oracle`);
+        for (const elsewhere of [false, true]) {
+          const packets = packetsOfCase(events, elsewhere);
+          if (keptOf(packets).length !== (sameCoordinate ? 1 : 2)) offenders.push(`${label}: kept`);
+          // The oracle is given the fold order: two packets of one id are one
+          // event, and the first one folded is kept (0003).
+          for (const order of [packets, [...packets].reverse()]) {
+            folds += 1;
+            if (JSON.stringify(heldOf(foldAll(order))) !== JSON.stringify(keptOf(order)))
+              offenders.push(`${label}${elsewhere ? ', from another relay' : ''}`);
+          }
+        }
+      }
+      expect(offenders).toEqual([]);
+      expect(folds, 'the enumerated folds').toBe(ES28_FOLDS);
+
+      // A seeded sweep over drawn events beside it, for combinations of several
+      // coordinates the pairs above do not build. It claims no coverage: what is
+      // covered is what the design lists.
+      const rand = mulberry32(0xb5c1);
+      for (let trial = 0; trial < 300; trial += 1) {
+        const packets = packetsOf(arbitraryEvents(rand, 3 + Math.floor(rand() * 8)), rand);
+        const expected = keptOf(packets);
+        for (const order of [packets, [...packets].reverse(), shuffled(packets, rand)])
+          expect(heldOf(foldAll(order)), `trial ${trial}`).toEqual(expected);
+      }
+    },
+    ENUMERATED
+  );
 
   // `E6b` and `E13` are not here any more. Both were written against
   // `foldEvent(set, packet, { retain })`, and the fold takes no bound now:

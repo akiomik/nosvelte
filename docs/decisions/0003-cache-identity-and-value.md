@@ -1200,13 +1200,49 @@ rest on the kind ranges without stating them, so a port that widens `replaceable
 between the arms above while every row it can read stays satisfied. **So the ranges are written
 here**, because "NIP-01's ranges" is not a specification a re-implementer can follow and the one
 part they would miss is the first: `0` and `3` are **replaceable**; `[10000, 20000)` is replaceable;
-`[20000, 30000)` is ephemeral; `[30000, 40000)` is addressable; everything else is regular. **The
-ephemeral arm is a classification and not a refusal**, and a first draft of this sentence said "(and
-refused, `B7b`)" — wrong twice: the contract is `B7a`, not `B7b` (which is NIP-40 expiry), and what
-`B7a` refuses is a **descriptor that could select** an ephemeral event, at the boundary. An
-ephemeral event that arrives at the fold is classified like any other; dropping one silently there
-is the defect that made a request able to match an event and never show it. What no row can hold at
-all is a verifier a caller supplies, which is the residue this whole paragraph is about.
+`[20000, 30000)` is ephemeral; `[30000, 40000)` is addressable; `1`, `2`, `[4, 45)` and
+`[1000, 10000)` are regular. NIP-01 stops there, and **everything else — `[45, 1000)` and
+`[40000, 65535]` — is kept as a regular event by this library's decision**, listed below with the
+others NIP-01 leaves open. **The ephemeral arm is a classification and not a refusal**, and a first
+draft of this sentence said "(and refused, `B7b`)" — wrong twice: the contract is `B7a`, not `B7b`
+(which is NIP-40 expiry), and what `B7a` refuses is a **descriptor that could select** an ephemeral
+event, at the boundary. An ephemeral event that arrives at the fold is classified like any other;
+dropping one silently there is the defect that made a request able to match an event and never show
+it. What no row can hold at all is a verifier a caller supplies, which is the residue this whole
+paragraph is about.
+
+**What NIP-01 fixes and what this library decides, said apart** (2026-10-04). A review found the
+event set's own tests stating as protocol four rules NIP-01 does not make, and this record stating
+one of them; a port inherits the protocol from NIP-01 and these from here, so each is a decision:
+
+- **Kinds NIP-01 leaves unclassified are kept as regular events.** An event no rule replaces is kept
+  as itself, which loses nothing; treating one as replaceable would discard events on a guess.
+- **The equal-timestamp rule is applied to addressable revisions too.** NIP-01 states it for
+  replaceable events ("the event with the lowest id … should be retained"); using it for every class
+  with a coordinate is what makes a fold order-independent (`B5-C2`) without a second rule.
+- **An addressable coordinate reads the first `d` tag, and a missing `d` tag — or one with no value
+  — is the empty value.** NIP-01 names the `d` value but not which of several, nor what an event
+  without one has; reading the first and taking none as empty gives every addressable event exactly
+  one identifier.
+- **Every string these rules read is compared exactly.** NIP-01 describes tags as "arbitrary string
+  arrays" and gives no folding, so case, Unicode form and whitespace all distinguish two values.
+- **Two packets with one id are one event, and the first one folded is kept whole.** The id is the
+  hash of every field these rules read, but not of `sig` — BIP-340 admits several valid signatures
+  for one id — nor of `ots` (0002). The fold keeps the first packet of an id it folds and returns
+  the set unchanged for a later one, so a packet that differs only there is a replay (`B5-C3`). Why:
+  a later packet carries no more authority than the first — a lower signature is not a better one,
+  and `ots` is not covered by the signature at all — so replacing the event would publish a change,
+  and wake every reader, with nothing to show for it. "Folded", not "arrived": verification runs
+  between the wire and the fold and can reorder packets. It is a rule about which packet is held,
+  and promises nothing about an id the set no longer holds. The price: which valid signature and
+  which `ots` a set shows follows the fold order, so the order independence `B5-C2` contracts is of
+  everything the id commits to; and a packet that carries an `ots` proof does not replace one
+  without. NIP-03 now carries attestations as separate kind-1040 events, so a proof store, if one is
+  wanted, belongs beside the event set and keyed by id. All of this assumes the id is the hash of
+  the fields, which admission does not check yet (#138).
+
+The event set's tests carry the same split: their oracle lists each rule with its source, a sentence
+of NIP-01 or this paragraph.
 
 ### Consequences
 
