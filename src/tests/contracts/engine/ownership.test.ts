@@ -31,18 +31,18 @@
  */
 import type Nostr from 'nostr-typedef';
 import { QueryClient } from 'tanstack-svelte-query-v6';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import { createAttemptRegistry } from '$lib/v1/attempt.js';
 import type { OwnedPacket, ReqEvent } from '$lib/v1/event.js';
-import { isOwnedPacket, ownEvent, ownPacket } from '$lib/v1/event.js';
+import { ownEvent, ownPacket } from '$lib/v1/event.js';
 import { emptyEventSet, foldEvent } from '$lib/v1/eventset.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
 import {
   consumerDiagnostics,
-  REFUSES_A_WRITE,
+  judgeWrites,
   variantsWith,
   writesThrough
 } from './helpers/declarations.js';
@@ -55,6 +55,19 @@ import {
   respondWithEvent
 } from './helpers/relay.js';
 import { flush, mount } from './helpers/runes.svelte.js';
+
+/**
+ * Every packet the ownership boundary returned, so an arm can ask whether what
+ * the cache holds is one of them by identity — rather than through
+ * `isOwnedPacket`, which is the predicate under test and would answer for a
+ * mutation of itself. The wrapper delegates: the real factory runs and
+ * registers what it makes, so what is mocked is the bookkeeping, as in
+ * `transportkey.test.ts`.
+ */
+vi.mock('$lib/v1/event.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/v1/event.js')>();
+  return { ...actual, ownPacket: vi.fn(actual.ownPacket) };
+});
 
 const attempts = createAttemptRegistry();
 
@@ -131,15 +144,21 @@ function reachable(root: unknown): Set<object> {
 
 /**
  * What makes `reachable` exact and what the boundary made unchangeable: every
- * object reachable from `root` is plain, frozen data — no accessor, whose
- * getter's closure reflection cannot read, no symbol key, no prototype but the
- * built-in object and array ones, and nothing left open to a write. Returns
- * what breaks that, by path.
+ * object reachable from `root` is plain, frozen data — no accessor and no
+ * function, whose closures reflection cannot read, no symbol key, no prototype
+ * but the built-in object and array ones, and nothing left open to a write.
+ * Returns what breaks that, by path.
  */
 function plainDataBreaches(root: unknown): string[] {
   const breaches: string[] = [];
   const seen = new Set<object>();
   const visit = (value: unknown, path: string): void => {
+    // A function is not data: what it reaches is in a closure reflection
+    // cannot read, and `toJSON` is called by every serialisation.
+    if (typeof value === 'function') {
+      breaches.push(`${path} is a function`);
+      return;
+    }
     if (typeof value !== 'object' || value === null || seen.has(value)) return;
     seen.add(value);
     const prototype: unknown = Object.getPrototypeOf(value);
@@ -164,6 +183,16 @@ function plainDataBreaches(root: unknown): string[] {
   return breaches;
 }
 
+/** `value`, frozen at every level: a forgery of what the boundary makes. */
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null) {
+    for (const key of Reflect.ownKeys(value))
+      deepFreeze((value as Record<PropertyKey, unknown>)[key]);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 /**
  * What a consumer imports: the published event and the handle from the public
  * entry, never the module behind them.
@@ -171,31 +200,33 @@ function plainDataBreaches(root: unknown): string[] {
 const PUBLISHED = `import type * as Published from '$lib/v1/public-entry.js';`;
 
 /**
- * The internal seam's refusals: the wire's packet handed to the fold, directly
- * and as an owned packet rebuilt around the wire's event — the spread keeps
- * whatever brand the wrapper carries and swaps its payload.
+ * The internal seam's refusals, as calls to the fold — the contract is its
+ * parameter, not the alias it is spelled with: the wire's packet handed to it,
+ * directly and as an owned packet rebuilt around the wire's event (the spread
+ * keeps whatever brand the wrapper carries and swaps its payload), and an
+ * owned event re-spread or copied.
  */
 const SMUGGLES = `import type { EventPacket } from 'rx-nostr';
-import type { OwnedPacket } from '$lib/v1/event.js';
 import { ownPacket } from '$lib/v1/event.js';
 import { emptyEventSet, foldEvent } from '$lib/v1/eventset.js';
 declare const wire: EventPacket;
 const owned = ownPacket(wire);
 if (owned !== undefined) foldEvent(emptyEventSet, owned);
-const direct: OwnedPacket = wire; // refused
-void direct;
 foldEvent(emptyEventSet, wire); // refused
 if (owned !== undefined) {
-  const rebuilt: OwnedPacket = { ...owned, ...wire }; // refused
-  void rebuilt;
-  const swapped: OwnedPacket = { ...owned, event: wire.event }; // refused
-  void swapped;
-  const respread: OwnedPacket = { event: { ...owned.event, ...wire.event } }; // refused
-  void respread;
-  const copied: OwnedPacket = { event: { ...owned.event } }; // refused
-  void copied;
+  foldEvent(emptyEventSet, { ...owned, ...wire }); // refused
+  foldEvent(emptyEventSet, { ...owned, event: wire.event }); // refused
+  foldEvent(emptyEventSet, { event: { ...owned.event, ...wire.event } }); // refused
+  foldEvent(emptyEventSet, { event: { ...owned.event } }); // refused
 }
 `;
+
+/**
+ * "Not assignable": to a parameter (TS2345), or at a member of an argument
+ * (TS2322) — each with its `exactOptionalPropertyTypes` spelling, TS2379 and
+ * TS2375, which is what this project's configuration reports.
+ */
+const NOT_ASSIGNABLE: ReadonlySet<number> = new Set([2322, 2345, 2375, 2379]);
 
 /** The lines of `source` that end `// refused`, 1-based. */
 const refusedLines = (source: string): number[] =>
@@ -369,6 +400,7 @@ describe('the event a consumer holds is this library’s own', () => {
       // type — as the entry exports it and as the handle hands it out — refuses
       // every write a consumer could attempt, and the fold refuses the wire's
       // packet and any packet or event rebuilt around it.
+      vi.mocked(ownPacket).mockClear();
       const { rxNostr, server } = createTestRelay(nextUrl());
       const options = () => ({
         verifyEvent: acceptAnyEvent,
@@ -416,8 +448,11 @@ describe('the event a consumer holds is this library’s own', () => {
       unchanged(second.value, 'the second hook after a refresh');
 
       // **What the cache actually stores**, read out of the query cache rather
-      // than off a separate call to the factory: each packet is the object the
-      // boundary made, its only key is `event`, and it is plain data.
+      // than off a separate call to the factory: each packet is, by identity,
+      // an object the boundary returned; its only key is `event`; it is plain,
+      // frozen data; and its event cannot be replaced — a registered packet
+      // holding somebody else's event would pass every question about who
+      // made it.
       const stored = client
         .getQueryCache()
         .getAll()
@@ -428,10 +463,40 @@ describe('the event a consumer holds is this library’s own', () => {
             : [];
         });
       expect(stored.length, 'the cache holds the event').toBeGreaterThan(0);
+      // The plain-data check's own control: an object carrying each thing it
+      // refuses is reported for each, so an empty answer below is the stored
+      // packet answering.
+      const impure = Object.freeze({
+        fn: () => 0,
+        get accessor() {
+          return 0;
+        },
+        [Symbol('key')]: 0,
+        own: Object.freeze(Object.create({}) as object),
+        open: {}
+      });
+      expect(plainDataBreaches(impure), 'the plain-data check’s control').toEqual(
+        expect.arrayContaining([
+          'stored.fn is a function',
+          'stored.accessor is an accessor',
+          'stored has a symbol key',
+          'stored.own has a prototype of its own',
+          'stored.open is not frozen'
+        ])
+      );
+      const made = new Set<unknown>(vi.mocked(ownPacket).mock.results.map((one) => one.value));
       for (const packet of stored) {
-        expect(isOwnedPacket(packet), 'a stored packet the boundary made').toBe(true);
+        expect(made.has(packet), 'a stored packet is one the boundary returned').toBe(true);
         expect(Reflect.ownKeys(packet as object), 'a stored packet’s keys').toEqual(['event']);
         expect(plainDataBreaches(packet), 'a stored packet is plain data').toEqual([]);
+        const held = (packet as OwnedPacket).event;
+        const foreign = { ...held };
+        expect(Reflect.set(packet as object, 'event', foreign), 'the payload replaced').toBe(false);
+        expect(
+          Reflect.defineProperty(packet as object, 'event', { value: foreign }),
+          'the payload redefined'
+        ).toBe(false);
+        expect((packet as OwnedPacket).event, 'the payload a stored packet holds').toBe(held);
       }
       first.destroy();
       second.destroy();
@@ -456,11 +521,6 @@ describe('the event a consumer holds is this library’s own', () => {
       expect(owned).toBeDefined();
       expect(Reflect.ownKeys(owned ?? {})).toEqual(['event']);
       expect(plainDataBreaches(owned), 'what is stored is plain data').toEqual([]);
-      // And the payload of the boundary's own object cannot be replaced: a
-      // registered packet holding the wire's event would pass every question
-      // about who made it.
-      expect(Reflect.set(owned as object, 'event', wire.event), 'the payload replaced').toBe(false);
-      expect(Reflect.defineProperty(owned as object, 'event', { value: wire.event })).toBe(false);
       expect(owned?.event).not.toBe(wire.event);
       const theirs = reachable(wire);
       expect(
@@ -471,8 +531,9 @@ describe('the event a consumer holds is this library’s own', () => {
       // The compile half, answered by the compiler. Every write a consumer
       // could attempt through the published event — each property the type
       // checker gives it, the tag list and each tag — is refused, for being
-      // read-only; and the internal seam refuses the wire's packet, directly
-      // and rebuilt around an owned one.
+      // read-only, judged on the type the compiler gives each line's receiver;
+      // and the fold refuses the wire's packet, directly and rebuilt around an
+      // owned one.
       // The event is asked about as the named type and as the handle hands it
       // out — each variant of the handle's state that carries events — since
       // the two are separate declarations that could drift apart.
@@ -488,19 +549,9 @@ describe('the event a consumer holds is this library’s own', () => {
       for (const eventType of eventTypes) {
         const writes = writesThrough(PUBLISHED, eventType);
         expect(writes.length, `${eventType}: the probe enumerated the event`).toBeGreaterThan(9);
-        const probe = [PUBLISHED, `declare const value: ${eventType};`, ...writes].join('\n');
-        const offset = 3;
-        const answered = consumerDiagnostics(probe);
         expect(
-          writes.filter(
-            (_write, at) =>
-              !answered.some((one) => one.line === at + offset && REFUSES_A_WRITE.has(one.code))
-          ),
-          `${eventType}: a write through the published event the types let through`
-        ).toEqual([]);
-        expect(
-          answered.filter((one) => one.line < offset || !REFUSES_A_WRITE.has(one.code)),
-          `${eventType}: the probe compiles apart from its refused writes`
+          judgeWrites(PUBLISHED, eventType, writes).filter((one) => one.verdict !== 'refused'),
+          `${eventType}: a write through the published event the types do not refuse`
         ).toEqual([]);
       }
 
@@ -522,9 +573,32 @@ describe('the event a consumer holds is this library’s own', () => {
         ])
       );
       expect(
-        consumerDiagnostics([`declare const value: ${mutable};`, ...open].join('\n')),
+        judgeWrites('', mutable, open).filter((one) => one.verdict !== 'compiles'),
         'a write through a mutable type was refused'
       ).toEqual([]);
+      // The judge's own control: a refusal that one constituent of a union
+      // gives is not counted. A leading rest makes a tuple's position 0 the
+      // union of a mutable tag and a read-only one, though the walk derives it
+      // from one type argument; the `push` onto it is TS2339 for the read-only
+      // half and compiles for the other once a consumer narrows.
+      const variadic = "{ t: readonly [...['t', ...string[]][], readonly ['p', ...string[]]] }";
+      expect(judgeWrites('', variadic, writesThrough('', variadic))).toContainEqual({
+        write: 'value.t![0]!.push(value.t![0]![0]!);',
+        verdict: 'through a union'
+      });
+      // And its exactness: a diagnostic that is not a read-only refusal is not
+      // counted as one — a `push` onto something that is no list at all, and
+      // an assignment whose type is wrong.
+      expect(
+        judgeWrites('', '{ s: { readonly n: number }; a: string }', [
+          'value.s.push(1);',
+          'value.a = 1;'
+        ]),
+        'the judge’s exactness control'
+      ).toEqual([
+        { write: 'value.s.push(1);', verdict: 'not a refusal: TS2339' },
+        { write: 'value.a = 1;', verdict: 'not a refusal: TS2322' }
+      ]);
       // And where the probe cannot certify a type it throws, rather than
       // return having emitted nothing for it — each of those is asked for too.
       expect(() => writesThrough('', '{ a: string[] | number }')).toThrow(/is a union/);
@@ -533,6 +607,10 @@ describe('the event a consumer holds is this library’s own', () => {
       ).toThrow(/a symbol member the probe cannot name/);
       expect(() => writesThrough('', '{ a: { b: { c: { d: { e: string[] } } } } }')).toThrow(
         /is deeper than 4/
+      );
+      expect(() => writesThrough('', '{ a: unknown }')).toThrow(/is unknown/);
+      expect(() => writesThrough('', '{ a: object }')).toThrow(
+        /has nothing the probe can enumerate/
       );
 
       // And at run time, past any type: a clone of an owned event is typed owned
@@ -551,16 +629,35 @@ describe('the event a consumer holds is this library’s own', () => {
         () => foldEvent(emptyEventSet, { ...wire, ...(owned as OwnedPacket) }),
         'an owned event wrapped in the wire’s packet'
       ).toThrow(TypeError);
+      // **Provenance, not any property the boundary's object also has.** A
+      // frozen wrapper around the wire's event, and a forgery that is the owned
+      // packet in every respect but who made it: a deep-frozen structural
+      // copy, plain data keyed `event` alone, equal to it.
+      const forgery = deepFreeze(structuredClone(owned as OwnedPacket));
+      expect(forgery, 'the forgery is equal to the owned packet').toEqual(owned);
+      expect(Reflect.ownKeys(forgery)).toEqual(['event']);
+      expect(plainDataBreaches(forgery), 'the forgery is plain, frozen data').toEqual([]);
+      expect(
+        () => foldEvent(emptyEventSet, forgery),
+        'a deep-frozen copy of an owned packet'
+      ).toThrow(TypeError);
+      expect(
+        () =>
+          foldEvent(emptyEventSet, Object.freeze({ event: wire.event }) as unknown as OwnedPacket),
+        'the wire’s event in a frozen wrapper'
+      ).toThrow(TypeError);
       expect(() => foldEvent(emptyEventSet, owned as OwnedPacket)).not.toThrow();
 
       const smuggled = refusedLines(SMUGGLES);
       const said = consumerDiagnostics(SMUGGLES);
       expect(
-        smuggled.filter((line) => !said.some((one) => one.line === line)),
+        smuggled.filter(
+          (line) => !said.some((one) => one.line === line && NOT_ASSIGNABLE.has(one.code))
+        ),
         'a packet the fold would take that this library did not make'
       ).toEqual([]);
       expect(
-        said.filter((one) => !smuggled.includes(one.line)),
+        said.filter((one) => !smuggled.includes(one.line) || !NOT_ASSIGNABLE.has(one.code)),
         'the smuggling file compiles apart from the refused lines'
       ).toEqual([]);
     }

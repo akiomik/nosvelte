@@ -64,15 +64,6 @@ export function consumerDiagnostics(source: string): ConsumerDiagnostic[] {
 }
 
 /**
- * The diagnostics that mean "this cannot be written": a read-only property
- * (TS2540), an index signature that only permits reading (TS2542), and a
- * mutating method a read-only array does not have (TS2339). Any other
- * diagnostic on a write — a value possibly undefined, a type mismatch — is not
- * a refusal, and is reported as one rather than counted.
- */
-export const REFUSES_A_WRITE: ReadonlySet<number> = new Set([2540, 2542, 2339]);
-
-/**
  * Every write a consumer could attempt through a value of `typeText`, resolved
  * in a consumer's file after `imports`: an assignment to each property, index
  * signature and well-known-symbol member the type checker gives the type —
@@ -86,7 +77,12 @@ export const REFUSES_A_WRITE: ReadonlySet<number> = new Set([2540, 2542, 2339]);
  * A union is refused rather than walked: a write to a member some constituents
  * lack is an error for that reason, which would read as a refusal. Walk each
  * variant instead ({@link variantsWith}). So is a symbol member the probe
- * cannot name, and a value with members past `depth`.
+ * cannot name, a value with members past `depth`, an `unknown`, and an object
+ * type with nothing to enumerate.
+ *
+ * What it does not judge is whether a write was refused: that is
+ * {@link judgeWrites}, which asks the compiler about the expressions the walk
+ * wrote rather than the types it derived them from.
  */
 export function writesThrough(imports: string, typeText: string, depth = 4): string[] {
   const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
@@ -98,19 +94,24 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
   if (declaration === undefined) throw new Error('the probe declared no value');
   const writes: string[] = [];
   const isIdentifier = (name: string): boolean => /^[A-Za-z_$][\w$]*$/.test(name);
+  // The type a `!` leaves — except that `NonNullable<unknown>` is `{}`, which
+  // would hide an `unknown` behind an empty object.
+  const present = (type: ts.Type): ts.Type =>
+    type.getFlags() & ts.TypeFlags.Unknown ? type : checker.getNonNullableType(type);
 
   const visit = (expression: string, type: ts.Type, level: number): void => {
     const flags = type.getFlags();
     // **`any` is not "nothing writable".** It has no properties to enumerate,
     // so it used to end the walk as if it had been read; a write through it
     // compiles, and this one is emitted so that it does — and is reported as a
-    // write the types let through. `unknown` cannot be written into without a
-    // narrowing, so it does end the walk.
+    // write the types let through. `unknown` has nothing to write through
+    // until a consumer narrows it, and a narrowing can make it anything — so
+    // it is reported too, by throwing, rather than certified.
     if (flags & ts.TypeFlags.Any) {
       writes.push(`${expression}.anything = ${expression};`);
       return;
     }
-    if (flags & ts.TypeFlags.Unknown) return;
+    if (flags & ts.TypeFlags.Unknown) throw new Error(`writesThrough: ${expression} is unknown`);
     if (
       flags &
       (ts.TypeFlags.StringLike |
@@ -120,7 +121,8 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
         ts.TypeFlags.ESSymbolLike |
         ts.TypeFlags.Undefined |
         ts.TypeFlags.Null |
-        ts.TypeFlags.Void)
+        ts.TypeFlags.Void |
+        ts.TypeFlags.Never)
     )
       return;
     // Past `depth`, a value with anything inside it is reported rather than
@@ -147,6 +149,7 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
     // has an `add` to call. So a callable value is emitted as a line that
     // compiles exactly when it is callable, which reads as a write the types
     // let through. Data has no such member.
+    const emitted = writes.length;
     if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0)
       writes.push(`void ${expression}.call;`);
     for (const property of checker.getPropertiesOfType(type)) {
@@ -172,7 +175,7 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
           ? `${expression}.${name}`
           : `${expression}[${JSON.stringify(name)}]`;
       writes.push(`${access} = ${access}!;`);
-      visit(`${access}!`, checker.getNonNullableType(checker.getTypeOfSymbol(property)), level + 1);
+      visit(`${access}!`, present(checker.getTypeOfSymbol(property)), level + 1);
     }
     // And a write through each index signature, under a key the type checker
     // cannot see — a dynamic key is a write a named property list never shows.
@@ -180,11 +183,134 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
       const key =
         info.keyType.getFlags() & ts.TypeFlags.NumberLike ? '(0 as number)' : "('k' as string)";
       writes.push(`${expression}[${key}] = ${expression}[${key}]!;`);
-      visit(`${expression}[${key}]!`, checker.getNonNullableType(info.type), level + 1);
+      visit(`${expression}[${key}]!`, present(info.type), level + 1);
     }
+    // An object type the walk found nothing in — `object`, `{}`, a type
+    // parameter — is not an empty one: a consumer narrows it to whatever they
+    // like. Returning would certify it as read.
+    if (writes.length === emitted)
+      throw new Error(`writesThrough: ${expression} has nothing the probe can enumerate`);
   };
   visit('value', checker.getTypeAtLocation(declaration.name), 0);
   return writes;
+}
+
+/** What the compiler said about one write the probe attempted. */
+export interface WriteVerdict {
+  readonly write: string;
+  /**
+   * `refused`: the compiler refused it with the code that kind of write gets
+   * from a read-only receiver. `compiles`: no diagnostic. `through a union`: the
+   * receiver's type, as the compiler gives the expression, is a union, so a
+   * refusal could be one constituent's. Otherwise the diagnostic that is not
+   * a refusal.
+   */
+  readonly verdict: 'refused' | 'compiles' | 'through a union' | `not a refusal: TS${number}`;
+}
+
+/** An assignment to a property is refused as read-only (TS2540). */
+const BY_PROPERTY: ReadonlySet<number> = new Set([2540]);
+/** To an element: a read-only tuple position (TS2540) or index signature (TS2542). */
+const BY_ELEMENT: ReadonlySet<number> = new Set([2540, 2542]);
+/**
+ * A `push` is refused by the receiver having none (TS2339) — which is what any
+ * receiver without a `push` gets, so it counts only on a read-only array or
+ * tuple.
+ */
+const BY_PUSH: ReadonlySet<number> = new Set([2339]);
+
+/**
+ * Each of `writes` — as {@link writesThrough} emits them — compiled after
+ * `imports` against a `value` of `typeText`, and judged by what the compiler
+ * says about that line's own expression.
+ *
+ * **The receiver's type is the compiler's, not the walk's.** The walk derives
+ * each expression from a type argument, and a tuple's type arguments are not
+ * its positions: in `readonly [...A[], B]` position 0 is `A | B`. A refusal on
+ * a union receiver can be one constituent's — `push` is TS2339 for the
+ * read-only half and compiles for the other after a narrowing — so it is not
+ * counted. And a refusal is only the code that kind of write gets from a
+ * read-only receiver: TS2339 on a member the walk believed in and the
+ * receiver does not have is a mismatch, not a refusal.
+ */
+export function judgeWrites(
+  imports: string,
+  typeText: string,
+  writes: readonly string[]
+): WriteVerdict[] {
+  const { program, consumer } = programOver(
+    `${imports}\ndeclare const value: ${typeText};\n${writes.join('\n')}\n`
+  );
+  const checker = program.getTypeChecker();
+  const diagnostics = ts.getPreEmitDiagnostics(program, consumer);
+  const statements = [...consumer.statements];
+  const at = statements.findIndex(
+    (statement) =>
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (one) => ts.isIdentifier(one.name) && one.name.text === 'value'
+      )
+  );
+  const declared = statements[at];
+  if (declared === undefined) throw new Error('judgeWrites: the probe declared no value');
+  const prelude = diagnostics.find((one) => (one.start ?? 0) < declared.end);
+  if (prelude !== undefined)
+    throw new Error(
+      `judgeWrites: the probe's prelude does not compile: ${ts.flattenDiagnosticMessageText(prelude.messageText, '\n')}`
+    );
+  const attempted = statements.slice(at + 1);
+  if (attempted.length !== writes.length)
+    throw new Error('judgeWrites: the writes are not one statement each');
+  const isReadonlyList = (type: ts.Type): boolean =>
+    (checker.isTupleType(type) && ((type as ts.TypeReference).target as ts.TupleType).readonly) ||
+    (checker.isArrayType(type) && type.getSymbol()?.getName() === 'ReadonlyArray');
+
+  return attempted.map((statement, index) => {
+    const write = writes[index] as string;
+    const expression = ts.isExpressionStatement(statement) ? statement.expression : undefined;
+    let receiver: ts.Expression;
+    let refusedBy: ReadonlySet<number>;
+    let push = false;
+    if (
+      expression !== undefined &&
+      ts.isBinaryExpression(expression) &&
+      expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      (ts.isPropertyAccessExpression(expression.left) ||
+        ts.isElementAccessExpression(expression.left))
+    ) {
+      receiver = expression.left.expression;
+      refusedBy = ts.isPropertyAccessExpression(expression.left) ? BY_PROPERTY : BY_ELEMENT;
+    } else if (
+      expression !== undefined &&
+      ts.isCallExpression(expression) &&
+      ts.isPropertyAccessExpression(expression.expression) &&
+      expression.expression.name.text === 'push'
+    ) {
+      receiver = expression.expression.expression;
+      refusedBy = BY_PUSH;
+      push = true;
+    } else if (
+      expression !== undefined &&
+      ts.isVoidExpression(expression) &&
+      ts.isPropertyAccessExpression(expression.expression)
+    ) {
+      // A line that reports: it is written to compile, and nothing refuses it.
+      receiver = expression.expression.expression;
+      refusedBy = new Set();
+    } else throw new Error(`judgeWrites: ${write} is not a write the probe emits`);
+
+    const type = checker.getTypeAtLocation(receiver);
+    if (type.isUnion()) return { write, verdict: 'through a union' };
+    const said = diagnostics.filter(
+      (one) =>
+        one.start !== undefined && one.start >= statement.getStart() && one.start < statement.end
+    );
+    if (said.length === 0) return { write, verdict: 'compiles' };
+    const other = said.find((one) => !refusedBy.has(one.code) || (push && !isReadonlyList(type)));
+    return other === undefined
+      ? { write, verdict: 'refused' }
+      : { write, verdict: `not a refusal: TS${other.code}` };
+  });
 }
 
 /**
