@@ -29,11 +29,13 @@
  *
  * Port band 9820-9859, as the spike's suite had it.
  */
+import { readFileSync } from 'node:fs';
 import { types } from 'node:util';
 
 import type Nostr from 'nostr-typedef';
 import type { EventPacket } from 'rx-nostr';
 import { QueryClient } from 'tanstack-svelte-query-v6';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
@@ -209,6 +211,94 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+/**
+ * What stands before the fold's ownership check, read off the source of
+ * `eventset.ts`.
+ *
+ * **"The check comes first" is a fact about order, and order is in the
+ * source.** A run-time observer cannot see every read: `Array.isArray`,
+ * `typeof` and an identity lookup touch an object without any proxy trap. So
+ * the order is asked of the syntax tree:
+ * - the exported `foldEvent` is the only declaration of that name;
+ * - no parameter has a default or a pattern, which would run first;
+ * - its first statement is `if (!isOwnedPacket(packet)) throw …`, with no
+ *   `else`;
+ * - `isOwnedPacket` is the one imported from `./event.js`, declared nowhere
+ *   in the file.
+ *
+ * What the check does is not read here. The forgeries measure that.
+ */
+function beforeTheCheck(source: string): string[] {
+  const file = ts.createSourceFile('eventset.ts', source, ts.ScriptTarget.Latest, true);
+  const breaches: string[] = [];
+  const folds = file.statements.filter(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === 'foldEvent'
+  );
+  const [fold] = folds;
+  if (folds.length !== 1 || fold === undefined)
+    return [`${folds.length} declarations of foldEvent`];
+  if (!fold.modifiers?.some((one) => one.kind === ts.SyntaxKind.ExportKeyword))
+    breaches.push('foldEvent is not exported');
+  for (const parameter of fold.parameters) {
+    if (!ts.isIdentifier(parameter.name)) breaches.push('a parameter is a pattern');
+    if (parameter.initializer !== undefined)
+      breaches.push(`a default for ${parameter.name.getText()}`);
+  }
+  const packet = fold.parameters[1]?.name.getText();
+  const first = fold.body?.statements[0];
+  const condition = first !== undefined && ts.isIfStatement(first) ? first.expression : undefined;
+  const call =
+    condition !== undefined &&
+    ts.isPrefixUnaryExpression(condition) &&
+    condition.operator === ts.SyntaxKind.ExclamationToken &&
+    ts.isCallExpression(condition.operand)
+      ? condition.operand
+      : undefined;
+  const isTheCheck =
+    first !== undefined &&
+    ts.isIfStatement(first) &&
+    call !== undefined &&
+    ts.isIdentifier(call.expression) &&
+    call.expression.text === 'isOwnedPacket' &&
+    call.arguments.length === 1 &&
+    call.arguments[0]?.getText() === packet &&
+    ts.isThrowStatement(first.thenStatement) &&
+    first.elseStatement === undefined;
+  if (!isTheCheck)
+    breaches.push(`the first statement is ${first?.getText().split('\n')[0] ?? 'nothing'}`);
+  const imported = file.statements.some(
+    (statement) =>
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text === './event.js' &&
+      statement.importClause?.isTypeOnly !== true &&
+      statement.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(statement.importClause.namedBindings) &&
+      statement.importClause.namedBindings.elements.some(
+        (one) => one.name.text === 'isOwnedPacket' && one.propertyName === undefined
+      )
+  );
+  if (!imported) breaches.push('isOwnedPacket is not imported from ./event.js');
+  let redeclared = 0;
+  const walk = (node: ts.Node): void => {
+    if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isVariableDeclaration(node) ||
+        ts.isParameter(node) ||
+        ts.isClassDeclaration(node)) &&
+      node.name !== undefined &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === 'isOwnedPacket'
+    )
+      redeclared += 1;
+    ts.forEachChild(node, walk);
+  };
+  walk(file);
+  if (redeclared > 0) breaches.push('isOwnedPacket is redeclared in the file');
+  return breaches;
 }
 
 /**
@@ -661,10 +751,10 @@ describe('the event a consumer holds is this library’s own', () => {
       // `structuredClone` is typed as the identity, and a spread keeps an owned
       // event typed owned. So the forgeries are the whole product of what one
       // can vary — whose event it holds (the owned event itself, a deep-frozen
-      // copy of it, a plain copy, the wire's), whether the event is alone or
-      // beside the transport's fields, and whether the packet is frozen — and
-      // no property the boundary's object also has can stand in for having
-      // made it.
+      // copy of it, a plain copy, the wire's), what carries it (an object
+      // holding the event alone, one beside the transport's fields, an array
+      // holding it), and whether the packet is frozen — and no property the
+      // boundary's object also has can stand in for having made it.
       const forgeriesOf = (wirePacket: EventPacket, basis: OwnedPacket) => {
         const carried: Record<string, unknown> = {
           'the owned event itself': basis.event,
@@ -674,7 +764,8 @@ describe('the event a consumer holds is this library’s own', () => {
         };
         const shaped: Record<string, (event: unknown) => object> = {
           alone: (event) => ({ event }),
-          'beside the transport’s fields': (event) => ({ ...wirePacket, event })
+          'beside the transport’s fields': (event) => ({ ...wirePacket, event }),
+          'on an array': (event) => Object.assign([], { event })
         };
         return Object.entries(carried).flatMap(([what, event]) =>
           Object.entries(shaped).flatMap(([how, shape]) =>
@@ -687,7 +778,7 @@ describe('the event a consumer holds is this library’s own', () => {
       };
       const ownedPacket = owned as OwnedPacket;
       const forgeries = forgeriesOf(wire, ownedPacket);
-      expect(forgeries, 'every cell of the product').toHaveLength(16);
+      expect(forgeries, 'every cell of the product').toHaveLength(24);
       // The cell that differs from the owned packet in nothing but who made it.
       const perfect = forgeries.find(
         (one) => one.name === 'a deep-frozen copy of it, alone, frozen'
@@ -727,29 +818,41 @@ describe('the event a consumer holds is this library’s own', () => {
         }
       };
       type Outcome = 'stored alongside' | 'replaces the incumbent' | 'unchanged' | 'flagged';
+      // Judged against what the set held before any fold, copied out first:
+      // the set's own map is the thing a fold could change in place, so it
+      // cannot also be the record of what it held. Every outcome requires the
+      // input to be as it was, and every packet the fold does not replace to
+      // be where it was, as the very object it was.
       const shows = (
         outcome: Outcome,
+        held: readonly (readonly [string, unknown])[],
         before: CachedEventSet,
         after: CachedEventSet,
         basis: OwnedPacket,
         incumbent: OwnedPacket | undefined
       ): boolean => {
-        if (outcome === 'unchanged') return after === before;
+        const keeps = (entries: ReadonlyMap<string, unknown>, except?: unknown): boolean =>
+          held.every(([key, packet]) => packet === except || entries.get(key) === packet);
+        const intact = before.entries.size === held.length && keeps(before.entries);
+        if (outcome === 'unchanged') return intact && after === before;
         if (outcome === 'flagged')
           return (
+            intact &&
             before.ephemeralOmitted !== true &&
             after.ephemeralOmitted === true &&
             after.entries === before.entries
           );
-        const expected = new Set<unknown>(before.entries.values());
-        if (outcome === 'replaces the incumbent') expected.delete(incumbent);
-        expected.add(basis);
-        const held = new Set<unknown>(after.entries.values());
-        return (
-          after !== before &&
-          held.size === expected.size &&
-          [...expected].every((one) => held.has(one))
-        );
+        const values: unknown[] = [...after.entries.values()];
+        return outcome === 'replaces the incumbent'
+          ? intact &&
+              after.entries.size === held.length &&
+              keeps(after.entries, incumbent) &&
+              values.includes(basis) &&
+              !values.includes(incumbent)
+          : intact &&
+              after.entries.size === held.length + 1 &&
+              keeps(after.entries) &&
+              values.includes(basis);
       };
       const classes: Record<string, { kind: number; tags: string[][]; byVersion: boolean }> = {
         'a regular event': { kind: 1, tags: [['t', 'x']], byVersion: false },
@@ -874,9 +977,10 @@ describe('the event a consumer holds is this library’s own', () => {
       ]);
       expect(paths, 'every cell of the paths').toHaveLength(52);
       for (const { path, set, wire: wirePacket, basis, incumbent, outcome } of paths) {
+        const held = [...set.entries];
         expect(attempt(set, basis), `${path}: the owned packet`).toBe('folded');
         expect(
-          shows(outcome, set, foldEvent(set, basis), basis, incumbent),
+          shows(outcome, held, set, foldEvent(set, basis), basis, incumbent),
           `${path}: the owned packet ${outcome}`
         ).toBe(true);
         expect(
@@ -887,57 +991,33 @@ describe('the event a consumer holds is this library’s own', () => {
         ).toEqual([]);
       }
 
-      // **And the check comes first.** The paths above are the ones there are
-      // today; a check that sits after any of them — one listed, or one added
-      // later — has to read the set or the packet to choose that path first.
-      // So each forgery is also handed to the fold with the set and the packet
-      // behind proxies that record every read, and its refusal must have read
-      // nothing of either. The controls: an owned packet folded through the
-      // same recording set is read, and a read of a recorded packet is
-      // recorded — so an empty record is the fold answering, not a blind
-      // recorder.
-      const read: string[] = [];
-      const recording = <T extends object>(target: T, name: string): T =>
-        new Proxy(target, {
-          get: (inner, key, receiver) => {
-            read.push(`${name}.${String(key)}`);
-            return Reflect.get(inner, key, receiver) as unknown;
-          },
-          has: (inner, key) => {
-            read.push(`${name} has ${String(key)}`);
-            return Reflect.has(inner, key);
-          },
-          ownKeys: (inner) => {
-            read.push(`${name}'s keys`);
-            return Reflect.ownKeys(inner);
-          },
-          getOwnPropertyDescriptor: (inner, key) => {
-            read.push(`${name}'s descriptor of ${String(key)}`);
-            return Reflect.getOwnPropertyDescriptor(inner, key);
-          },
-          getPrototypeOf: (inner) => {
-            read.push(`${name}'s prototype`);
-            return Reflect.getPrototypeOf(inner);
-          }
-        });
-      const readFirst = paths.flatMap(({ path, set, wire: wirePacket, basis }) =>
-        forgeriesOf(wirePacket, basis).flatMap(({ name, packet }) => {
-          read.length = 0;
-          const verdict = attempt(recording(set, 'the set'), recording(packet, 'the packet'));
-          return verdict === 'refused' && read.length === 0
-            ? []
-            : [{ path, name, verdict, read: [...read] }];
-        })
-      );
-      expect(readFirst, 'a forgery the fold read before refusing it').toEqual([]);
-      read.length = 0;
-      const control = paths.find((one) => one.outcome === 'stored alongside');
-      if (control === undefined) throw new Error('no path stores the owned packet');
-      foldEvent(recording(control.set, 'the set'), control.basis);
-      expect(read.length, 'the recorder’s control: a fold reads the set').toBeGreaterThan(0);
-      read.length = 0;
-      void recording({ event: control.basis.event }, 'the packet').event;
-      expect(read, 'the recorder’s control: a read of a packet').toEqual(['the packet.event']);
+      // **And the check comes first**: nothing in the fold runs before it, so
+      // no path through the fold — one above, or one added later — can
+      // precede it. That is a fact about order, read off the fold's source
+      // (`beforeTheCheck`). Its controls are the same source with a statement
+      // put before the check, a parameter default, and a redeclared
+      // `isOwnedPacket`, each of which it reports.
+      const source = readFileSync('src/lib/v1/eventset.ts', 'utf8');
+      expect(beforeTheCheck(source), 'what runs before the fold’s check').toEqual([]);
+      const opening =
+        'export function foldEvent(set: CachedEventSet, packet: OwnedPacket): CachedEventSet {';
+      expect(
+        source.split(opening),
+        'the fold’s signature, as the controls rewrite it'
+      ).toHaveLength(2);
+      const controls = {
+        'a statement before the check': source.replace(opening, `${opening}\n  void set;`),
+        'a parameter default': source.replace(
+          opening,
+          opening.replace('set: CachedEventSet', 'set: CachedEventSet = emptyEventSet')
+        ),
+        'a redeclared isOwnedPacket': `${source}\nconst isOwnedPacket = (packet: unknown): boolean => packet !== undefined;\n`
+      };
+      for (const [what, rewritten] of Object.entries(controls))
+        expect(
+          beforeTheCheck(rewritten).length,
+          `the order check’s control: ${what}`
+        ).toBeGreaterThan(0);
 
       const smuggled = refusedLines(SMUGGLES);
       const said = consumerDiagnostics(SMUGGLES);
