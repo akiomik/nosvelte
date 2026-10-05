@@ -781,8 +781,69 @@ const OUTSIDE_SETS = OUTSIDE_THE_ID.reduce<string[][]>(
   [[]]
 ).filter((set) => set.length > 0);
 
-/** Another 128-digit signature than `sig`. */
-const run128 = (sig: string): string => (sig === 'f'.repeat(128) ? '0' : 'f').repeat(128);
+/** How one field outside the id changes from `a` to `b`: rises, falls, or is added or dropped. */
+const changeOf = (a: unknown, b: unknown): string => {
+  if (a === undefined) return 'added';
+  if (b === undefined) return 'dropped';
+  return String(a) < String(b) ? 'rises' : 'falls';
+};
+
+/** What changes outside the id between two events, as `field change, …`. */
+const combinationOf = (a: object, b: object): string => {
+  const [x, y] = [a, b] as Record<string, unknown>[];
+  return OUTSIDE_THE_ID.filter((field) => x?.[field] !== y?.[field])
+    .map((field) => `${field} ${changeOf(x?.[field], y?.[field])}`)
+    .join(', ');
+};
+
+/**
+ * Every combination of changes a non-empty set of the fields outside the id
+ * can make: each field rises or falls, and an optional one is also added or
+ * dropped, independently of the others.
+ */
+const COMBINATIONS = OUTSIDE_SETS.flatMap((set) =>
+  OUTSIDE_THE_ID.filter((field) => set.includes(field))
+    .reduce<string[][]>(
+      (all, field) =>
+        all.flatMap((prefix) =>
+          ((OPTIONAL as readonly string[]).includes(field)
+            ? ['rises', 'falls', 'added', 'dropped']
+            : ['rises', 'falls']
+          ).map((one) => [...prefix, `${field} ${one}`])
+        ),
+      [[]]
+    )
+    .map((combination) => combination.join(', '))
+);
+
+/**
+ * Every replay of `event` with a non-empty set of the fields outside the id
+ * changed, each field every way it can change from the value it has: a
+ * signature lower and higher; `ots` added where it is absent, and dropped,
+ * lower and higher where it is present.
+ */
+const outsideVariants = <T extends object>(event: T): T[] => {
+  const alternatives = (field: string): unknown[] => {
+    const value = (event as unknown as Record<string, unknown>)[field];
+    if (field === 'sig') return ['0'.repeat(128), 'f'.repeat(128)].filter((one) => one !== value);
+    if (value === undefined) return ['s'];
+    return [undefined, '', `${String(value)}+`].filter((one) => one !== value);
+  };
+  return OUTSIDE_SETS.flatMap((set) =>
+    set
+      .reduce<Record<string, unknown>[]>(
+        (all, field) =>
+          all.flatMap((prefix) => alternatives(field).map((one) => ({ ...prefix, [field]: one }))),
+        [{}]
+      )
+      .map((changes) => {
+        const variant = { ...structuredClone(event), ...changes } as Record<string, unknown>;
+        for (const [field, value] of Object.entries(changes))
+          if (value === undefined) delete variant[field];
+        return variant as unknown as T;
+      })
+  );
+};
 
 /**
  * The value an event holds at a payload position, read without `place`: the
@@ -839,7 +900,7 @@ const CASES = minimalPairs();
  * design's size is a fact the arms state; and the time they are given, which
  * is not what they are held to.
  */
-const ES3_REPLAYS = 925_120;
+const ES3_REPLAYS = 2_208_396;
 const ES5_FOLDS = 740_096;
 const ES28_FOLDS = 185_024;
 const ENUMERATED = 120_000;
@@ -985,46 +1046,60 @@ describe('canonical event set', () => {
         noted
       );
 
-      // **And every enumerated case** (`helpers/design.ts`): both events folded,
-      // in both orders, then each replayed — the same object, and a parsed copy
-      // from another relay — after the whole case, so a revision replayed after
-      // it was superseded is among them, with every value the rules read. Each
-      // replay returns the set it was given.
+      // **And every enumerated case** (`helpers/design.ts`), in both orders, at
+      // each step: the first event folded alone, then both. At each step every
+      // event held is replayed — the same object, a parsed copy from another
+      // relay, and that copy with every set of the fields outside the id
+      // changed every way it can change — and, where the case's two events
+      // share an id, the second is replayed onto the set holding only the
+      // first: the first conflicting replay, asserted before both are folded.
+      // A revision replayed after it was superseded is among them. Each replay
+      // returns the set it was given.
       const offenders: string[] = [];
+      const changed = new Set<string>();
       let replays = 0;
       const replay = (set: CachedEventSet, packet: OwnedPacket, what: string) => {
         replays += 1;
         if (foldEvent(set, packet) !== set) offenders.push(what);
       };
+      const replayAll = (set: CachedEventSet, packet: OwnedPacket, label: string) => {
+        replay(set, packet, `${label}: the same object`);
+        const elsewhere = {
+          ...packet,
+          from: 'wss://elsewhere/',
+          event: structuredClone(packet.event)
+        };
+        replay(set, elsewhere, `${label}: from another relay`);
+        for (const variant of outsideVariants(packet.event)) {
+          const combination = combinationOf(packet.event, variant);
+          changed.add(combination);
+          replay(set, { ...elsewhere, event: variant }, `${label}: ${combination}`);
+        }
+      };
       for (const { label, events } of CASES) {
         const packets = events.map((fields) => ev(fields));
         for (const order of [packets, [...packets].reverse()]) {
-          const folded = foldAll(order);
-          for (const packet of packets) {
-            replay(folded, packet, `${label}: the same object`);
-            const elsewhere = {
-              ...packet,
-              from: 'wss://elsewhere/',
-              event: structuredClone(packet.event)
-            };
-            replay(folded, elsewhere, `${label}: from another relay`);
-            // The same event with every non-empty set of the fields outside the
-            // id changed — another valid signature, another `ots`, or both — is
-            // a replay too (0003).
-            for (const set of OUTSIDE_SETS) {
-              const variant = structuredClone(packet.event) as unknown as Record<string, unknown>;
-              for (const field of set)
-                variant[field] =
-                  field === 'sig' ? run128(packet.event.sig) : `${String(variant[field] ?? '')}+`;
-              replay(
-                folded,
-                { ...elsewhere, event: variant as unknown as typeof packet.event },
-                `${label}: another ${set.join(' and ')}`
-              );
-            }
+          const [first, second] = order as [OwnedPacket, OwnedPacket];
+          const alone = foldAll([first]);
+          replayAll(alone, first, `${label}, the first alone`);
+          if (first.event.id === second.event.id) {
+            replay(alone, second, `${label}: the first conflicting replay`);
+            replay(
+              alone,
+              {
+                ...second,
+                from: 'wss://elsewhere/',
+                event: structuredClone(second.event)
+              } as OwnedPacket,
+              `${label}: the first conflicting replay, from another relay`
+            );
           }
+          const both = foldAll(order);
+          for (const packet of order) replayAll(both, packet, label);
         }
       }
+      // Every combination of changes outside the id was replayed.
+      expect(COMBINATIONS.filter((combination) => !changed.has(combination))).toEqual([]);
       expect(offenders).toEqual([]);
       expect(replays, 'the enumerated replays').toBe(ES3_REPLAYS);
 
@@ -1355,38 +1430,15 @@ describe('canonical event set', () => {
     // others, so the first packet's `sig` being the higher says nothing about
     // which one carries `ots`. Read from the events.
     expect(OUTSIDE_SETS).toHaveLength(2 ** OUTSIDE_THE_ID.length - 1);
-    const change = (a: unknown, b: unknown): string => {
-      if (a === undefined) return 'added';
-      if (b === undefined) return 'dropped';
-      return String(a) < String(b) ? 'rises' : 'falls';
-    };
-    const changesOf = (field: string): string[] =>
-      (OPTIONAL as readonly string[]).includes(field)
-        ? ['rises', 'falls', 'added', 'dropped']
-        : ['rises', 'falls'];
     const seen = new Set(
-      CASES.flatMap(({ dimension, events: [a, b] }) => {
-        if (dimension !== 'same id' || a?.id !== b?.id) return [];
-        return [
-          OUTSIDE_THE_ID.filter((field) => a?.[field] !== b?.[field])
-            .map((field) => `${field} ${change(a?.[field], b?.[field])}`)
-            .join(', ')
-        ];
-      })
+      CASES.flatMap(({ dimension, events: [a, b] }) =>
+        dimension === 'same id' && a?.id === b?.id && a !== undefined && b !== undefined
+          ? [combinationOf(a, b)]
+          : []
+      )
     );
-    for (const set of OUTSIDE_SETS) {
-      const ordered = OUTSIDE_THE_ID.filter((field) => set.includes(field));
-      const combinations = ordered.reduce<string[][]>(
-        (all, field) =>
-          all.flatMap((prefix) => changesOf(field).map((one) => [...prefix, `${field} ${one}`])),
-        [[]]
-      );
-      for (const combination of combinations)
-        expect(
-          seen.has(combination.join(', ')),
-          `two packets of one id: ${combination.join(', ')}`
-        ).toBe(true);
-    }
+    for (const combination of COMBINATIONS)
+      expect(seen.has(combination), `two packets of one id: ${combination}`).toBe(true);
   });
 
   it('ES4: the fold is order-independent, including on created_at ties', () => {
