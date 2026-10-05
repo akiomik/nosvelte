@@ -451,7 +451,7 @@ export class InvalidDescriptorError extends Error {
   /**
    * The four members `Error` gives this class, re-declared.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and inherited members are where that was
    * false**: `message`, `name`, `stack` and `cause` arrive from `Error`, where
    * they are mutable, so `err.message = '[redacted]'` compiled against the

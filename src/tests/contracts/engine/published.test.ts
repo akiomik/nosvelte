@@ -25,27 +25,61 @@
  *
  * Port band 9600-9649.
  */
-import { isDeepStrictEqual } from 'node:util';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+import { render } from '@testing-library/svelte';
+import type { RxNostr } from 'rx-nostr';
 import { QueryClient } from 'tanstack-svelte-query-v6';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import type { StreamAccumulator } from '$lib/v1/accumulate.js';
-import { createAttemptRegistry } from '$lib/v1/attempt.js';
-import { createNostrContext } from '$lib/v1/context.svelte.js';
-import { beginAttempt, emptyEventSet, noteFailure } from '$lib/v1/eventset.js';
-import { capture } from '$lib/v1/own.js';
-import type { RelayInput } from '$lib/v1/scope.svelte.js';
-import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
-
 import {
+  AccumulatorContractError,
+  AttemptAbandonedError,
+  createAttemptRegistry,
+  MissingRandomnessError
+} from '$lib/v1/attempt.js';
+import {
+  createNostrContext,
+  MissingProviderError,
+  MissingVerifierError,
+  setNostrContext
+} from '$lib/v1/context.svelte.js';
+import { useRelayDiagnostics } from '$lib/v1/diagnostics.svelte.js';
+import { IncompleteResultError, type ReqHandle } from '$lib/v1/engine.js';
+import { beginAttempt, emptyEventSet, noteFailure } from '$lib/v1/eventset.js';
+import { UnsupportedFilterError } from '$lib/v1/key.js';
+import { InvalidDescriptorError } from '$lib/v1/normalize.js';
+import { capture, providerDisposed, ReqFailure } from '$lib/v1/own.js';
+import { useReq } from '$lib/v1/req.svelte.js';
+import { RelayNotInScopeError, RequestTransportIncompatibleError } from '$lib/v1/reqerror.js';
+import {
+  InvalidRelayInputError,
+  InvalidRelayScopeError,
+  NonIdempotentRelayUrlError,
+  RelayConfigurationError,
+  type RelayConfigurationErrorCode,
+  TransportIncompatibleError,
+  TransportKeyMismatchError
+} from '$lib/v1/scope.svelte.js';
+import { useSend } from '$lib/v1/send.svelte.js';
+import { MAIN_SURFACE } from '$lib/v1/surface.js';
+import { useStreamedReq, type UseStreamedReqOpts } from '$lib/v1/useStreamedReq.svelte.js';
+
+import Outlets from './fixtures/Outlets.svelte';
+import {
+  consumerDiagnostics,
   exportsOf,
   judgeWrites,
   judgeWritesEach,
+  snippetArgumentsOf,
   writesThrough,
   writesThroughEach
 } from './helpers/declarations.js';
+import { breachesOf, type Discipline, type LiveInterface } from './helpers/publication.js';
 import {
   acceptAnyEvent,
   createTestRelay,
@@ -80,6 +114,14 @@ async function nextReqOf(server: WS): Promise<string> {
   for (;;) {
     const message = (await server.nextMessage) as unknown[];
     if (message[0] === 'REQ') return String(message[1]);
+  }
+}
+
+/** The next frame of one type, past anything else on the wire. */
+async function nextOf(server: WS, type: string): Promise<unknown[]> {
+  for (;;) {
+    const message = (await server.nextMessage) as unknown[];
+    if (message[0] === type) return message;
   }
 }
 
@@ -143,82 +185,408 @@ function containers(root: unknown, path: string, seen = new Set<unknown>()): [st
 }
 
 /**
- * What a value holds, as data a comparison can read: every own property —
- * symbol-keyed and non-enumerable ones included, so an `Error`'s `message`,
- * `stack`, `code` and `cause` are in it — down every container, with each read
- * guarded. Two snapshots of one reader's view, taken before and after another
- * reader writes, are equal exactly when the write did not reach it.
+ * Every member of `held` a consumer can name — own keys, names and symbols, of
+ * it and of every object it holds through a data member — as key paths, each
+ * holder before what it holds.
  */
-function shape(value: unknown, seen = new Set<unknown>()): unknown {
-  if (typeof value === 'function') return '[function]';
-  if (value === null || typeof value !== 'object') return value;
-  if (seen.has(value)) return '[seen]';
-  seen.add(value);
-  if (Array.isArray(value)) return value.map((one) => shape(one, seen));
-  if (value instanceof Map)
-    return {
-      '[map]': [...value.entries()].map(([key, one]) => [shape(key, seen), shape(one, seen)])
-    };
-  if (value instanceof Set) return { '[set]': [...value].map((one) => shape(one, seen)) };
-  const keys = [...Object.getOwnPropertyNames(value), ...Object.getOwnPropertySymbols(value)];
-  return Object.fromEntries(
-    keys.map((key) => {
-      let read: unknown;
-      try {
-        read = (value as Record<string | symbol, unknown>)[key];
-      } catch {
-        read = '[unreadable]';
-      }
-      return [String(key), shape(read, seen)];
-    })
+function namedMembers(held: object): (string | symbol)[][] {
+  const paths: (string | symbol)[][] = [];
+  const seen = new Set<object>();
+  const walk = (value: object, path: (string | symbol)[]): void => {
+    if (seen.has(value)) return;
+    seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      paths.push([...path, key]);
+      const slot = Reflect.getOwnPropertyDescriptor(value, key);
+      const inner: unknown = slot !== undefined && 'value' in slot ? slot.value : undefined;
+      if (inner !== null && typeof inner === 'object') walk(inner, [...path, key]);
+    }
+  };
+  walk(held, []);
+  return paths;
+}
+
+const readAt = (root: unknown, path: readonly (string | symbol)[]): unknown => {
+  let at = root;
+  for (const key of path) {
+    try {
+      at = (at as Record<string | symbol, unknown> | undefined)?.[key];
+    } catch {
+      return '[unreadable]';
+    }
+  }
+  return at;
+};
+
+/**
+ * Which readers saw a consumer's write to `held`: every member it names written
+ * to — by assignment and by redefinition, each attempt swallowing whatever the
+ * host does about it — then read back through each reader and compared with
+ * what that reader answered before.
+ *
+ * **Kept for Errors, where the reflection check alone is not the evidence.**
+ * `Object.isFrozen` answered `true` about an Error whose `stack` setter was
+ * live; `breachesOf` reads the setter now, and this reads its effect, through
+ * the readers `B5-C8` names.
+ */
+function writeAndReadBack(
+  held: object,
+  readers: Readonly<Record<string, () => unknown>>
+): { before: Record<string, unknown[]>; reached: string[] } {
+  const paths = namedMembers(held);
+  const answers = (): Record<string, unknown[]> =>
+    Object.fromEntries(
+      Object.entries(readers).map(([reader, read]) => {
+        const root = read();
+        return [reader, paths.map((path) => readAt(root, path))];
+      })
+    );
+  const before = answers();
+  for (const path of paths) {
+    const holder = readAt(held, path.slice(0, -1)) as Record<string | symbol, unknown>;
+    const key = path[path.length - 1] as string | symbol;
+    try {
+      holder[key] = `WRITTEN BY A CONSUMER (${String(key)})`;
+    } catch {
+      // A closed member refuses, which is one way of keeping the promise.
+    }
+    try {
+      Object.defineProperty(holder, key, { value: 'REDEFINED BY A CONSUMER' });
+    } catch {
+      // So does a closed slot.
+    }
+  }
+  const after = answers();
+  const reached = Object.keys(readers).flatMap((reader) =>
+    paths
+      .filter((_, at) => !Object.is(after[reader]?.[at], before[reader]?.[at]))
+      .map((path) => `${reader}: ${path.map(String).join('.')}`)
   );
+  return { before, reached };
+}
+
+/** This library's source, read for its classes. */
+const LIBRARY = resolve(dirname(fileURLToPath(import.meta.url)), '../../../lib/v1');
+
+/**
+ * The prototypes a published Error may have: every class this library
+ * declares, and nothing else — an Error from anywhere else on a published value
+ * is one this library did not make. `ProviderDisposedError` is not exported, so
+ * its prototype is read off the one factory that makes it.
+ */
+const LIBRARY_ERRORS: readonly object[] = [
+  AccumulatorContractError,
+  AttemptAbandonedError,
+  IncompleteResultError,
+  InvalidDescriptorError,
+  InvalidRelayInputError,
+  InvalidRelayScopeError,
+  MissingProviderError,
+  MissingRandomnessError,
+  MissingVerifierError,
+  NonIdempotentRelayUrlError,
+  RelayConfigurationError,
+  RelayNotInScopeError,
+  ReqFailure,
+  RequestTransportIncompatibleError,
+  TransportIncompatibleError,
+  TransportKeyMismatchError,
+  UnsupportedFilterError
+].map((one) => one.prototype as object);
+const PROVIDER_DISPOSED = Object.getPrototypeOf(providerDisposed('the class behind the factory'));
+
+/** The discipline over one arrangement's live interfaces. */
+const disciplineOver = (interfaces: readonly (readonly [object, LiveInterface])[]): Discipline => ({
+  interfaces: new Map(interfaces),
+  errors: new Set([...LIBRARY_ERRORS, PROVIDER_DISPOSED as object])
+});
+
+/**
+ * The live interfaces the hooks hand out, member by member. The engine handle's
+ * `raw` is the one edge not walked: the query library's own object, priced in
+ * `B5-C8` rather than promised. `projected` is walked — it is a seam too, and
+ * what it returns is a published state.
+ */
+const ENGINE_HANDLE: LiveInterface = {
+  getters: ['raw', 'activity', 'state', 'projected', 'diagnostics'],
+  commands: ['refresh'],
+  unwalked: ['raw']
+};
+const REQ_HANDLE: LiveInterface = {
+  getters: ['state', 'activity', 'diagnostics'],
+  commands: ['refresh']
+};
+const RELAY_DIAGNOSTICS: LiveInterface = {
+  getters: ['relays', 'configurationError'],
+  commands: []
+};
+/** `useSend()`'s answer is a function: closed as an object, its results checked by calling it. */
+const SEND: LiveInterface = { getters: [], commands: [] };
+
+/**
+ * Every case the matrix below arranges, by name — so an arrangement that stops
+ * checking anything is a missing name rather than a quieter green.
+ */
+const POPULATION = [
+  'a request loading',
+  'its loading outlet',
+  'a request streaming',
+  'a request settled',
+  'its events outlet',
+  'its event outlet',
+  'a refresh, complete',
+  'a refresh, incomplete',
+  'a refresh, cancelled because its consumer released it',
+  'a refresh, not started because the handle was released',
+  'a request settled with nothing',
+  'its nodata outlet',
+  'a request incomplete, with refusals and causes',
+  'an attempt that failed',
+  'a refresh, error',
+  'a refused descriptor',
+  'its error outlet',
+  'a refresh, rejected with the refusal',
+  'a refused descriptor, on a server',
+  'a refresh, not started on a server',
+  'a deferred request',
+  'a refresh, not started because the plan is deferred',
+  'a live request whose leg ended',
+  'useReq()',
+  'a refresh through useReq(), incomplete',
+  'useRelayDiagnostics()',
+  'useSend()',
+  'a send, refused',
+  'a send, settled',
+  'a refresh, not started with no readable relay',
+  'a refresh, cancelled because the provider was disposed',
+  'a refresh, rejected because the provider was disposed',
+  'a provider refusal, conflicting-capabilities',
+  'a provider refusal, invalid-relay-input',
+  'a provider refusal, non-idempotent-url',
+  'a provider refusal, transport-key-mismatch',
+  'a provider refusal, transport-incompatible'
+];
+
+/**
+ * The discipline's controls: each rule, over a value built to break it and
+ * nothing else, found at the member it names — and a value that keeps every
+ * rule found nowhere. Without them, an empty list of breaches is as much a fact
+ * about a blind rule as about a closed value.
+ */
+function disciplineControls(): void {
+  class Ours extends Error {}
+  class Theirs extends Error {}
+  // Two classes whose prototypes reach an ordinary assignment: a setter, which
+  // runs on a frozen receiver, and an object every instance shares.
+  class Setting extends Error {
+    set member(next: unknown) {
+      void next;
+    }
+  }
+  class Sharing extends Error {}
+  Object.defineProperty(Sharing.prototype, 'shared', { value: {} });
+  // Closed the way this library closes its own: `stack` made data, then frozen.
+  const owned = <T extends Error>(error: T): T => {
+    Object.defineProperty(error, 'stack', { value: 'as it was', writable: false });
+    return Object.freeze(error);
+  };
+  const ours = owned(new Ours('as it was'));
+  const control: Discipline = {
+    interfaces: new Map(),
+    errors: new Set([Ours.prototype, Setting.prototype, Sharing.prototype])
+  };
+  const breaches = (value: unknown, discipline = control): string[] =>
+    breachesOf(value, 'held', discipline);
+  const closed = <T extends object>(value: T): T => Object.freeze(value);
+
+  const key = Symbol('member');
+  expect(
+    breaches(
+      closed({
+        list: closed([closed({ one: 1 })]),
+        [key]: closed({ inner: 'as it was' }),
+        error: ours,
+        nothing: null,
+        bare: closed(Object.create(null) as object)
+      })
+    ),
+    'a value that keeps every rule'
+  ).toEqual([]);
+
+  const rules: [string, unknown, string][] = [
+    ['an extensible record', { one: 1 }, 'held: extensible'],
+    ['a writable member', Object.preventExtensions({ one: 1 }), 'held.one: writable'],
+    [
+      'a configurable member',
+      Object.preventExtensions(
+        Object.defineProperty({}, 'one', { value: 1, writable: false, configurable: true })
+      ),
+      'held.one: configurable'
+    ],
+    [
+      'an accessor with a setter',
+      closed(Object.defineProperty({}, 'one', { get: () => 1, set: () => undefined })),
+      'held.one: a setter'
+    ],
+    [
+      'an accessor in a snapshot',
+      closed(Object.defineProperty({}, 'one', { get: () => 1 })),
+      'held.one: an accessor in a snapshot'
+    ],
+    ['an inherited setter', owned(new Setting('x')), 'held: inherits a setter, member'],
+    ['inherited data', owned(new Sharing('x')), 'held: inherits data, shared'],
+    [
+      'the prototype’s own setter, on an extensible record',
+      {},
+      'held: inherits a setter, __proto__'
+    ],
+    ['a symbol-keyed member’s value', closed({ [key]: {} }), 'held[Symbol(member)]: extensible'],
+    [
+      'a list’s non-index member',
+      closed(Object.assign([1], { extra: {} })),
+      'held.extra: extensible'
+    ],
+    [
+      'a function in a snapshot',
+      closed({ call: closed(() => 1) }),
+      'held.call: a function in a snapshot'
+    ],
+    ['a proxy', new Proxy(closed({ one: 1 }), {}), 'held: a proxy'],
+    [
+      'a host object with internal state',
+      closed({ map: closed(new Map()) }),
+      'held.map: a host object with internal state (isMap)'
+    ],
+    [
+      'internal state under a borrowed prototype',
+      closed({ set: closed(Object.setPrototypeOf(new Set(), Object.prototype) as object) }),
+      'held.set: a host object with internal state (isSet)'
+    ],
+    [
+      'an Error this library did not make',
+      closed({ error: closed(new Theirs('elsewhere')) }),
+      'held.error: a kind this discipline does not admit'
+    ],
+    [
+      'an instance of any other class',
+      closed({ date: closed(new (class Moment {})()) }),
+      'held.date: a kind this discipline does not admit'
+    ],
+    [
+      'an Error whose stack freezing does not close',
+      closed({ error: closed(new Ours('open')) }),
+      'held.error.stack: a setter'
+    ]
+  ];
+  for (const [rule, value, finding] of rules)
+    expect(breaches(value), `the discipline’s control: ${rule}`).toContain(finding);
+
+  // A live interface's own rules: the members it names and no others, its
+  // functions closed as objects, each getter's output walked — and the one
+  // edge it exempts exempted there and nowhere else.
+  const handle = (members: PropertyDescriptorMap): object =>
+    closed(Object.defineProperties({}, members));
+  const getter = (value: unknown): PropertyDescriptor => ({ get: closed(() => value) });
+  const command = closed(() => undefined);
+  const spec: LiveInterface = {
+    getters: ['state', 'raw'],
+    commands: ['refresh'],
+    unwalked: ['raw']
+  };
+  const over = (value: object, interfaceSpec = spec): string[] =>
+    breaches(value, { interfaces: new Map([[value, interfaceSpec]]), errors: control.errors });
+  const kept = handle({
+    state: getter(closed({ status: 'settled' })),
+    raw: getter({ open: 'and not walked' }),
+    refresh: { value: command }
+  });
+  expect(over(kept), 'a live interface that keeps every rule').toEqual([]);
+  const interfaceRules: [string, object, string, LiveInterface?][] = [
+    [
+      'a getter’s output',
+      handle({ state: getter({ open: true }), raw: getter(1), refresh: { value: command } }),
+      'held.state: extensible'
+    ],
+    [
+      'a member the interface does not name',
+      handle({ ...Object.getOwnPropertyDescriptors(kept), extra: { value: 1 } }),
+      'held.extra: a member the interface does not name'
+    ],
+    [
+      'an accessor the interface does not name',
+      handle({ ...Object.getOwnPropertyDescriptors(kept), other: getter(1) }),
+      'held.other: an accessor the interface does not name'
+    ],
+    [
+      'a member it names and does not hold',
+      handle({ state: getter(1), refresh: { value: command } }),
+      'held.raw: named and absent'
+    ],
+    [
+      'a getter that throws',
+      handle({
+        state: {
+          get: closed(() => {
+            throw new Error('unreadable');
+          })
+        },
+        raw: getter(1),
+        refresh: { value: command }
+      }),
+      'held.state: a getter that throws'
+    ],
+    [
+      'a getter’s function object',
+      handle({ state: { get: () => 1 }, raw: getter(1), refresh: { value: command } }),
+      'held.state (its getter): extensible'
+    ],
+    [
+      'a command’s own member',
+      handle({
+        state: getter(1),
+        raw: getter(1),
+        refresh: { value: closed(Object.assign(() => undefined, { cell: {} })) }
+      }),
+      'held.refresh.cell: extensible'
+    ],
+    [
+      'a command left open',
+      handle({ state: getter(1), raw: getter(1), refresh: { value: () => undefined } }),
+      'held.refresh: extensible'
+    ],
+    [
+      'the exempt edge, under an interface that does not exempt it',
+      kept,
+      'held.raw: extensible',
+      { getters: ['state', 'raw'], commands: ['refresh'] }
+    ]
+  ];
+  for (const [rule, value, finding, interfaceSpec] of interfaceRules)
+    expect(over(value, interfaceSpec), `the interface’s control: ${rule}`).toContain(finding);
+  // **And the exemption is an edge, not a name**: a `raw` on a snapshot is walked.
+  expect(
+    breaches(closed({ raw: { open: true } })),
+    'the exemption is one interface’s edge'
+  ).toContain('held.raw: extensible');
 }
 
 /**
- * Write to everything a consumer holding `root` can reach: every own property
- * of every container — set and redefined — and, for a list, a push, a position
- * and its length. Each attempt swallows whatever the host does about it, since
- * the contract is the effect on the other readers, not how a write is refused.
- * Returns how many containers it wrote to, so an arm can tell a walk that found
- * nothing from one that found everything closed.
+ * What a consumer imports: the entry, and the outlets each component's props
+ * are built from — and what a hook's answer is, as a value they hold. A hook
+ * that answers a function (`useSend`) is held for what calling it resolves
+ * with; one that answers a value is held for that value.
  */
-function writeEverything(root: unknown): number {
-  const written = containers(root, 'held');
-  const attempt = (write: () => void): void => {
-    try {
-      write();
-    } catch {
-      // A frozen object refuses; that is one way of keeping the promise.
-    }
-  };
-  for (const [, container] of written) {
-    const target = container as Record<string | symbol, unknown>;
-    // A list's positions are own members, and the loop below writes each; a
-    // list with nothing in it has none, and a push is the write it takes.
-    if (Array.isArray(container))
-      attempt(() => (container as unknown[]).push('PUSHED BY A CONSUMER'));
-    for (const key of [
-      ...Object.getOwnPropertyNames(container),
-      ...Object.getOwnPropertySymbols(container)
-    ]) {
-      attempt(() => {
-        target[key] = `WRITTEN BY A CONSUMER (${String(key)})`;
-      });
-      attempt(() => {
-        Object.defineProperty(container, key, { value: 'REDEFINED BY A CONSUMER' });
-      });
-    }
-  }
-  return written.length;
-}
-
-/** What a consumer imports. */
-const PUBLISHED = `import type * as Published from '$lib/v1/public-entry.js';`;
+const PUBLISHED = [
+  `import type * as Published from '$lib/v1/index.js';`,
+  `import type * as Outlets from '$lib/v1/components/outlets.js';`,
+  'type HookImage<F extends (...args: never[]) => unknown> = ReturnType<F> extends (...args: never[]) => infer R ? Awaited<R> : ReturnType<F>;'
+].join('\n');
 
 /**
  * The published names this row is not about, each for a reason: written by the
  * consumer and handed in, not given out; a function a consumer calls rather than
- * a shape; and the event, whose type is `B5-C6`'s.
+ * a shape — what it resolves with is walked, as `useSend`'s answer; and the
+ * event, whose type is `B5-C6`'s.
  */
 const NOT_GIVEN_OUT: Readonly<Record<string, string>> = {
   ReqDescriptor: 'written by the consumer',
@@ -234,31 +602,107 @@ const NOT_GIVEN_OUT: Readonly<Record<string, string>> = {
 };
 
 /**
- * Every write the published types let through, by type: each type the public
- * entry gives out — and each class's instances — walked by the compiler-asked
- * probe, with a handle's methods taken for its API (their slots refused, what
- * they resolve with walked).
+ * Every write the published types let through, by type: each type the entry
+ * gives out, each class's instances, what each hook answers, and what each
+ * component's outlets are handed — walked by the compiler-asked probe, with a
+ * handle's methods taken for its API (their slots refused, what they resolve
+ * with walked).
+ *
+ * **The population is the entry's own, both ways.** It used to be the type
+ * entry's names alone, and what a hook answers and what an outlet is handed are
+ * not names there: `useRelayDiagnostics()`'s object and every snippet argument
+ * were on no walk. So the entry's values are counted too — each one a hook or a
+ * component the surface record names — and each component's props are read off
+ * its source as one of the outlet types.
  */
-function publishedTypeBreaches(): { shapes: string[]; breaches: string[] } {
-  const exported = exportsOf('$lib/v1/public-entry.js');
+function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; exceptions: string[] } {
+  const exported = exportsOf('$lib/v1/index.js');
   const names = new Set(exported.map((one) => one.name));
   // Both edges of the exclusion: each name it leaves out is a name the entry
   // exports, so a renamed type is walked rather than silently skipped.
   for (const name of Object.keys(NOT_GIVEN_OUT))
     expect(names.has(name), `${name}, excluded, is published`).toBe(true);
-  const shapes = exported
-    .filter((one) => one.kind !== 'value' && NOT_GIVEN_OUT[one.name] === undefined)
-    .map((one) =>
-      one.kind === 'class' ? `InstanceType<typeof Published.${one.name}>` : `Published.${one.name}`
-    );
+  const values = exported.filter((one) => one.kind === 'value').map((one) => one.name);
+  expect([...values].sort(), 'every value the entry exports is a hook or a component').toEqual(
+    [...MAIN_SURFACE.hooks, ...MAIN_SURFACE.components].sort()
+  );
+  // Each component's props are one of the outlet types — its `$props()` reads
+  // one by name — and the provider's are its own, with one snippet handed
+  // nothing (`PB13` reads its `{@render}`).
+  const outletTypes = exportsOf('$lib/v1/components/outlets.js')
+    .map((one) => one.name)
+    .filter((name) => name.endsWith('Props'));
+  const COMPONENTS = resolve(LIBRARY, 'components');
+  for (const component of MAIN_SURFACE.components.filter((one) => one !== 'NostrApp')) {
+    const annotated = /:\s*(\w+)\s*=\s*\$props\(\)/.exec(
+      readFileSync(join(COMPONENTS, `${component}.svelte`), 'utf8')
+    )?.[1];
+    expect(outletTypes, `${component}'s props are an outlet type`).toContain(annotated);
+  }
+  const outlets = snippetArgumentsOf(
+    PUBLISHED,
+    outletTypes.map((name) => `Outlets.${name}`)
+  );
+  expect(outlets.length, 'the outlets’ arguments, each a type of its own').toBeGreaterThan(3);
+  const shapes = [
+    ...exported
+      .filter((one) => one.kind !== 'value' && NOT_GIVEN_OUT[one.name] === undefined)
+      .map((one) =>
+        one.kind === 'class'
+          ? `InstanceType<typeof Published.${one.name}>`
+          : `Published.${one.name}`
+      ),
+    ...MAIN_SURFACE.hooks.map((hook) => `HookImage<typeof Published.${hook}>`),
+    ...outlets
+  ];
   const writes = writesThroughEach(PUBLISHED, shapes, { callables: 'api', depth: 6 });
   const verdicts = judgeWritesEach(PUBLISHED, shapes, writes);
-  const breaches = shapes.flatMap((typeText, at) =>
-    (verdicts[at] ?? [])
-      .filter((one) => one.verdict !== 'refused')
-      .map((one) => `${typeText}: ${one.write} (${one.verdict})`)
+  const judged = shapes.flatMap((typeText, at) =>
+    (verdicts[at] ?? []).map((one) => ({ ...one, line: `${typeText}: ${one.write}` }))
   );
-  return { shapes, breaches };
+  // **One exception, stated in the row rather than hidden here**: a standard
+  // method's slot — a read-only list's, a function's `call`, `apply` and
+  // `bind` — is assignable in TypeScript's own declarations, and the lists stay
+  // arrays rather than refuse that one write by type. Returned apart, so an arm
+  // asserts it by name.
+  const breaches = judged
+    .filter((one) => one.verdict !== 'refused' && one.verdict !== 'a standard method slot')
+    .map((one) => `${one.line} (${one.verdict})`);
+  const exceptions = judged
+    .filter((one) => one.verdict === 'a standard method slot')
+    .map((one) => one.line);
+  return { shapes, breaches, exceptions };
+}
+
+/**
+ * The stated exception, held to its statement: every line it covers is an
+ * assignment of a member to its own slot — `x.m = x.m!;`, nothing else — and
+ * it covers every published list and the handle's `refresh`, so it is a
+ * measured concession over a population, not a gap the probe stopped reading.
+ */
+function exceptionStated(exceptions: readonly string[]): void {
+  for (const line of exceptions)
+    expect(line, 'an exception line is a slot written with its own member').toMatch(
+      /^[^:]+: (?:if \(.*?\) |for \(.*?\) )*(.+?)(\.\w+|\[Symbol\.\w+\]) = \1\2!;$/
+    );
+  for (const list of [
+    'events',
+    'causes',
+    'refusals',
+    'incompleteCauses',
+    'configuredUrls',
+    'relays',
+    'urls',
+    'tags'
+  ])
+    expect(
+      exceptions.some((line) => line.includes(`.${list}!.map = `)),
+      `the exception, on ${list}`
+    ).toBe(true);
+  expect(
+    exceptions.some((line) => line.includes('.refresh!.call = ')),
+    'the exception, on a handle’s refresh'
+  ).toBe(true);
 }
 
 describe('what a request publishes is the consumer’s to hold and nobody else’s', () => {
@@ -306,12 +750,14 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
     // price of the seam rather than as a property of the design.
     //
     // **The handle is a published value too**, and walking it found something
-    // naming values could not: the object carries a `raw` member that `0004`'s
-    // `ReqHandle` does not declare — the query library's own object, and under
-    // it the cache's `Map`. It is this repository's inspection seam (`errormap`
-    // and `measurements` read it), it is not on the published entry today, and
-    // `PO2` is what keeps it the *only* undeclared member rather than the first
-    // of several.
+    // naming values could not: the object carries two members `0004`'s
+    // `ReqHandle` does not declare — `raw`, the query library's own object with
+    // the cache's `Map` under it, and `projected`, what one read derives. They
+    // are this repository's inspection seams (`errormap` and `measurements` read
+    // `raw`), they are not on the published entry, and `PB13`'s interface for
+    // this handle names exactly these beside the published members, so a third
+    // is a finding rather than the first of several. This said `PO2` held that,
+    // over `raw` alone; `PO2` is a spike witness this branch has not ported.
     const seams = ['raw', 'projected'];
     const reachable = [
       ...containers(handle.state, 'state'),
@@ -762,301 +1208,600 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // through it, each judged on the type the compiler gives the line — and the
       // handle's `refresh` is walked as API: its slot refused, what it resolves
       // with walked as a value the consumer holds.
-      const { shapes, breaches } = publishedTypeBreaches();
+      const { shapes, breaches, exceptions } = publishedTypeBreaches();
       expect(shapes.length, 'the published shapes, counted').toBeGreaterThan(25);
       expect(breaches, 'a write a published type lets through').toEqual([]);
+      exceptionStated(exceptions);
     }
   );
 
   // @contracts B5-C8
   it(
-    'PB13: what a consumer holds, they can write to without reaching anybody else, and no published type lets them',
-    { timeout: 60_000 },
+    'PB13: what a hook publishes keeps the publication discipline, a write to its Errors reaches no reader, and no published type lets a write through',
+    { timeout: 120_000 },
     async () => {
-      // **Every clause of the row in one arm.** At run time, five answers a
-      // consumer can hold — an answer with events, refusals and causes on it; a
-      // live request whose leg ended; what one `refresh()` resolves its callers
-      // with; an attempt that failed; and the refusal a provider publishes after
-      // a refused relay list. For each, one reader writes to everything it can
-      // reach — every own member of every container, an Error's `stack` and
-      // `code` among them — and nobody else sees it: not a second reader of the
-      // same answer, not the cache, not the same hook read again. **Freezing is
-      // not asserted here**: it is how this library keeps the promise, and a
-      // port that hands out copies keeps it too. At compile time, every member
-      // of every published type but the event refuses a write.
-      //
-      // **`raw` and `projected` are not walked, and that is priced, not
-      // promised.** They are this repository's inspection seams on the handle,
-      // on no interface: `handle.raw` is the query library's own object, and one
-      // line through it empties the cached value.
-      const SEAMS = ['raw', 'projected'];
-      const handedOut = (handle: object): Record<string, unknown> =>
-        Object.fromEntries(Object.entries(handle).filter(([member]) => !SEAMS.includes(member)));
-      const cached = (): unknown =>
-        client
-          .getQueryCache()
-          .getAll()
-          .map((entry) => entry.state.data);
-      // Who saw a consumer's write to `held`, of the value written to and
-      // `others`: an empty list is the promise kept.
-      const reachedBy = (held: unknown, others: Record<string, () => unknown>): string[] => {
-        // **What the consumer holds is a reader too**, as `B5-C6` reads its
-        // event: this row's evidence (`PB1`) says every container a consumer
-        // can reach is frozen, and a projection that handed out a fresh,
-        // writable copy each time would keep every other reader clean while
-        // the consumer's own value changed. Read off the published values
-        // themselves — not the wrapper this arm builds around a handle's
-        // members, which is the arm's own and takes every write.
-        const values =
-          held !== null &&
-          typeof held === 'object' &&
-          Object.getPrototypeOf(held) === Object.prototype
-            ? Object.values(held)
-            : [held];
-        const readers: Record<string, () => unknown> = {
-          'the value written to': () => values,
-          ...others
-        };
-        const before = Object.fromEntries(
-          Object.entries(readers).map(([reader, read]) => [reader, shape(read())])
-        );
-        expect(writeEverything(held), 'the containers written to').toBeGreaterThan(0);
-        return Object.entries(readers)
-          .filter(([reader, read]) => !isDeepStrictEqual(shape(read()), before[reader]))
-          .map(([reader]) => reader);
-      };
-      const reaches = (
-        answer: string,
-        held: unknown,
-        others: Record<string, () => unknown>
-      ): void => {
-        expect(reachedBy(held, others), `${answer}: a reader the consumer's write reached`).toEqual(
-          []
-        );
-      };
-      // Its control: a value nothing froze and nobody else reads, handed out
-      // as the arm hands out a handle's members — the write reaches it, and
-      // only it.
-      expect(
-        reachedBy({ published: { member: 'as it was' } }, { 'a stranger': () => ({}) }),
-        'the reach’s control'
-      ).toEqual(['the value written to']);
+      // **Every clause of the row in one arm.** At run time, every value a hook
+      // hands out — on each path that builds one — keeps the publication
+      // discipline `breachesOf` reads: every object reachable from it closed,
+      // no setter on its own or inherited path, nothing but plain records,
+      // lists and this library's own Errors in a snapshot, and a live
+      // interface holding the getters and commands it names and nothing else.
+      // A value that keeps it cannot be changed by any write a consumer
+      // spells, so it carries no write to the cache, another reader, a later
+      // projection or itself. For Errors the effect is read as well: every
+      // member written and read back through each reader the row names. At
+      // compile time, every member of every published type but the event
+      // refuses a write, with one exception the row states.
+      disciplineControls();
 
-      // An answer with events, refusals and causes on it, held by two hooks.
-      {
-        const { rxNostr, server } = createTestRelay(nextUrl());
-        const options = () => ({
+      const roster: string[] = [];
+      const breaches: string[] = [];
+      const check = (
+        name: string,
+        root: unknown,
+        interfaces: readonly (readonly [object, LiveInterface])[] = []
+      ): void => {
+        roster.push(name);
+        breaches.push(...breachesOf(root, name, disciplineOver(interfaces)));
+      };
+      const engine = (handle: object): [object, LiveInterface][] => [[handle, ENGINE_HANDLE]];
+      // What each outlet was handed, rendered once over `request`.
+      const outlets = (request: object, single: boolean): Map<string, unknown> => {
+        const handed = new Map<string, unknown>();
+        const view = render(Outlets, {
+          props: {
+            request: request as ReqHandle,
+            single,
+            held: (outlet: string, argument: unknown) => {
+              handed.set(outlet, argument);
+            }
+          }
+        });
+        flush();
+        view.unmount();
+        return handed;
+      };
+      const options =
+        (
+          namespace: string,
+          rxNostr: RxNostr | undefined,
+          extra: Partial<UseStreamedReqOpts> = {}
+        ) =>
+        (): UseStreamedReqOpts => ({
           verifyEvent: acceptAnyEvent,
           attempts,
           rxNostr,
           client,
-          namespace: 'pb13-incomplete',
+          namespace,
           filters: [{ kinds: [1] }],
-          reqIdBase: 'pb13a',
-          settleTimeoutMs: 300
+          reqIdBase: namespace,
+          settleTimeoutMs: 300,
+          ...extra
         });
-        const first = mount(() => useStreamedReq(options));
-        const second = mount(() => useStreamedReq(options));
+      const refusedFilter = (kind: number): { kinds: number[] } =>
+        ({ kinds: [kind], search: 'unsupported' }) as unknown as { kinds: number[] };
+
+      // **The premise the outlet cases rest on**: every request component
+      // renders its outlets through `RequestOutlets`, which is the one place an
+      // outlet's argument is built — the only other `{@render` in a component
+      // is `NostrApp`'s `children()`, which is handed nothing.
+      const COMPONENTS = resolve(LIBRARY, 'components');
+      const rendering = readdirSync(COMPONENTS)
+        .filter((file) => file.endsWith('.svelte'))
+        .filter((file) => readFileSync(join(COMPONENTS, file), 'utf8').includes('{@render'))
+        .sort();
+      expect(rendering, 'where an outlet’s argument can be built').toEqual([
+        'NostrApp.svelte',
+        'RequestOutlets.svelte'
+      ]);
+      expect(
+        readFileSync(join(COMPONENTS, 'NostrApp.svelte'), 'utf8').match(/\{@render [^}]*\}/g),
+        'and the provider’s is handed nothing'
+      ).toEqual(['{@render children()}']);
+
+      // A request through each status, and what one refresh resolves with.
+      {
+        const { rxNostr, server } = createTestRelay(nextUrl());
+        const held = mount(() => useStreamedReq(options('pb13-status', rxNostr)));
         const req = await waitForReq(server);
+        expect(held.value.state.status, 'the premise: loading').toBe('loading');
+        check('a request loading', held.value, engine(held.value));
+        check('its loading outlet', outlets(held.value, false).get('loading'), engine(held.value));
+
         respondWithEvent(
           server,
           req,
           fakeEvent({ id: 'pb13-a', created_at: 1, tags: [['t', 'ok']] })
         );
+        await settle();
+        expect(held.value.state.status, 'the premise: streaming').toBe('streaming');
+        check('a request streaming', held.value, engine(held.value));
+
+        respondWithEose(server, req);
+        await settle();
+        expect(held.value.state.status, 'the premise: settled').toBe('settled');
+        check('a request settled', held.value, engine(held.value));
+        check('its events outlet', outlets(held.value, false).get('events'), engine(held.value));
+        check('its event outlet', outlets(held.value, true).get('event'), engine(held.value));
+
+        // Two callers of one refresh hold one object (C15), so it is checked once.
+        const asked = held.value.refresh();
+        const askedAgain = held.value.refresh();
+        respondWithEose(server, await nextReqOf(server));
+        const [complete, sameComplete] = await Promise.all([asked, askedAgain]);
+        expect(complete.kind, 'the premise: complete').toBe('complete');
+        expect(sameComplete, 'the premise: two callers, one object').toBe(complete);
+        check('a refresh, complete', complete);
+
+        // Nobody answers, and the settle timeout closes it incomplete.
+        const timedOut = held.value.refresh();
+        await nextReqOf(server);
+        const incomplete = await timedOut;
+        expect(incomplete.kind, 'the premise: incomplete').toBe('incomplete');
+        check('a refresh, incomplete', incomplete);
+
+        const released = held.value.refresh();
+        await nextReqOf(server);
+        held.destroy();
+        const cancelled = await released;
+        expect(cancelled, 'the premise: released while in flight').toEqual({
+          kind: 'cancelled',
+          reason: 'consumer-released'
+        });
+        check('a refresh, cancelled because its consumer released it', cancelled);
+        const after = await held.value.refresh();
+        expect(after, 'the premise: a released handle').toEqual({
+          kind: 'not-started',
+          reason: 'released'
+        });
+        check('a refresh, not started because the handle was released', after);
+      }
+
+      // An answer with nothing in it.
+      {
+        const { rxNostr, server } = createTestRelay(nextUrl());
+        const held = mount(() => useStreamedReq(options('pb13-nothing', rxNostr)));
+        respondWithEose(server, await waitForReq(server));
+        await settle();
+        expect(held.value.state.status, 'the premise: settled with nothing').toBe('settled');
+        check('a request settled with nothing', held.value, engine(held.value));
+        check('its nodata outlet', outlets(held.value, false).get('nodata'), engine(held.value));
+        held.destroy();
+      }
+
+      // An answer with events, refusals and causes on it, held by two hooks.
+      const incompleteAnswer = await (async () => {
+        const { rxNostr, server } = createTestRelay(nextUrl());
+        const first = mount(() => useStreamedReq(options('pb13-incomplete', rxNostr)));
+        const second = mount(() => useStreamedReq(options('pb13-incomplete', rxNostr)));
+        const req = await waitForReq(server);
+        respondWithEvent(
+          server,
+          req,
+          fakeEvent({ id: 'pb13-b', created_at: 1, tags: [['t', 'ok']] })
+        );
         server.send(['CLOSED', req, 'rate-limited: slow down']);
         await settle(400);
-        expect(first.value.state.status, 'the premise: an incomplete answer').toBe('incomplete');
-        expect(first.value.diagnostics.refusals).toHaveLength(1);
-        reaches('an answer with events, refusals and causes', handedOut(first.value), {
-          'a second hook': () => handedOut(second.value),
-          'the cache': cached,
-          'the same hook, read again': () => handedOut(first.value)
-        });
-        first.destroy();
-        second.destroy();
-      }
+        expect(first.value.state.status, 'the premise: incomplete').toBe('incomplete');
+        expect(first.value.diagnostics.refusals, 'with a refusal').toHaveLength(1);
+        check('a request incomplete, with refusals and causes', first.value, engine(first.value));
+        return { first, second };
+      })();
 
-      // A live request whose leg ended, held by two hooks.
-      {
-        const { rxNostr, server } = createTestRelay(nextUrl());
-        const options = () => ({
-          verifyEvent: acceptAnyEvent,
-          attempts,
-          rxNostr,
-          client,
-          namespace: 'pb13-ended',
-          filters: [{ kinds: [1] }],
-          live: true,
-          retain: 'unbounded' as const,
-          reqIdBase: 'pb13b',
-          settleTimeoutMs: 300
-        });
-        const first = mount(() => useStreamedReq(options));
-        const second = mount(() => useStreamedReq(options));
-        const req = await waitForReq(server);
-        respondWithEvent(server, req, fakeEvent({ id: 'pb13-b', created_at: 1 }));
-        respondWithEose(server, req);
-        await settle(150);
-        rxNostr.dispose();
-        await settle(200);
-        expect(first.value.diagnostics.legEnded?.kind, 'the premise: the leg ended').toBe('ended');
-        reaches('a live request whose leg ended', handedOut(first.value), {
-          'a second hook': () => handedOut(second.value),
-          'the cache': cached,
-          'the same hook, read again': () => handedOut(first.value)
-        });
-        first.destroy();
-        second.destroy();
-      }
-
-      // What one `refresh()` resolves its two callers with — **each kind of
-      // outcome**, since each is built at a site of its own: an answer that
-      // completed, one that timed out incomplete, an attempt that failed, and
-      // a refresh the consumer released before it answered.
-      const refreshed = async (
-        kind: 'complete' | 'incomplete' | 'error' | 'cancelled'
-      ): Promise<void> => {
-        const { rxNostr, server } = createTestRelay(nextUrl());
-        const failing: StreamAccumulator = () => async () => {
-          throw new Error('the accumulator threw', { cause: new Error('and why') });
-        };
-        const handle = mount(() =>
-          useStreamedReq(() => ({
-            verifyEvent: acceptAnyEvent,
-            attempts,
-            rxNostr,
-            client,
-            namespace: `pb13-refreshed-${kind}`,
-            filters: [{ kinds: [1] }],
-            reqIdBase: `pb13c${kind}`,
-            settleTimeoutMs: 300,
-            ...(kind === 'error' ? { accumulator: failing } : {})
-          }))
-        );
-        if (kind !== 'error') respondWithEose(server, await nextReqOf(server));
-        await settle(150);
-        const asked = handle.value.refresh();
-        const askedAgain = handle.value.refresh();
-        if (kind === 'complete') respondWithEose(server, await nextReqOf(server));
-        if (kind === 'cancelled') {
-          await nextReqOf(server);
-          handle.destroy();
-        }
-        const [outcome, sameOutcome] = await Promise.all([asked, askedAgain]);
-        expect(outcome.kind, `the premise: an outcome that is ${kind}`).toBe(kind);
-        expect(sameOutcome, 'the premise: two callers of one refresh hold one object').toBe(
-          outcome
-        );
-        reaches(`what a refresh resolves with, ${kind}`, outcome, {
-          'the other caller': () => sameOutcome,
-          'the cache': cached,
-          ...(kind === 'cancelled' ? {} : { 'the hook': () => handedOut(handle.value) })
-        });
-        if (kind !== 'cancelled') handle.destroy();
-      };
-      for (const kind of ['complete', 'incomplete', 'error', 'cancelled'] as const)
-        await refreshed(kind);
-
-      // An attempt that failed, held by two hooks.
-      {
+      // An attempt that failed, held by two hooks, and what refresh resolves with.
+      const failedAnswer = await (async () => {
         const accumulator: StreamAccumulator = () => async () => {
           throw new Error('the accumulator threw', { cause: new Error('and why') });
         };
         const { rxNostr } = createTestRelay(nextUrl());
-        const options = () => ({
-          verifyEvent: acceptAnyEvent,
-          attempts,
-          rxNostr,
-          client,
-          namespace: 'pb13-failed',
-          filters: [{ kinds: [1] }],
-          reqIdBase: 'pb13d',
-          settleTimeoutMs: 300,
-          accumulator
-        });
-        const first = mount(() => useStreamedReq(options));
-        const second = mount(() => useStreamedReq(options));
+        const first = mount(() => useStreamedReq(options('pb13-failed', rxNostr, { accumulator })));
+        const second = mount(() =>
+          useStreamedReq(options('pb13-failed', rxNostr, { accumulator }))
+        );
         await settle(150);
         expect(first.value.state.status, 'the premise: a failed attempt').toBe('error');
-        reaches('an attempt that failed', handedOut(first.value), {
-          'a second hook': () => handedOut(second.value),
-          'the cache': cached,
-          'the same hook, read again': () => handedOut(first.value)
-        });
-        first.destroy();
-        second.destroy();
-      }
+        check('an attempt that failed', first.value, engine(first.value));
+        const outcome = await first.value.refresh();
+        expect(outcome.kind, 'the premise: error').toBe('error');
+        check('a refresh, error', outcome);
+        return { first, second };
+      })();
 
-      // The refusal a provider publishes after a refused relay list.
+      // A refused descriptor: two hooks asking different questions refused for
+      // one reason share one Error, and `refresh()` rejects with it.
+      const refusedAnswer = await (async () => {
+        const { rxNostr } = createTestRelay(nextUrl());
+        const first = mount(() =>
+          useStreamedReq(options('pb13-refused', rxNostr, { filters: [refusedFilter(1)] }))
+        );
+        const second = mount(() =>
+          useStreamedReq(options('pb13-refused', rxNostr, { filters: [refusedFilter(7)] }))
+        );
+        await settle(150);
+        expect(first.value.state.status, 'the premise: refused').toBe('error');
+        check('a refused descriptor', first.value, engine(first.value));
+        check('its error outlet', outlets(first.value, false).get('error'), engine(first.value));
+        let rejected: unknown;
+        try {
+          await first.value.refresh();
+        } catch (thrown) {
+          rejected = thrown;
+        }
+        // **Not the object the state carries**: `refresh()` resolves the
+        // descriptor again, and the refusal it throws is built on that call —
+        // the same class and words, and a published value of its own, so it is
+        // checked on its own rather than covered by the state's.
+        const carried = (first.value.state as { error?: Error }).error;
+        expect(rejected, 'the premise: refresh() rejects with a refusal').toBeInstanceOf(
+          UnsupportedFilterError
+        );
+        expect((rejected as Error).message, 'the same refusal the state carries').toBe(
+          carried?.message
+        );
+        check('a refresh, rejected with the refusal', rejected);
+        return { first, second };
+      })();
+
+      // On a server: a refused descriptor, and a request that is never started.
       {
-        const refused: RelayInput[] = [
-          { url: 'wss://a.example', read: true, write: true },
-          { url: 'wss://a.example', read: false, write: true }
-        ];
-        const built = mount(() =>
-          createNostrContext({
-            relays: refused,
-            harness: HARNESS_DIVERGENCES,
-            transportKeys: (urls) => [...urls]
-          })
+        const { rxNostr } = createTestRelay(nextUrl());
+        const refused = mount(() =>
+          useStreamedReq(
+            options('pb13-server-refused', rxNostr, {
+              environment: 'server',
+              filters: [refusedFilter(1)]
+            })
+          )
         );
-        const refusal = built.value.configurationError;
-        expect(refusal?.code, 'the premise: a refused list').toBe('conflicting-capabilities');
-        reaches('the refusal a provider publishes', refusal, {
-          'the provider, read again': () => built.value.configurationError,
-          'the scope it accepted': () => built.value.scope
-        });
-        built.destroy();
+        const asked = mount(() =>
+          useStreamedReq(options('pb13-server', rxNostr, { environment: 'server' }))
+        );
+        await settle();
+        expect(refused.value.state.status, 'the premise: refused on a server').toBe('error');
+        check('a refused descriptor, on a server', refused.value, engine(refused.value));
+        const outcome = await asked.value.refresh();
+        expect(outcome, 'the premise: a server').toEqual({ kind: 'not-started', reason: 'server' });
+        check('a refresh, not started on a server', outcome);
+        refused.destroy();
+        asked.destroy();
       }
 
-      // **The write's and the snapshot's own controls.** Over a value nothing
-      // froze, the write lands on each kind of member it tries — a property, a
-      // symbol-keyed one, a list, and one that refuses assignment but not
-      // redefinition — and the snapshot sees each, and sees a non-enumerable
-      // member and a map's contents, so an unchanged snapshot above is the
-      // answer and not a blind instrument.
-      const key = Symbol('member');
-      // An empty list has no member to write to, and a push is the one write
-      // it takes. Read by reference afterwards, since the slot that holds it
-      // is written over.
-      const empty: unknown[] = [];
-      const open: Record<string | symbol, unknown> = {
-        property: { value: 1 },
-        [key]: 'as it was',
-        list: ['as it was'],
-        empty
-      };
-      Object.defineProperty(open, 'fixed', {
-        value: 'as it was',
-        writable: false,
-        configurable: true,
-        enumerable: true
-      });
-      const untouched = shape(open) as Record<string, unknown>;
-      expect(writeEverything(open), 'the write’s control: what it reached').toBeGreaterThan(3);
-      const touched = shape(open) as Record<string, unknown>;
-      for (const member of ['property', String(key), 'list', 'fixed'])
-        expect(touched[member], `the write’s control: ${member}, written`).not.toEqual(
-          untouched[member]
+      // A deferred plan.
+      {
+        const { rxNostr } = createTestRelay(nextUrl());
+        const held = mount(() =>
+          useStreamedReq(options('pb13-deferred', rxNostr, { deferred: true }))
         );
-      expect(empty.length, 'the write’s control: an empty list, pushed onto').toBeGreaterThan(0);
-      const hidden = {};
-      Object.defineProperty(hidden, 'unlisted', { value: 'as it was', enumerable: false });
-      expect(shape(hidden), 'the snapshot’s control: a non-enumerable member').toEqual({
-        unlisted: 'as it was'
+        await settle();
+        expect(held.value.state.status, 'the premise: deferred').toBe('loading');
+        check('a deferred request', held.value, engine(held.value));
+        const outcome = await held.value.refresh();
+        expect(outcome, 'the premise: deferred').toEqual({
+          kind: 'not-started',
+          reason: 'deferred'
+        });
+        check('a refresh, not started because the plan is deferred', outcome);
+        held.destroy();
+      }
+
+      // A live request whose leg ended.
+      {
+        const { rxNostr, server } = createTestRelay(nextUrl());
+        const held = mount(() =>
+          useStreamedReq(options('pb13-ended', rxNostr, { live: true, retain: 'unbounded' }))
+        );
+        const req = await waitForReq(server);
+        respondWithEvent(server, req, fakeEvent({ id: 'pb13-c', created_at: 1 }));
+        respondWithEose(server, req);
+        await settle(150);
+        rxNostr.dispose();
+        await settle(200);
+        expect(held.value.diagnostics.legEnded?.kind, 'the premise: the leg ended').toBe('ended');
+        check('a live request whose leg ended', held.value, engine(held.value));
+        held.destroy();
+      }
+
+      // Under a provider: the three published hooks, a send each way, a request
+      // with nowhere to ask, and the provider going away under a refresh.
+      {
+        const url = nextUrl();
+        const server = new WS(url, { jsonProtocol: true });
+        const provider = mount(() => {
+          const built = createNostrContext({
+            relays: [url],
+            harness: HARNESS_DIVERGENCES,
+            verifyEvent: acceptAnyEvent
+          });
+          setNostrContext(built);
+          return built;
+        });
+
+        const request = mount(() =>
+          useReq(() => ({
+            kind: 'request',
+            descriptor: {
+              filters: [{ kinds: [1] }],
+              namespace: 'pb13-useReq',
+              settleTimeoutMs: 300
+            }
+          }))
+        );
+        const req = String(((await nextOf(server, 'REQ')) as unknown[])[1]);
+        respondWithEvent(server, req, fakeEvent({ id: 'pb13-d', created_at: 1 }));
+        server.send(['NOTICE', 'a relay says something']);
+        server.send(['CLOSED', req, 'rate-limited: slow down']);
+        await settle(400);
+        expect(request.value.state.status, 'the premise: useReq(), incomplete').toBe('incomplete');
+        check('useReq()', request.value, [[request.value, REQ_HANDLE]]);
+        const outcome = request.value.refresh();
+        await nextOf(server, 'REQ');
+        const refreshed = await outcome;
+        expect(refreshed.kind, 'the premise: through useReq(), incomplete').toBe('incomplete');
+        check('a refresh through useReq(), incomplete', refreshed);
+
+        const diagnostics = mount(() => useRelayDiagnostics());
+        const row = Object.values(diagnostics.value.relays)[0];
+        expect(row?.lastNotice, 'the premise: a notice on the row').toBeDefined();
+        expect(row?.lastRefusal, 'and a refusal').toBeDefined();
+        check('useRelayDiagnostics()', diagnostics.value, [[diagnostics.value, RELAY_DIAGNOSTICS]]);
+
+        const sender = mount(() => useSend());
+        check('useSend()', sender.value, [[sender.value, SEND]]);
+        const refusedSend = await sender.value({} as never);
+        expect(refusedSend.status, 'the premise: a send refused').toBe('refused');
+        check('a send, refused', refusedSend);
+        const signed = {
+          id: 'a'.repeat(64),
+          pubkey: 'b'.repeat(64),
+          sig: 'c'.repeat(128),
+          kind: 1,
+          content: 'pb13',
+          tags: [['t', 'sent']],
+          created_at: 1
+        };
+        const sending = sender.value(signed);
+        await nextOf(server, 'EVENT');
+        server.send(['OK', signed.id, true, 'saved: thanks']);
+        const settledSend = await sending;
+        expect(settledSend.status, 'the premise: a send settled').toBe('settled');
+        check('a send, settled', settledSend);
+
+        const nowhere = mount(() =>
+          useStreamedReq(() => ({
+            namespace: 'pb13-nowhere',
+            filters: [{ kinds: [1] }],
+            relays: [],
+            reqIdBase: 'pb13-nowhere',
+            settleTimeoutMs: 300
+          }))
+        );
+        const unasked = await nowhere.value.refresh();
+        expect(unasked, 'the premise: nowhere to ask').toEqual({
+          kind: 'not-started',
+          reason: 'no-readable-relay'
+        });
+        check('a refresh, not started with no readable relay', unasked);
+
+        const outliving = mount(() =>
+          useStreamedReq(() => ({
+            namespace: 'pb13-outliving',
+            filters: [{ kinds: [1] }],
+            reqIdBase: 'pb13-outliving',
+            settleTimeoutMs: 30_000
+          }))
+        );
+        respondWithEose(server, String(((await nextOf(server, 'REQ')) as unknown[])[1]));
+        await settle();
+        const inFlight = outliving.value.refresh();
+        await nextOf(server, 'REQ');
+        request.destroy();
+        diagnostics.destroy();
+        sender.destroy();
+        nowhere.destroy();
+        provider.destroy();
+        const disposed = await inFlight;
+        expect(disposed, 'the premise: the provider went away under it').toEqual({
+          kind: 'cancelled',
+          reason: 'provider-disposed'
+        });
+        check('a refresh, cancelled because the provider was disposed', disposed);
+        let rejected: unknown;
+        try {
+          await outliving.value.refresh();
+        } catch (thrown) {
+          rejected = thrown;
+        }
+        expect(rejected, 'the premise: a refresh after the teardown').toMatchObject({
+          code: 'provider-disposed'
+        });
+        check('a refresh, rejected because the provider was disposed', rejected);
+        outliving.destroy();
+      }
+
+      // The refusal a provider publishes, one of each class, read through the
+      // hook that publishes it.
+      const refusals: [
+        RelayConfigurationErrorCode,
+        { readonly prototype: object },
+        Parameters<typeof createNostrContext>[0]
+      ][] = [
+        [
+          'conflicting-capabilities',
+          InvalidRelayScopeError,
+          {
+            relays: [
+              { url: 'wss://a.example', read: true, write: true },
+              { url: 'wss://a.example', read: false, write: true }
+            ],
+            transportKeys: (urls) => [...urls]
+          }
+        ],
+        [
+          'invalid-relay-input',
+          InvalidRelayInputError,
+          { relays: ['nostr.example.com'], transportKeys: (urls) => [...urls] }
+        ],
+        [
+          'non-idempotent-url',
+          NonIdempotentRelayUrlError,
+          {
+            relays: ['wss://h.example/raw'],
+            transportKeys: (urls) =>
+              urls.map((one) =>
+                one === 'wss://h.example/raw'
+                  ? 'wss://h.example/first'
+                  : one === 'wss://h.example/first'
+                    ? 'wss://h.example/second'
+                    : one
+              )
+          }
+        ],
+        [
+          'transport-key-mismatch',
+          TransportKeyMismatchError,
+          {
+            relays: ['wss://a.example', 'wss://b.example'],
+            transportKeys: (urls) => (urls.length === 1 ? [...urls] : [urls[0] as string])
+          }
+        ],
+        [
+          'transport-incompatible',
+          TransportIncompatibleError,
+          {
+            relays: ['wss://a.example'],
+            transportKeys: () => {
+              throw new Error('this transport names nothing');
+            }
+          }
+        ]
+      ];
+      for (const [code, kind, given] of refusals) {
+        const provider = mount(() => {
+          const built = createNostrContext({ harness: HARNESS_DIVERGENCES, ...given });
+          setNostrContext(built);
+          return built;
+        });
+        const diagnostics = mount(() => useRelayDiagnostics());
+        const refusal = diagnostics.value.configurationError;
+        expect(refusal?.code, `the premise: ${code}`).toBe(code);
+        expect(Object.getPrototypeOf(refusal), `the premise: ${code}, its class`).toBe(
+          kind.prototype
+        );
+        check(`a provider refusal, ${code}`, diagnostics.value, [
+          [diagnostics.value, RELAY_DIAGNOSTICS]
+        ]);
+        diagnostics.destroy();
+        provider.destroy();
+      }
+
+      expect([...roster].sort(), 'the population, case by case').toEqual([...POPULATION].sort());
+      expect(breaches, 'a published value that does not keep the discipline').toEqual([]);
+
+      // **The Errors, written to and read back.** Every member a consumer can
+      // name — of the Error and of everything it holds — through the value
+      // written to, a second hook, the cache, and the same hook read again.
+      // Each reader is first shown to answer what the value written to
+      // answers, so an unchanged read is about this Error and not another.
+      const cached = (namespace: string): unknown[] =>
+        client
+          .getQueryCache()
+          .getAll()
+          .filter((entry) => JSON.stringify(entry.queryKey).includes(namespace))
+          .map((entry) => entry.state);
+      type Held = { value: { state: unknown; diagnostics: unknown } };
+      const errorOf = (hook: Held): unknown => (hook.value.state as { error?: unknown }).error;
+      const observed: [string, Held, Held, (() => unknown) | undefined][] = [
+        [
+          'a refusal',
+          refusedAnswer.first,
+          refusedAnswer.second,
+          () => (cached('pb13-refused')[0] as { error?: unknown } | undefined)?.error
+        ],
+        [
+          'a failure',
+          failedAnswer.first,
+          failedAnswer.second,
+          () =>
+            (cached('pb13-failed')[0] as { data?: { failure?: { error?: unknown } } } | undefined)
+              ?.data?.failure?.error
+        ],
+        // **No cache reader for this one**, and that is what the cache holds:
+        // the record, whose causes this Error is built from and memoised on.
+        ['an incomplete answer', incompleteAnswer.first, incompleteAnswer.second, undefined]
+      ];
+      for (const [answer, first, second, cache] of observed) {
+        const held = errorOf(first);
+        expect(held, `${answer}: the premise, an Error to write to`).toBeInstanceOf(Error);
+        const readers: Record<string, () => unknown> = {
+          'the value written to': () => held,
+          'a second hook': () => errorOf(second),
+          'its diagnostics': () => (second.value.diagnostics as { lastError?: unknown }).lastError,
+          'the same hook, read again': () => errorOf(first),
+          ...(cache === undefined ? {} : { 'the cache': cache })
+        };
+        const { before, reached } = writeAndReadBack(held as object, readers);
+        for (const reader of Object.keys(readers))
+          expect(
+            before[reader],
+            `${answer}: ${reader} answered what the value written to did`
+          ).toEqual(before['the value written to']);
+        expect(reached, `${answer}: a reader the consumer’s write reached`).toEqual([]);
+      }
+      // Its control: an Error frozen the way the platform freezes one, whose
+      // `stack` setter is live — every reader sees the write — and a member
+      // only a redefinition reaches, one level down.
+      const leaky = Object.freeze(new Error('as it was'));
+      expect(Object.isFrozen(leaky), 'the control’s premise: frozen, by the platform’s word').toBe(
+        true
+      );
+      expect(
+        writeAndReadBack(leaky, { 'the value written to': () => leaky, 'a reader': () => leaky })
+          .reached,
+        'the write-back’s control: a live setter'
+      ).toEqual(['the value written to: stack', 'a reader: stack']);
+      const nested = Object.freeze({
+        cause: Object.defineProperty({}, 'note', { value: 'as it was', configurable: true })
       });
-      expect(shape({ [Symbol('k')]: 1 }), 'the snapshot’s control: a symbol key').not.toEqual(
-        shape({})
+      expect(
+        writeAndReadBack(nested, { 'a reader': () => nested }).reached,
+        'the write-back’s control: a redefinition, one level down'
+      ).toEqual(['a reader: cause.note']);
+
+      // **The stated exception, at run time.** A method slot the list type
+      // admits is a write the frozen list refuses: the list gains no member of
+      // its own, a call answers as it did, and the other hook's list is
+      // untouched.
+      type Listed = { readonly events: readonly { readonly id: string }[] };
+      const listed = (incompleteAnswer.first.value.state as Listed).events;
+      const ids = listed.map((event) => event.id);
+      try {
+        (listed as unknown as { map: unknown }).map = () => [];
+      } catch {
+        // Refused, which is how the exception is closed at run time.
+      }
+      expect(Object.hasOwn(listed, 'map'), 'the exception at run time: no slot of its own').toBe(
+        false
       );
-      expect(shape(new Map([['k', 1]])), 'the snapshot’s control: a map’s contents').not.toEqual(
-        shape(new Map([['k', 2]]))
-      );
+      expect(
+        listed.map((event) => event.id),
+        'the exception at run time: a call answers as it did'
+      ).toEqual(ids);
+      expect(
+        (incompleteAnswer.second.value.state as Listed).events.map,
+        'the exception at run time: the other hook’s list'
+      ).toBe(Array.prototype.map);
+
+      for (const each of [incompleteAnswer, failedAnswer, refusedAnswer]) {
+        each.first.destroy();
+        each.second.destroy();
+      }
 
       // At compile time: every member of every published type but the event
-      // refuses a write.
-      const { shapes, breaches } = publishedTypeBreaches();
-      expect(shapes.length, 'the published shapes, counted').toBeGreaterThan(25);
-      expect(breaches, 'a write a published type lets through').toEqual([]);
+      // refuses a write, but the stated exception.
+      const typed = publishedTypeBreaches();
+      expect(typed.shapes.length, 'the published shapes, counted').toBeGreaterThan(25);
+      expect(typed.breaches, 'a write a published type lets through').toEqual([]);
+      exceptionStated(typed.exceptions);
 
       // **The probe's controls, for what this row added to it.** A union walked
       // one variant at a time behind its guard, a handle's method — its slot,
@@ -1087,6 +1832,109 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         lines.filter((one) => one.startsWith('void value.seen!.')),
         'a read-only collection’s operations are admitted'
       ).toEqual([]);
+
+      // **And for what this round added.** A method is one signature callable
+      // with nothing, or it is reported; a function's own members are walked
+      // and its `call` is written to; a collection's payload is reported rather
+      // than passed over; an index signature is written under a key no member
+      // has; and the exception is a read-only list's or a function's standard
+      // slot, never a mutable list's.
+      const throwsOn = (typeText: string): string => {
+        try {
+          writesThrough(declarations, typeText, { callables: 'api' });
+        } catch (thrown) {
+          return (thrown as Error).message;
+        }
+        return 'walked';
+      };
+      expect(
+        throwsOn('{ refresh: { (): Promise<number>; (force: boolean): Promise<string[]> } }'),
+        'the probe’s control: an overloaded method'
+      ).toMatch(/cannot call/);
+      expect(
+        throwsOn('{ refresh(force: boolean): Promise<number> }'),
+        'the probe’s control: a method with a required argument'
+      ).toMatch(/cannot call/);
+      expect(
+        throwsOn('{ seen: ReadonlyMap<string, { n: number }> }'),
+        'the probe’s control: a collection’s payload'
+      ).toMatch(/payload the probe does not walk/);
+      // A method this repository declares, with a member of its own; and two
+      // lists of different types, since a type is walked where it is first met.
+      const withMethod = 'export {};\ninterface Refresh { (): Promise<number>; cell: string[] }';
+      const shaped =
+        '{ refresh: Refresh; list: number[]; frozen: readonly string[]; named: { __key: string; [key: string]: string } }';
+      const shapedLines = writesThrough(withMethod, shaped, { callables: 'api' });
+      const own = [
+        'value.refresh!.cell = value.refresh!.cell!;',
+        'value.refresh!.call = value.refresh!.call!;',
+        'value.list!.map = value.list!.map!;',
+        'value.frozen!.map = value.frozen!.map!;',
+        "value.named!['__key_'] = value.named!['__key_']!;"
+      ];
+      expect(shapedLines, 'the probe’s control: each asked for by name').toEqual(
+        expect.arrayContaining(own)
+      );
+      expect(
+        judgeWrites(withMethod, shaped, own).map((one) => one.verdict),
+        'the probe’s control: a function’s member compiles, its `call` and a read-only list’s method are the exception, a mutable list’s is not'
+      ).toEqual([
+        'compiles',
+        'a standard method slot',
+        'compiles',
+        'a standard method slot',
+        'compiles'
+      ]);
+      // Distinct by type, as the compiler interns them: a named type handed by
+      // two outlets is one argument, and a member that is not a snippet is
+      // the consumer's to write, not an outlet.
+      const handed = snippetArgumentsOf(
+        "import type { Snippet } from 'svelte';\ntype N = { readonly n: number };\ntype S = { readonly s: string };",
+        [
+          '{ children: Snippet<[N]>; again?: Snippet<[N]>; other: Snippet<[S]>; written: string }',
+          '{ children: Snippet<[S]> }'
+        ]
+      );
+      expect(handed, 'the probe’s control: each outlet’s argument, once a type').toHaveLength(2);
+
+      // **The arrays stay arrays**, which is what the exception buys: a
+      // consumer's `$state.snapshot`, a non-empty tuple, and an `instanceof`
+      // narrowing, compiled against the published types.
+      const entry = "import type * as Published from '$lib/v1/index.js';";
+      expect(
+        consumerDiagnostics(
+          [
+            entry,
+            "declare const settled: Extract<Published.ReqState, { status: 'settled' }>;",
+            "declare const incomplete: Extract<Published.ReqState, { status: 'incomplete' }>;",
+            'declare const diagnostics: Published.ReqDiagnostics;',
+            'export const ids: string[] = $state.snapshot(settled).events.map((event) => event.id);',
+            'export const causes: readonly [Published.IncompleteCause, ...Published.IncompleteCause[]] = incomplete.causes;',
+            'export const first: Published.IncompleteCause = incomplete.causes[0];',
+            'if (diagnostics.refusals instanceof Array) {',
+            '  // @ts-expect-error -- still read-only after the narrowing',
+            '  diagnostics.refusals.length = 0;',
+            '}'
+          ].join('\n')
+        ),
+        'a consumer’s snapshot, tuple and narrowing'
+      ).toEqual([]);
+      // Its control: the list type this row gave up, under the same snapshot —
+      // so a clean compile above is the arrays, and not a check that reads
+      // nothing.
+      expect(
+        consumerDiagnostics(
+          [
+            // The same import, which is what declares `$state` to a `.ts` file.
+            entry,
+            'export type Held = Published.ReqState;',
+            'type ReadonlyList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };',
+            'declare const settled: { readonly events: ReadonlyList<{ readonly id: string }> };',
+            'export const ids = $state.snapshot(settled).events.map((event: { readonly id: string }) => event.id);'
+          ].join('\n')
+        ).map((one) => one.code),
+        'the snapshot’s control: a list that is not an array'
+      ).toEqual([2349]);
     }
   );
 });

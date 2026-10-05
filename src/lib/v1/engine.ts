@@ -19,7 +19,6 @@ import type {
   Refusal
 } from './eventset.js';
 import { completionOf, completionOfRecord, project, refusalsOf } from './eventset.js';
-import type { ReadonlyList } from './list.js';
 import type { Retention } from './normalize.js';
 import { hardenOwned, ownedByLibrary } from './owned.js';
 import type {
@@ -254,7 +253,7 @@ export class IncompleteResultError extends Error {
   /**
    * The three members `Error` gives this class, re-declared as `readonly`.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and inherited members are where that was
    * false**: `message`, `name` and `stack` arrive from `Error`, where they are
    * mutable, so `err.message = '[redacted]'` compiled against the emitted
@@ -486,7 +485,7 @@ export type RefreshOutcome =
 
 export type ReqState =
   | { readonly status: 'loading' }
-  | { readonly status: 'streaming'; readonly events: ReadonlyList<ReqEvent> }
+  | { readonly status: 'streaming'; readonly events: readonly ReqEvent[] }
   /**
    * The backlog ended and brought everything it was going to bring.
    *
@@ -573,7 +572,7 @@ export type ReqState =
    */
   | {
       readonly status: 'settled';
-      readonly events: ReadonlyList<ReqEvent>;
+      readonly events: readonly ReqEvent[];
       readonly hasMatchEvidence: boolean;
     }
   /**
@@ -595,7 +594,7 @@ export type ReqState =
    */
   | {
       readonly status: 'incomplete';
-      readonly events: ReadonlyList<ReqEvent>;
+      readonly events: readonly ReqEvent[];
       readonly causes: IncompleteCauses;
       readonly error: IncompleteError;
     }
@@ -610,7 +609,7 @@ export type ReqState =
    */
   | {
       readonly status: 'error';
-      readonly events: ReadonlyList<ReqEvent>;
+      readonly events: readonly ReqEvent[];
       readonly error: ReqStateError;
     };
 
@@ -859,7 +858,7 @@ export interface ReqDiagnostics {
    */
   readonly legEnded: LegEnd | undefined;
   /** Every relay that refused, with what it said. A5's fifth event. */
-  readonly refusals: ReadonlyList<Refusal>;
+  readonly refusals: readonly Refusal[];
 }
 
 export function deriveDiagnostics(
@@ -1149,9 +1148,14 @@ export interface ReqHandle {
    * an attempt of a request it did not ask for.
    *
    * **A property, not a method**: TypeScript declares a method as an
-   * assignable slot, so `handle.refresh = …` compiled against this interface
-   * — a write into a published value the run time refuses. Declared `readonly`,
-   * the slot is refused and the call is the same call.
+   * assignable slot, so `handle.refresh = …` compiled against this interface —
+   * and the run time took it too, because the handle was not frozen, so one
+   * consumer's replacement was every later reader's `refresh`. Declared
+   * `readonly`, the slot is refused by the type; the handle is sealed, so the
+   * write is refused at run time however it is spelled; and the call is the
+   * same call. The function's own `call`, `apply` and `bind` stay assignable in
+   * TypeScript's declarations of every function — the exception `B5-C8` states
+   * — and the sealed function refuses them at run time.
    */
   readonly refresh: () => Promise<RefreshOutcome>;
 }

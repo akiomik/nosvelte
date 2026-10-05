@@ -19,12 +19,12 @@ export interface RequestOutletContext {
 export type Outlets<T> = {
   children: Snippet<[T & RequestOutletContext]>;
   loading?: Snippet<[RequestOutletContext]>;
-  error?: Snippet<[{ request: ReqHandle; error: ReqOutletError }]>;
+  error?: Snippet<[{ readonly request: ReqHandle; readonly error: ReqOutletError }]>;
   nodata?: Snippet<[RequestOutletContext]>;
 };
 
-export type Events = { events: readonly ReqEvent[] };
-export type Event = { event: ReqEvent };
+export type Events = { readonly events: readonly ReqEvent[] };
+export type Event = { readonly event: ReqEvent };
 
 export type EventListProps = { namespace?: string; ids: readonly string[] } & Outlets<Events>;
 export type UniqueEventListProps = EventListProps;

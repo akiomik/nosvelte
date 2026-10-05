@@ -25,7 +25,7 @@
   type Props = {
     request: ReqHandle;
     loading?: Snippet<[RequestOutletContext]> | undefined;
-    error?: Snippet<[{ request: ReqHandle; error: ReqOutletError }]> | undefined;
+    error?: Snippet<[{ readonly request: ReqHandle; readonly error: ReqOutletError }]> | undefined;
     nodata?: Snippet<[RequestOutletContext]> | undefined;
   } & (
     | { event: Snippet<[Event & RequestOutletContext]>; events?: undefined }
@@ -35,21 +35,24 @@
   let { request, event, events, loading, error, nodata }: Props = $props();
 
   const outlet = $derived(deriveOutlet(request.state));
-  const shown = $derived(request.state.status === 'loading' ? [] : request.state.events);
+  // The argument each outlet is handed is a published value: frozen, as the
+  // list and everything else a hook hands out is (`B5-C8`).
+  const NONE: readonly never[] = Object.freeze([]);
+  const shown = $derived(request.state.status === 'loading' ? NONE : request.state.events);
 </script>
 
 {#if outlet.slot === 'loading'}
-  {@render loading?.({ request })}
+  {@render loading?.(Object.freeze({ request }))}
 {:else if outlet.slot === 'error'}
-  {@render error?.({ request, error: outlet.error })}
+  {@render error?.(Object.freeze({ request, error: outlet.error }))}
 {:else if events !== undefined}
   {#if outlet.slot === 'nodata'}
-    {@render nodata?.({ request })}
+    {@render nodata?.(Object.freeze({ request }))}
   {:else}
-    {@render events({ events: shown, request })}
+    {@render events(Object.freeze({ events: shown, request }))}
   {/if}
 {:else if outlet.slot === 'nodata' || shown[0] === undefined}
-  {@render nodata?.({ request })}
+  {@render nodata?.(Object.freeze({ request }))}
 {:else}
-  {@render event?.({ event: shown[0], request })}
+  {@render event?.(Object.freeze({ event: shown[0], request }))}
 {/if}

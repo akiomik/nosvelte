@@ -266,7 +266,7 @@ export class ReqFailure extends Error {
   /**
    * The three members `Error` gives this class, re-declared as `readonly`.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and these three were not**: they are inherited,
    * where they are mutable, so `state.error.message = '[redacted]'` compiled —
    * legal-looking code the run time refuses, which is the exact failure the

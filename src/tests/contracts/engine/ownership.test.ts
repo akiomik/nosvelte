@@ -704,13 +704,33 @@ describe('the event a consumer holds is this library’s own', () => {
             `Extract<Published.ReqHandle['state'], { status: '${status}' }>['events'][number]`
         )
       ];
+      // **One exception, stated rather than hidden**: a read-only list's
+      // methods are assignable slots in TypeScript's own declarations, and the
+      // lists stay arrays — `$state.snapshot`, tuple inference and narrowing
+      // read them as arrays — rather than refuse that one write by type. Every
+      // other write is refused, and the exception is asked for by name, so it
+      // is a measured concession and not a gap the probe stopped reading.
       for (const eventType of eventTypes) {
         const writes = writesThrough(PUBLISHED, eventType);
         expect(writes.length, `${eventType}: the probe enumerated the event`).toBeGreaterThan(9);
+        const verdicts = judgeWrites(PUBLISHED, eventType, writes);
         expect(
-          judgeWrites(PUBLISHED, eventType, writes).filter((one) => one.verdict !== 'refused'),
+          verdicts.filter(
+            (one) => one.verdict !== 'refused' && one.verdict !== 'a standard method slot'
+          ),
           `${eventType}: a write through the published event the types do not refuse`
         ).toEqual([]);
+        expect(
+          verdicts
+            .filter((one) => one.verdict === 'a standard method slot')
+            .map((one) => one.write),
+          `${eventType}: the stated exception, on the tag list and on a tag`
+        ).toEqual(
+          expect.arrayContaining([
+            'value.tags!.map = value.tags!.map!;',
+            'value.tags![0]!.map = value.tags![0]!.map!;'
+          ])
+        );
       }
 
       // **And the surface stays readable.** The list type refuses every slot,

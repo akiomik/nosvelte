@@ -36,8 +36,6 @@
 import type * as Nostr from 'nostr-typedef';
 import type { EventPacket } from 'rx-nostr';
 
-import type { ReadonlyList } from './list.js';
-
 /**
  * An event as this library publishes it: immutable to the depth a consumer can
  * reach, and **written out rather than derived from the dependency's type**.
@@ -56,7 +54,7 @@ export interface ReqEvent {
   readonly pubkey: string;
   readonly content: string;
   readonly created_at: number;
-  readonly tags: ReadonlyList<ReadonlyList<string>>;
+  readonly tags: readonly (readonly string[])[];
   /** @deprecated by NIP-03; carried when the wire had one. */
   readonly ots?: string;
 }

@@ -148,3 +148,25 @@ export function isOwnedByLibrary(value: unknown): boolean {
     return false;
   }
 }
+
+/**
+ * Close a live interface a hook hands out — a handle, `useRelayDiagnostics()`'s
+ * object — and hand it back: every function on it first, each getter's and each
+ * command, then the object itself (`B5-C8`).
+ *
+ * **`Object.freeze` closes an object's own slots and nothing they point at.** A
+ * handle frozen alone kept its getters' function objects open, and one of them
+ * is one call away for any consumer —
+ * `Object.getOwnPropertyDescriptor(handle, 'state').get` — so whatever one
+ * consumer hung on it, every other reader of that handle read. What a getter
+ * *returns* is not closed here: each projection freezes its own, on every read.
+ */
+export function sealInterface<T extends object>(value: T): T {
+  for (const key of Reflect.ownKeys(value)) {
+    const member = Reflect.getOwnPropertyDescriptor(value, key);
+    if (member?.get !== undefined) Object.freeze(member.get);
+    if (member?.set !== undefined) Object.freeze(member.set);
+    if (typeof member?.value === 'function') Object.freeze(member.value);
+  }
+  return Object.freeze(value);
+}

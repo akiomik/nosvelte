@@ -13,6 +13,7 @@
  * `ReqHandle` and no more, so the engine's extras stay off the surface.
  */
 import type { ReqHandle } from './engine.js';
+import { sealInterface } from './owned.js';
 import type { ReqDescriptor, ReqPlan } from './public-entry.js';
 import { useStreamedReq, type UseStreamedReqOpts } from './useStreamedReq.svelte.js';
 
@@ -106,7 +107,9 @@ export function useReq(plan: () => ReqPlan): ReqHandle {
       : optionsOf(descriptor as ReqDescriptor);
   });
 
-  return {
+  // Sealed, with its `refresh` and its getters' functions, as every handle a
+  // hook hands out is (`B5-C8`).
+  return sealInterface({
     get state() {
       return handle.state;
     },
@@ -117,5 +120,5 @@ export function useReq(plan: () => ReqPlan): ReqHandle {
       return handle.diagnostics;
     },
     refresh: () => handle.refresh()
-  };
+  });
 }
