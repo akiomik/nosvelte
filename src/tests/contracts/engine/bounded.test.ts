@@ -10,7 +10,6 @@ import {
   CROSSINGS,
   type Dimension,
   minimalPairs,
-  PAYLOAD_FIELDS,
   rankingVariants,
   type Rewrite
 } from './helpers/design.js';
@@ -110,24 +109,23 @@ function shownOf(set: CachedEventSet, at: number, superseded: readonly string[])
 const BOUNDS = [1, 2, 3] as const;
 
 /**
- * The dimensions a bound selects by and that hold revisions — the coordinate's
- * `d` (`d value`, `d shape`) and the ranking (`instant`) — whose ties are where
- * the ranking variants run. (`kind` and `author` cases are two coordinates, so
- * they hold no revision for a bound to supersede.) **A bound sees every payload case too**: a bound that
- * read a payload value to decide what to keep — one that dropped an entry with
- * empty content, say — publishes a superseded revision without reading the
- * ranking at all, so the payload cases cannot be left to the identity arms.
- * Leaving them out once let exactly that through both bounded landings. A
- * payload pair carries its own values in both directions, so it runs without
- * the ranking variants laid over it.
+ * The dimensions whose cases hold no revision for a bound to supersede: two
+ * kinds or two authors are two coordinates, two packets of one id are one
+ * event, and regular events are each their own. **Every other dimension
+ * reaches the bound, payload included, with every ranking variant wherever a
+ * pair ties.** A bound can read a payload value to decide what to keep — drop
+ * entries with empty content, or rank them by another field when the content
+ * is empty — so neither the payload cases nor their crossing with the ranking
+ * variants can be left out: each was cut once to save runs, and each time a
+ * bound that broke both rows passed both landings.
  */
-const RANKED_DIMENSIONS: readonly Dimension[] = ['d value', 'd shape', 'instant'];
+const WITHOUT_REVISIONS: readonly Dimension[] = ['kind', 'author', 'same id', 'regular'];
 
 /**
  * Every enumerated case whose two events share a coordinate
  * (`helpers/design.ts`), as the revision the rules keep and the one they
- * supersede, with its dimension. Two packets of one id are not among them:
- * they are one event, not a revision and the one it supersedes.
+ * supersede. Two packets of one id are not among them: they are one event,
+ * not a revision and the one it supersedes.
  */
 const REVISION_PAIRS = minimalPairs()
   .filter(({ sameCoordinate, dimension }) => sameCoordinate && dimension !== 'same id')
@@ -141,24 +139,21 @@ const REVISION_PAIRS = minimalPairs()
 
 /**
  * The ranking variants a pair is run with: every one in `rankingVariants` when
- * the two revisions of a ranked dimension tie on `created_at` — where the
- * bound's tie-break decides which entry keeps the slot — and none otherwise.
+ * the two revisions tie on `created_at` — where the bound's tie-break decides
+ * which entry keeps the slot — and none otherwise.
  */
 const variantsFor = ({
-  dimension,
   winner,
   superseded
 }: (typeof REVISION_PAIRS)[number]): readonly (readonly [Rewrite, Rewrite, Rewrite])[] =>
-  RANKED_DIMENSIONS.includes(dimension) && winner.created_at === superseded.created_at
-    ? rankingVariants()
-    : rankingVariants().slice(0, 1);
+  winner.created_at === superseded.created_at ? rankingVariants() : rankingVariants().slice(0, 1);
 
 /**
  * How many folds each bounded arm's enumeration runs: every same-coordinate
  * pair, every competitor, every ranking variant, three bounds, six orders.
  * Asserted exactly, so the design's size is a fact the arms state.
  */
-const BOUNDED_RUNS = 4_582_800;
+const BOUNDED_RUNS = 9_720_720;
 
 /** The time the enumerated bounded arms are given; the budget above is what they are held to. */
 const ENUMERATED = 120_000;
@@ -270,19 +265,17 @@ describe('a bounded set that carries a replacement', () => {
       // ties, every ranking variant (each payload field running against the ids
       // both ways), at every bound and in every order, the superseded revision
       // from another relay, the instant held still.
-      // Every dimension of the design is placed: ranked, a payload field, or
-      // holding no revision (another kind or author, two packets of one id,
-      // regular events). A dimension added to the design has to be placed here before
-      // this passes.
-      expect(
-        [...RANKED_DIMENSIONS, ...PAYLOAD_FIELDS, 'kind', 'author', 'same id', 'regular'].sort(),
-        'every dimension placed'
-      ).toEqual(Object.keys(CROSSINGS).sort());
-      // And every dimension with a revision reaches the bound.
+      // Every dimension of the design that holds a revision reaches the bound;
+      // a dimension added to the design reaches it unless it is placed among
+      // those that hold none.
       expect(
         [...new Set(REVISION_PAIRS.map(({ dimension }) => dimension))].sort(),
         'every dimension with a revision is bounded'
-      ).toEqual([...RANKED_DIMENSIONS, ...PAYLOAD_FIELDS].sort());
+      ).toEqual(
+        Object.keys(CROSSINGS)
+          .filter((one) => !WITHOUT_REVISIONS.includes(one as Dimension))
+          .sort()
+      );
       const offenders: string[] = [];
       let runs = 0;
       for (const pair of REVISION_PAIRS)
