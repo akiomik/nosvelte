@@ -699,14 +699,17 @@ describe('the event a consumer holds is this library’s own', () => {
       // **On every path.** A refusal placed after any early return would let a
       // forgery through there and only there, so the product is folded on
       // every path the fold has, each arranged from an event that takes it. The
-      // paths are the product of two axes, so none is a sample:
-      // - the kind's class — regular (keyed by id), replaceable and
-      //   addressable (keyed by version) — against the newcomer's relation to
-      //   what the set holds: nothing; older; newer; as old with a larger id;
-      //   the incumbent again; as old with a smaller id, which are every
-      //   branch of `laterWins`;
+      // paths are a product, so none is a sample:
+      // - the kind's class — regular (keyed by id), replaceable, addressable,
+      //   and addressable with no `d` tag (keyed by version, the last by the
+      //   identifier's fallback) — against the newcomer's relation to what the
+      //   set holds: nothing; older; newer; as old with a larger id; the
+      //   incumbent again; as old with a smaller id, which are every branch of
+      //   `laterWins`;
       // - an ephemeral event, which is never stored: the request's first, which
-      //   flags the set, and one after another, which leaves it as it is.
+      //   flags the set, and one after another, which leaves it as it is;
+      // - and each of those alone, and beside an unrelated event the set
+      //   already holds, which has to survive as the very object it was.
       // An owned packet on the same arrangement is the control that the path is
       // the one named, read by identity: what the set holds afterwards is
       // exactly what it held, less the incumbent it replaces, plus that very
@@ -748,10 +751,11 @@ describe('the event a consumer holds is this library’s own', () => {
           [...expected].every((one) => held.has(one))
         );
       };
-      const classes = {
-        'a regular event': { kind: 1, tag: 't', byVersion: false },
-        'a replaceable event': { kind: 10002, tag: 'r', byVersion: true },
-        'an addressable event': { kind: 30023, tag: 'd', byVersion: true }
+      const classes: Record<string, { kind: number; tags: string[][]; byVersion: boolean }> = {
+        'a regular event': { kind: 1, tags: [['t', 'x']], byVersion: false },
+        'a replaceable event': { kind: 10002, tags: [['r', 'x']], byVersion: true },
+        'an addressable event': { kind: 30023, tags: [['d', 'x']], byVersion: true },
+        'an addressable event with no `d` tag': { kind: 30023, tags: [['t', 'x']], byVersion: true }
       };
       const relations: {
         relation: string;
@@ -762,7 +766,7 @@ describe('the event a consumer holds is this library’s own', () => {
         byVersion: Outcome;
       }[] = [
         {
-          relation: 'into an empty set',
+          relation: 'with nothing to compete with',
           held: false,
           created_at: 5,
           id: 'm',
@@ -810,50 +814,65 @@ describe('the event a consumer holds is this library’s own', () => {
           byVersion: 'replaces the incumbent'
         }
       ];
-      const paths = Object.entries(classes).flatMap(([what, { kind, tag, byVersion }]) => {
-        const version = (id: string, created_at: number): EventPacket =>
-          fakeEventPacket({ id: `oe14-${kind}-${id}`, kind, created_at, tags: [[tag, 'x']] });
-        const incumbentWire = version('m', 5);
-        const incumbent = ownedFrom(incumbentWire);
-        const holding = foldEvent(emptyEventSet, incumbent);
-        return relations.map(({ relation, held, created_at, id, byId, byVersion: versioned }) => {
-          const newcomer = id === 'm' && created_at === 5 ? incumbentWire : version(id, created_at);
-          return {
-            path: `${what}, ${relation}`,
-            set: held ? holding : emptyEventSet,
-            wire: newcomer,
-            basis: ownedFrom(newcomer),
-            incumbent: held ? incumbent : undefined,
-            outcome: byVersion ? versioned : byId
-          };
-        });
-      });
+      type Path = {
+        path: string;
+        set: CachedEventSet;
+        wire: EventPacket;
+        basis: OwnedPacket;
+        incumbent: OwnedPacket | undefined;
+        outcome: Outcome;
+      };
+      const bystander = ownedFrom(
+        fakeEventPacket({ id: 'oe14-bystander', kind: 1, created_at: 9, tags: [['t', 'y']] })
+      );
+      const company: Record<string, CachedEventSet> = {
+        alone: emptyEventSet,
+        'beside an unrelated event': foldEvent(emptyEventSet, bystander)
+      };
       const ephemeral = fakeEventPacket({
         id: 'oe14-eph',
         kind: 20001,
         created_at: 3,
         tags: [['t', 'x']]
       });
-      const flagged = foldEvent(emptyEventSet, ownedFrom(fakeEventPacket({ kind: 20002 })));
-      paths.push(
+      const paths: Path[] = Object.entries(company).flatMap(([beside, start]) => [
+        ...Object.entries(classes).flatMap(([what, { kind, tags, byVersion }]) => {
+          const version = (id: string, created_at: number): EventPacket =>
+            fakeEventPacket({ id: `oe14-${kind}-${tags[0]?.[0]}-${id}`, kind, created_at, tags });
+          const incumbentWire = version('m', 5);
+          const incumbent = ownedFrom(incumbentWire);
+          const holding = foldEvent(start, incumbent);
+          return relations.map(({ relation, held, created_at, id, byId, byVersion: versioned }) => {
+            const newcomer =
+              id === 'm' && created_at === 5 ? incumbentWire : version(id, created_at);
+            return {
+              path: `${what}, ${relation}, ${beside}`,
+              set: held ? holding : start,
+              wire: newcomer,
+              basis: ownedFrom(newcomer),
+              incumbent: held ? incumbent : undefined,
+              outcome: byVersion ? versioned : byId
+            };
+          });
+        }),
         {
-          path: 'an ephemeral event, the request’s first',
-          set: emptyEventSet,
+          path: `an ephemeral event, the request’s first, ${beside}`,
+          set: start,
           wire: ephemeral,
           basis: ownedFrom(ephemeral),
           incumbent: undefined,
           outcome: 'flagged'
         },
         {
-          path: 'an ephemeral event, after another',
-          set: flagged,
+          path: `an ephemeral event, after another, ${beside}`,
+          set: foldEvent(start, ownedFrom(fakeEventPacket({ kind: 20002 }))),
           wire: ephemeral,
           basis: ownedFrom(ephemeral),
           incumbent: undefined,
           outcome: 'unchanged'
         }
-      );
-      expect(paths, 'every cell of the paths').toHaveLength(20);
+      ]);
+      expect(paths, 'every cell of the paths').toHaveLength(52);
       for (const { path, set, wire: wirePacket, basis, incumbent, outcome } of paths) {
         expect(attempt(set, basis), `${path}: the owned packet`).toBe('folded');
         expect(
@@ -867,6 +886,58 @@ describe('the event a consumer holds is this library’s own', () => {
           `${path}: a packet the boundary did not make, taken by the fold`
         ).toEqual([]);
       }
+
+      // **And the check comes first.** The paths above are the ones there are
+      // today; a check that sits after any of them — one listed, or one added
+      // later — has to read the set or the packet to choose that path first.
+      // So each forgery is also handed to the fold with the set and the packet
+      // behind proxies that record every read, and its refusal must have read
+      // nothing of either. The controls: an owned packet folded through the
+      // same recording set is read, and a read of a recorded packet is
+      // recorded — so an empty record is the fold answering, not a blind
+      // recorder.
+      const read: string[] = [];
+      const recording = <T extends object>(target: T, name: string): T =>
+        new Proxy(target, {
+          get: (inner, key, receiver) => {
+            read.push(`${name}.${String(key)}`);
+            return Reflect.get(inner, key, receiver) as unknown;
+          },
+          has: (inner, key) => {
+            read.push(`${name} has ${String(key)}`);
+            return Reflect.has(inner, key);
+          },
+          ownKeys: (inner) => {
+            read.push(`${name}'s keys`);
+            return Reflect.ownKeys(inner);
+          },
+          getOwnPropertyDescriptor: (inner, key) => {
+            read.push(`${name}'s descriptor of ${String(key)}`);
+            return Reflect.getOwnPropertyDescriptor(inner, key);
+          },
+          getPrototypeOf: (inner) => {
+            read.push(`${name}'s prototype`);
+            return Reflect.getPrototypeOf(inner);
+          }
+        });
+      const readFirst = paths.flatMap(({ path, set, wire: wirePacket, basis }) =>
+        forgeriesOf(wirePacket, basis).flatMap(({ name, packet }) => {
+          read.length = 0;
+          const verdict = attempt(recording(set, 'the set'), recording(packet, 'the packet'));
+          return verdict === 'refused' && read.length === 0
+            ? []
+            : [{ path, name, verdict, read: [...read] }];
+        })
+      );
+      expect(readFirst, 'a forgery the fold read before refusing it').toEqual([]);
+      read.length = 0;
+      const control = paths.find((one) => one.outcome === 'stored alongside');
+      if (control === undefined) throw new Error('no path stores the owned packet');
+      foldEvent(recording(control.set, 'the set'), control.basis);
+      expect(read.length, 'the recorder’s control: a fold reads the set').toBeGreaterThan(0);
+      read.length = 0;
+      void recording({ event: control.basis.event }, 'the packet').event;
+      expect(read, 'the recorder’s control: a read of a packet').toEqual(['the packet.event']);
 
       const smuggled = refusedLines(SMUGGLES);
       const said = consumerDiagnostics(SMUGGLES);
