@@ -25,6 +25,3 @@ dist-ssr
 *.sw?
 
 tmp
-
-# Declarations emitted for the published-type checks (tsconfig.dts.json)
-.dts-check

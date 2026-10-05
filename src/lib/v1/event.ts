@@ -194,8 +194,18 @@ export function ownEvent(value: unknown): ReqEvent | undefined {
  * field, so `const owned: OwnedPacket = wirePacket` compiled and the records'
  * "the types carry it" was false. A brand no other module can produce is what
  * closes it, and the cast that makes one lives in {@link ownPacket} alone.
+ *
+ * **The brand is on the event, not on the packet around it.** Branding the
+ * packet left its payload open to replacement: `{ ...owned, ...wirePacket }`
+ * kept the packet's brand, swapped in the wire's event, and type-checked as an
+ * `OwnedPacket` with no cast — and folded, the cache held the transport's
+ * object. A brand on the event goes wherever the event goes, so replacing the
+ * event replaces the brand too.
  */
 declare const ownership: unique symbol;
+
+/** An event this library copied and froze: the only kind the cache stores. */
+export type OwnedEvent = ReqEvent & { readonly [ownership]: 'nosvelte' };
 
 /**
  * What the cache stores: an event this library owns, and nothing else.
@@ -207,8 +217,7 @@ declare const ownership: unique symbol;
  * projections read is `event`; that is the whole type.
  */
 export interface OwnedPacket {
-  readonly [ownership]: 'nosvelte';
-  readonly event: ReqEvent;
+  readonly event: OwnedEvent;
 }
 
 /** The wire's packet, reduced to this library's copy of the event — or nothing. */
@@ -217,5 +226,5 @@ export function ownPacket(packet: EventPacket): OwnedPacket | undefined {
   if (event === undefined) return undefined;
   // The one cast in the module, and the reason the brand is worth having: it is
   // here, in the factory, rather than at every call site.
-  return Object.freeze({ event }) as OwnedPacket;
+  return Object.freeze({ event: event as OwnedEvent });
 }

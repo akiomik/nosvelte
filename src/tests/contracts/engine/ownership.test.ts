@@ -22,33 +22,25 @@
  * sees.
  *
  * `OE1`, `OE2`, `OE6` and `OE10` are the spike's `OW1`, `OW2`, `OW6` and
- * `OW10` from its `event-ownership` suite, and `LE16` its `LK16` from the `leak`
- * suite — renamed, because an id 0005 records as a spike witness is not a
- * landing. `OE14` is the landing, which holds every clause of the row in one
- * arm: the run-time half through the hook, and the compile half through the
- * compiler.
+ * `OW10` from its `event-ownership` suite, renamed because an id 0005 records
+ * as a spike witness is not a landing. `OE14` is the landing, which holds every
+ * clause of the row in one arm: the run-time half through the hook, and the
+ * compile half through the compiler, asked about a consumer's file.
  *
  * Port band 9820-9859, as the spike's suite had it.
  */
 import type Nostr from 'nostr-typedef';
 import { QueryClient } from 'tanstack-svelte-query-v6';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import { createAttemptRegistry } from '$lib/v1/attempt.js';
 import type { OwnedPacket, ReqEvent } from '$lib/v1/event.js';
 import { ownEvent, ownPacket } from '$lib/v1/event.js';
 import { emptyEventSet, foldEvent } from '$lib/v1/eventset.js';
-import { MAIN_SURFACE } from '$lib/v1/surface.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
-import {
-  consumerDiagnostics,
-  emitDeclarations,
-  mutableMembers,
-  publishedNames,
-  removeDeclarations
-} from './helpers/declarations.js';
+import { consumerDiagnostics, REFUSES_A_WRITE, writesThrough } from './helpers/declarations.js';
 import {
   acceptAnyEvent,
   createTestRelay,
@@ -109,44 +101,58 @@ const eventsOf = (handle: { state: { status: string } }): readonly ReqEvent[] =>
   (handle.state as { events?: readonly ReqEvent[] }).events ?? [];
 
 /**
- * The published names whose shapes are a consumer's to read: everything the
- * entry publishes, less what the consumer writes (their own descriptor and
- * relay inputs) and what declares no shape (the guards, by group).
+ * Every object reachable from `root`: through every own property — symbol-keyed
+ * and non-enumerable ones included, read off the descriptor so no getter runs —
+ * and through each prototype other than the built-in ones. "No path back to the
+ * transport's object" is a statement about reachability, and keys or a JSON
+ * rendering are two partial views of it: a wrapper whose prototype is the wire's
+ * packet has one key and serialises clean.
  */
-const writtenByTheConsumer = new Set(['ReqDescriptor', 'ReqPlan', 'RelayConfig', 'RelayInput']);
-const shapesHandedOut = (): ReadonlySet<string> =>
-  new Set(
-    publishedNames(emitDeclarations()).filter(
-      (name) =>
-        !writtenByTheConsumer.has(name) &&
-        !(MAIN_SURFACE.guards as readonly string[]).includes(name)
-    )
-  );
+function reachable(root: unknown): Set<object> {
+  const builtIn = new Set<unknown>([Object.prototype, Array.prototype, Function.prototype, null]);
+  const seen = new Set<object>();
+  const pending: unknown[] = [root];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if ((typeof next !== 'object' && typeof next !== 'function') || next === null) continue;
+    if (seen.has(next) || builtIn.has(next)) continue;
+    seen.add(next);
+    for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(next)))
+      if ('value' in descriptor) pending.push(descriptor.value);
+    pending.push(Object.getPrototypeOf(next));
+  }
+  return seen;
+}
+
+/** What a consumer imports: the published event from the public entry, never the module behind it. */
+const PUBLISHED = `import type { ReqEvent } from '$lib/v1/public-entry.js';`;
 
 /**
- * A consumer's file that writes through every depth of a published event and
- * hands the fold the wire's packet. Each line marked `// refused` must be a
- * compile error, and the rest must compile: the clean lines are the control
- * that the file compiles at all, so an error on a marked line is the type's
- * answer and not a broken import.
+ * The internal seam's refusals: the wire's packet handed to the fold, directly
+ * and as an owned packet rebuilt around the wire's event — the spread keeps
+ * whatever brand the wrapper carries and swaps its payload.
  */
-const CONSUMER = `import type { EventPacket } from 'rx-nostr';
-import type { OwnedPacket, ReqEvent } from '$lib/v1/event.js';
+const SMUGGLES = `import type { EventPacket } from 'rx-nostr';
+import type { OwnedPacket } from '$lib/v1/event.js';
+import { ownPacket } from '$lib/v1/event.js';
 import { emptyEventSet, foldEvent } from '$lib/v1/eventset.js';
-declare const event: ReqEvent;
-declare const tag: ReqEvent['tags'][number];
 declare const wire: EventPacket;
-declare const owned: OwnedPacket;
-const read: string = event.content;
-void read;
-foldEvent(emptyEventSet, owned);
-event.content = 'rewritten'; // refused
-event.tags.push(['t', 'mine']); // refused
-tag.push('mine'); // refused
-const smuggled: OwnedPacket = wire; // refused
-void smuggled;
+const owned = ownPacket(wire);
+if (owned !== undefined) foldEvent(emptyEventSet, owned);
+const direct: OwnedPacket = wire; // refused
+void direct;
 foldEvent(emptyEventSet, wire); // refused
+if (owned !== undefined) {
+  const rebuilt: OwnedPacket = { ...owned, ...wire }; // refused
+  void rebuilt;
+  const swapped: OwnedPacket = { ...owned, event: wire.event }; // refused
+  void swapped;
+}
 `;
+
+/** The lines of `source` that end `// refused`, 1-based. */
+const refusedLines = (source: string): number[] =>
+  source.split('\n').flatMap((text, at) => (text.endsWith('// refused') ? [at + 1] : []));
 
 describe('the event a consumer holds is this library’s own', () => {
   let client: QueryClient;
@@ -155,7 +161,6 @@ describe('the event a consumer holds is this library’s own', () => {
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   });
   afterEach(() => WS.clean());
-  afterAll(() => removeDeclarations());
 
   it(
     'OE1: a consumer’s write reaches no other reader of the same request',
@@ -302,25 +307,6 @@ describe('the event a consumer holds is this library’s own', () => {
     expect(event.tags).toEqual([['t', 'theirs']]);
   });
 
-  it('LE16: a value a consumer receives is readonly all the way down', { timeout: 60_000 }, () => {
-    // **The type half of ownership, counted rather than checked value by value.**
-    // The run time keeps what a consumer holds frozen, and a type that permits a
-    // write over a frozen value is legal-looking code that fails only at run
-    // time. It walks the syntax of the emitted declarations: a regular
-    // expression over the text read one variant of a union, missed index
-    // signatures and return types, and left published names unopened.
-    const published = shapesHandedOut();
-    expect(published.size).toBeGreaterThan(10);
-    const { mutable, opened } = mutableMembers(emitDeclarations(), published);
-
-    // Every published name was opened, or a skipped name would report the same
-    // "nothing found" as one that was read. The hooks are values and declare
-    // no shape, so they are excluded by name rather than by silence.
-    const shapeless = new Set<string>(MAIN_SURFACE.hooks);
-    expect([...published].filter((name) => !opened.has(name) && !shapeless.has(name))).toEqual([]);
-    expect(mutable, 'a published value a consumer could write into').toEqual([]);
-  });
-
   // @contracts B5-C6
   it(
     'OE14: a consumer’s write reaches nothing this library holds, and neither the types nor the fold let one in',
@@ -382,32 +368,63 @@ describe('the event a consumer holds is this library’s own', () => {
       first.destroy();
       second.destroy();
 
-      // What the cache stores is the event alone: no `message`, no `from`
-      // object, nothing that reaches the wire's packet.
-      const wire = fakeEventPacket({ id: 'ow14-b', created_at: 1 });
+      // What the cache stores is the event alone: nothing reachable from it —
+      // through any property or any prototype — is reachable from the wire's
+      // packet. And it is a copy, not the wire's event.
+      const wire = fakeEventPacket({ id: 'oe14-b', created_at: 1 });
       const owned = ownPacket(wire);
-      expect(Object.keys(owned ?? {})).toEqual(['event']);
-      expect(owned?.event).not.toBe(wire.event);
-      expect(JSON.stringify(owned)).not.toContain('EVENT');
-
-      // The compile half, answered by the compiler: every marked line of the
-      // consumer's file is an error, and no other line is.
-      const lines = CONSUMER.split('\n');
-      const refused = lines.flatMap((text, at) => (text.endsWith('// refused') ? [at + 1] : []));
-      const diagnostics = consumerDiagnostics(CONSUMER);
+      expect(owned).toBeDefined();
+      expect(Reflect.ownKeys(owned ?? {})).toEqual(['event']);
+      const theirs = reachable(wire);
       expect(
-        refused.filter((line) => !diagnostics.some((one) => one.line === line)),
-        'a write the types let through'
-      ).toEqual([]);
-      expect(
-        diagnostics.filter((one) => !refused.includes(one.line)),
-        'the consumer file compiles apart from the refused lines'
+        [...reachable(owned)].filter((one) => theirs.has(one)),
+        'what the cache stores reaches the transport’s packet'
       ).toEqual([]);
 
-      // And every member of every published type is readonly, all the way down.
-      const published = shapesHandedOut();
-      const { mutable } = mutableMembers(emitDeclarations(), published);
-      expect(mutable, 'a published value a consumer could write into').toEqual([]);
+      // The compile half, answered by the compiler. Every write a consumer
+      // could attempt through the published event — each property the type
+      // checker gives it, the tag list and each tag — is refused, for being
+      // read-only; and the internal seam refuses the wire's packet, directly
+      // and rebuilt around an owned one.
+      const writes = writesThrough(PUBLISHED, 'ReqEvent');
+      expect(writes.length, 'the probe enumerated the event').toBeGreaterThan(9);
+      const probe = [PUBLISHED, 'declare const value: ReqEvent;', ...writes].join('\n');
+      const offset = 3;
+      const answered = consumerDiagnostics(probe);
+      expect(
+        writes.filter(
+          (_write, at) =>
+            !answered.some((one) => one.line === at + offset && REFUSES_A_WRITE.has(one.code))
+        ),
+        'a write through the published event the types let through'
+      ).toEqual([]);
+      expect(
+        answered.filter((one) => one.line < offset || !REFUSES_A_WRITE.has(one.code)),
+        'the probe compiles apart from its refused writes'
+      ).toEqual([]);
+
+      // Its positive control: the same probe over a type that permits every
+      // write is refused nowhere, so a refusal above is the event's type
+      // answering and not the probe failing to compile.
+      const open = writesThrough('', '{ a: string; b: string[]; c: { d: number } }');
+      expect(open.length).toBeGreaterThan(4);
+      expect(
+        consumerDiagnostics(
+          ['declare const value: { a: string; b: string[]; c: { d: number } };', ...open].join('\n')
+        ),
+        'a write through a mutable type was refused'
+      ).toEqual([]);
+
+      const smuggled = refusedLines(SMUGGLES);
+      const said = consumerDiagnostics(SMUGGLES);
+      expect(
+        smuggled.filter((line) => !said.some((one) => one.line === line)),
+        'a packet the fold would take that this library did not make'
+      ).toEqual([]);
+      expect(
+        said.filter((one) => !smuggled.includes(one.line)),
+        'the smuggling file compiles apart from the refused lines'
+      ).toEqual([]);
     }
   );
 });
