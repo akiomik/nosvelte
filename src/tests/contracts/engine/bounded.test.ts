@@ -14,7 +14,7 @@ import {
   type Rewrite
 } from './helpers/design.js';
 import { arbitraryEvents, mulberry32, shuffled, winnersOf } from './helpers/nip01.js';
-import { ownedEventPacket } from './helpers/relay.js';
+import { ownedCopy, ownedEventPacket } from './helpers/relay.js';
 
 /**
  * A bounded set that carries a replacement (0003 B5, B6), against the fold and
@@ -159,16 +159,13 @@ const BOUNDED_RUNS = 9_720_720;
 const ENUMERATED = 120_000;
 
 /** A packet from another relay, as a parsed copy that shares nothing. */
-const elsewhere = (packet: OwnedPacket): OwnedPacket =>
-  ({ ...packet, from: 'wss://elsewhere/', event: structuredClone(packet.event) }) as OwnedPacket;
+const elsewhere = (packet: OwnedPacket): OwnedPacket => ownedCopy(packet.event);
 
 /** Drawn packets, half of them from a second relay. */
 const drawn = (rand: () => number, options?: { expiries?: readonly number[] }): OwnedPacket[] =>
   arbitraryEvents(rand, 3 + Math.floor(rand() * 6), options).map((fields) => {
     const packet = ev(fields);
-    return rand() < 0.5
-      ? packet
-      : ({ ...packet, from: 'wss://elsewhere/', event: { ...packet.event } } as OwnedPacket);
+    return rand() < 0.5 ? packet : ownedCopy(packet.event);
   });
 
 /**

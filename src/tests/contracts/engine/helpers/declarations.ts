@@ -81,7 +81,8 @@ export const REFUSES_A_WRITE: ReadonlySet<number> = new Set([2540, 2542, 2339]);
  * it.
  *
  * A union is refused rather than walked: a write to a member some constituents
- * lack is an error for that reason, which would read as a refusal.
+ * lack is an error for that reason, which would read as a refusal. Walk each
+ * variant instead ({@link variantsWith}).
  */
 export function writesThrough(imports: string, typeText: string, depth = 4): string[] {
   const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
@@ -127,7 +128,46 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
       writes.push(`${access} = ${access}!;`);
       visit(`${access}!`, checker.getNonNullableType(checker.getTypeOfSymbol(property)), level + 1);
     }
+    // And a write through each index signature, under a key the type checker
+    // cannot see — a dynamic key is a write a named property list never shows.
+    for (const info of checker.getIndexInfosOfType(type)) {
+      const key =
+        info.keyType.getFlags() & ts.TypeFlags.NumberLike ? '(0 as number)' : "('k' as string)";
+      writes.push(`${expression}[${key}] = ${expression}[${key}]!;`);
+      visit(`${expression}[${key}]!`, checker.getNonNullableType(info.type), level + 1);
+    }
   };
   visit('value', checker.getTypeAtLocation(declaration.name), 0);
   return writes;
+}
+
+/**
+ * The values of `discriminant` for each variant of the union `typeText` that
+ * has `property` — so each variant can be named, as
+ * `Extract<typeText, { discriminant: value }>`, and walked on its own.
+ */
+export function variantsWith(
+  imports: string,
+  typeText: string,
+  discriminant: string,
+  property: string
+): string[] {
+  const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
+  const checker = program.getTypeChecker();
+  const declaration = consumer.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => statement.declarationList.declarations)
+    .find((one) => ts.isIdentifier(one.name) && one.name.text === 'value');
+  if (declaration === undefined) throw new Error('the probe declared no value');
+  const type = checker.getTypeAtLocation(declaration.name);
+  const variants = type.isUnion() ? type.types : [type];
+  return variants.flatMap((variant) => {
+    if (checker.getPropertyOfType(variant, property) === undefined) return [];
+    const tag = checker.getPropertyOfType(variant, discriminant);
+    if (tag === undefined) throw new Error(`variantsWith: a variant has no ${discriminant}`);
+    const literal = checker.getTypeOfSymbol(tag);
+    if (!literal.isStringLiteral())
+      throw new Error(`variantsWith: ${discriminant} is not a literal`);
+    return [literal.value];
+  });
 }

@@ -7,6 +7,7 @@ import type { AttemptId } from './attempt.js';
 import { isOlderAttempt } from './attempt.js';
 import type { UnixSeconds } from './clock.svelte.js';
 import type { OwnedPacket, ReqEvent } from './event.js';
+import { isOwnedEvent } from './event.js';
 import type { RelayMessage, Retention } from './normalize.js';
 import { isEphemeralKind } from './normalize.js';
 import { capture, recordedFailure } from './own.js';
@@ -847,6 +848,12 @@ export interface RetentionOptions {
  * an expired event can hold a slot a valid older one would have taken.
  */
 export function foldEvent(set: CachedEventSet, packet: OwnedPacket): CachedEventSet {
+  // **Only this library's own copies are stored, checked at run time too.** The
+  // type refuses a wire packet and a rebuilt one; a cast or a `structuredClone`
+  // gets past any type, so the fold asks the set the ownership boundary writes
+  // to. A foreign event here is a defect in this library, not an input.
+  if (!isOwnedEvent(packet.event))
+    throw new TypeError('foldEvent was handed an event this library did not copy');
   // **Dropped and recorded, never dropped silently.** See the docblock: the
   // boundary now accepts a non-live request with no `kinds`, so an ephemeral
   // event can reach here, and there is no surface that could show one. The flag

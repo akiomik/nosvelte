@@ -95,6 +95,7 @@ import {
   shuffled,
   winnersOf
 } from './helpers/nip01.js';
+import { ownedCopy } from './helpers/relay.js';
 
 /**
  * A value from outside, handed to a door whose published type is `ReqError`.
@@ -883,13 +884,7 @@ const packetsOfCase = (
 ): OwnedPacket[] =>
   events.map((fields, at) => {
     const packet = ev(fields);
-    return elsewhere && at === events.length - 1
-      ? ({
-          ...packet,
-          from: 'wss://elsewhere/',
-          event: structuredClone(packet.event)
-        } as OwnedPacket)
-      : packet;
+    return elsewhere && at === events.length - 1 ? ownedCopy(packet.event) : packet;
   });
 
 /** The enumerated design, built once. */
@@ -909,9 +904,7 @@ const ENUMERATED = 120_000;
 const packetsOf = (events: readonly Partial<Nostr.Event>[], rand: () => number): OwnedPacket[] =>
   events.map((fields) => {
     const packet = ev(fields);
-    return rand() < 0.5
-      ? packet
-      : ({ ...packet, from: 'wss://elsewhere/', event: { ...packet.event } } as OwnedPacket);
+    return rand() < 0.5 ? packet : ownedCopy(packet.event);
   });
 
 describe('canonical event set', () => {
@@ -1011,9 +1004,9 @@ describe('canonical event set', () => {
       // relay: an equal event in a different packet object. Re-folding the
       // identical object proves nothing about the comparison, because reference
       // equality short-circuits it either way.
-      const fromAnotherRelay = { ...b, from: 'wss://other/', event: structuredClone(b.event) };
+      const fromAnotherRelay = ownedCopy(b.event);
       expect(foldEvent(set, fromAnotherRelay)).toBe(set);
-      const regularElsewhere = { ...a, from: 'wss://other/', event: structuredClone(a.event) };
+      const regularElsewhere = ownedCopy(a.event);
       expect(foldEvent(set, regularElsewhere)).toBe(set);
       // From another relay, in every class with a coordinate as well: a tie-break
       // that let an equal event replace the incumbent for one class alone would
@@ -1021,7 +1014,7 @@ describe('canonical event set', () => {
       for (const kind of [3, 10002, 19999]) {
         const held = ev({ kind });
         const holding = foldEvent(set, held);
-        const elsewhere = { ...held, from: 'wss://other/', event: structuredClone(held.event) };
+        const elsewhere = ownedCopy(held.event);
         expect(foldEvent(holding, elsewhere), `${kind}`).toBe(holding);
       }
 
@@ -1033,18 +1026,12 @@ describe('canonical event set', () => {
       const addressable = ev({ kind: 30023, tags: [['d', 's']] });
       const withIt = foldEvent(set, addressable);
       expect(foldEvent(withIt, addressable)).toBe(withIt);
-      const addressableElsewhere = {
-        ...addressable,
-        from: 'wss://other/',
-        event: structuredClone(addressable.event)
-      };
+      const addressableElsewhere = ownedCopy(addressable.event);
       expect(foldEvent(withIt, addressableElsewhere)).toBe(withIt);
       const ephemeral = ev({ kind: 20001 });
       const noted = foldEvent(set, ephemeral);
       expect(foldEvent(noted, ephemeral)).toBe(noted);
-      expect(foldEvent(noted, { ...ephemeral, event: structuredClone(ephemeral.event) })).toBe(
-        noted
-      );
+      expect(foldEvent(noted, ownedCopy(ephemeral.event))).toBe(noted);
 
       // **And every enumerated case** (`helpers/design.ts`), in both orders, at
       // each step: the first event folded alone, then both. At each step every
@@ -1064,16 +1051,12 @@ describe('canonical event set', () => {
       };
       const replayAll = (set: CachedEventSet, packet: OwnedPacket, label: string) => {
         replay(set, packet, `${label}: the same object`);
-        const elsewhere = {
-          ...packet,
-          from: 'wss://elsewhere/',
-          event: structuredClone(packet.event)
-        };
+        const elsewhere = ownedCopy(packet.event);
         replay(set, elsewhere, `${label}: from another relay`);
         for (const variant of outsideVariants(packet.event)) {
           const combination = combinationOf(packet.event, variant);
           changed.add(combination);
-          replay(set, { ...elsewhere, event: variant }, `${label}: ${combination}`);
+          replay(set, ownedCopy(variant), `${label}: ${combination}`);
         }
       };
       for (const { label, events } of CASES) {
@@ -1086,11 +1069,7 @@ describe('canonical event set', () => {
             replay(alone, second, `${label}: the first conflicting replay`);
             replay(
               alone,
-              {
-                ...second,
-                from: 'wss://elsewhere/',
-                event: structuredClone(second.event)
-              } as OwnedPacket,
+              ownedCopy(second.event),
               `${label}: the first conflicting replay, from another relay`
             );
           }
@@ -1112,11 +1091,7 @@ describe('canonical event set', () => {
         );
         const folded = foldAll(packets);
         for (const packet of shuffled(packets, draws)) {
-          const replayed = {
-            ...packet,
-            from: 'wss://elsewhere/',
-            event: structuredClone(packet.event)
-          };
+          const replayed = ownedCopy(packet.event);
           expect(foldEvent(folded, replayed), `trial ${trial}: ${packet.event.id}`).toBe(folded);
         }
       }
@@ -1614,7 +1589,7 @@ describe('canonical event set', () => {
           expect(idsOf(foldAll([older, newer])), `${kind}`).toEqual([`${kind}-${newerId}`]);
           expect(idsOf(foldAll([newer, older])), `${kind}`).toEqual([`${kind}-${newerId}`]);
           // And whichever relay each came from: the relay is not the coordinate.
-          const fromAnother = { ...newer, from: 'wss://another/', event: { ...newer.event } };
+          const fromAnother = ownedCopy(newer.event);
           expect(idsOf(foldAll([older, fromAnother])), `${kind}: another relay`).toEqual([
             `${kind}-${newerId}`
           ]);

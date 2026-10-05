@@ -183,7 +183,25 @@ export function ownEvent(value: unknown): ReqEvent | undefined {
     // rendering `'ots' in event` would see one where there was none.
     ...(snapshot.ots === undefined ? {} : { ots: snapshot.ots })
   };
-  return Object.freeze(owned);
+  const frozen = Object.freeze(owned);
+  OWNED.add(frozen);
+  return frozen;
+}
+
+/**
+ * Every event {@link ownEvent} made, held weakly: ownership's run-time half.
+ *
+ * The brand on the type cannot be forged by a spread, but a cast forges any
+ * type, and `structuredClone` is typed as the identity — a clone of an owned
+ * event is typed owned and is an unfrozen copy nobody checked. So the fold also
+ * asks this set, which only {@link ownEvent} writes to and which a value cannot
+ * answer for itself.
+ */
+const OWNED = new WeakSet<object>();
+
+/** Whether `event` is a copy {@link ownEvent} made — whatever its type says. */
+export function isOwnedEvent(event: unknown): event is OwnedEvent {
+  return typeof event === 'object' && event !== null && OWNED.has(event);
 }
 
 /**
@@ -195,17 +213,26 @@ export function ownEvent(value: unknown): ReqEvent | undefined {
  * "the types carry it" was false. A brand no other module can produce is what
  * closes it, and the cast that makes one lives in {@link ownPacket} alone.
  *
- * **The brand is on the event, not on the packet around it.** Branding the
- * packet left its payload open to replacement: `{ ...owned, ...wirePacket }`
- * kept the packet's brand, swapped in the wire's event, and type-checked as an
- * `OwnedPacket` with no cast — and folded, the cache held the transport's
- * object. A brand on the event goes wherever the event goes, so replacing the
- * event replaces the brand too.
+ * **The brand is on the event, and it is nominal.** On the packet it left the
+ * payload open to replacement: `{ ...owned, ...wirePacket }` kept the packet's
+ * brand, swapped in the wire's event, and type-checked as an `OwnedPacket` with
+ * no cast — and folded, the cache held the transport's object. Moved onto the
+ * event as a property, it was copied by the next spread out:
+ * `{ event: { ...owned.event, ...wirePacket.event } }` kept the brand and the
+ * wire's tag arrays. A brand any spread copies is a property, and a property is
+ * structure. So the brand is a class's private field, which TypeScript treats
+ * nominally and a spread does not copy: an event or a packet rebuilt by spread
+ * is not owned, whatever it was built from. The class is declared, never
+ * defined, so there is nothing at run time.
  */
-declare const ownership: unique symbol;
+declare class OwnedBrand {
+  // A type-level brand, read by nothing at run time: that is the point of it.
+  // eslint-disable-next-line no-unused-private-class-members
+  #owned: true;
+}
 
 /** An event this library copied and froze: the only kind the cache stores. */
-export type OwnedEvent = ReqEvent & { readonly [ownership]: 'nosvelte' };
+export type OwnedEvent = ReqEvent & OwnedBrand;
 
 /**
  * What the cache stores: an event this library owns, and nothing else.

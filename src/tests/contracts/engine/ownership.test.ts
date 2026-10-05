@@ -40,7 +40,12 @@ import { ownEvent, ownPacket } from '$lib/v1/event.js';
 import { emptyEventSet, foldEvent } from '$lib/v1/eventset.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
-import { consumerDiagnostics, REFUSES_A_WRITE, writesThrough } from './helpers/declarations.js';
+import {
+  consumerDiagnostics,
+  REFUSES_A_WRITE,
+  variantsWith,
+  writesThrough
+} from './helpers/declarations.js';
 import {
   acceptAnyEvent,
   createTestRelay,
@@ -124,8 +129,41 @@ function reachable(root: unknown): Set<object> {
   return seen;
 }
 
-/** What a consumer imports: the published event from the public entry, never the module behind it. */
-const PUBLISHED = `import type { ReqEvent } from '$lib/v1/public-entry.js';`;
+/**
+ * What makes `reachable` exact: every object reachable from `root` is plain data
+ * — no accessor, whose getter's closure reflection cannot read, no symbol key,
+ * and no prototype but the built-in object and array ones. Returns what breaks
+ * that, by path.
+ */
+function plainDataBreaches(root: unknown): string[] {
+  const breaches: string[] = [];
+  const seen = new Set<object>();
+  const visit = (value: unknown, path: string): void => {
+    if (typeof value !== 'object' || value === null || seen.has(value)) return;
+    seen.add(value);
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== Array.prototype)
+      breaches.push(`${path} has a prototype of its own`);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key === 'symbol') {
+        breaches.push(`${path} has a symbol key`);
+        continue;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor !== undefined && !('value' in descriptor))
+        breaches.push(`${path}.${key} is an accessor`);
+      else visit(descriptor?.value, `${path}.${key}`);
+    }
+  };
+  visit(root, 'stored');
+  return breaches;
+}
+
+/**
+ * What a consumer imports: the published event and the handle from the public
+ * entry, never the module behind them.
+ */
+const PUBLISHED = `import type * as Published from '$lib/v1/public-entry.js';`;
 
 /**
  * The internal seam's refusals: the wire's packet handed to the fold, directly
@@ -147,6 +185,10 @@ if (owned !== undefined) {
   void rebuilt;
   const swapped: OwnedPacket = { ...owned, event: wire.event }; // refused
   void swapped;
+  const respread: OwnedPacket = { event: { ...owned.event, ...wire.event } }; // refused
+  void respread;
+  const copied: OwnedPacket = { event: { ...owned.event } }; // refused
+  void copied;
 }
 `;
 
@@ -263,8 +305,8 @@ describe('the event a consumer holds is this library’s own', () => {
     // @ts-expect-error — a wire packet is not an owned one
     const notOwned: OwnedPacket = wire;
     void notOwned;
-    // @ts-expect-error — and the fold will not take one
-    foldEvent(emptyEventSet, wire);
+    // @ts-expect-error — and the fold will not take one, at run time either
+    expect(() => foldEvent(emptyEventSet, wire)).toThrow(TypeError);
 
     // **And what is stored has no path back to the transport's object.** The
     // packet used to be carried whole, so `message[2]` held the wire's event
@@ -315,11 +357,13 @@ describe('the event a consumer holds is this library’s own', () => {
       // **Every clause of the row in one arm.** At run time: a consumer who
       // writes to an event they were handed — its content, its tag list, one
       // tag — changes nothing that this hook reads again, that a second hook on
-      // the same key reads, or that the list reads after a `refresh()`; and
-      // what the cache stores is the event alone, with no path back to the
-      // transport's packet. At compile time: the published types refuse those
-      // writes, every member of every published type is readonly to the depth a
-      // consumer can reach, and the fold refuses the wire's packet.
+      // the same key reads, or that the list reads after a `refresh()`; what
+      // the cache stores is the event alone, plain data with no path back to
+      // the transport's packet; and the fold refuses an event this library did
+      // not copy, whatever its type. At compile time: the published event's
+      // type — as the entry exports it and as the handle hands it out — refuses
+      // every write a consumer could attempt, and the fold refuses the wire's
+      // packet and any packet or event rebuilt around it.
       const { rxNostr, server } = createTestRelay(nextUrl());
       const options = () => ({
         verifyEvent: acceptAnyEvent,
@@ -375,6 +419,7 @@ describe('the event a consumer holds is this library’s own', () => {
       const owned = ownPacket(wire);
       expect(owned).toBeDefined();
       expect(Reflect.ownKeys(owned ?? {})).toEqual(['event']);
+      expect(plainDataBreaches(owned), 'what is stored is plain data').toEqual([]);
       const theirs = reachable(wire);
       expect(
         [...reachable(owned)].filter((one) => theirs.has(one)),
@@ -386,22 +431,36 @@ describe('the event a consumer holds is this library’s own', () => {
       // checker gives it, the tag list and each tag — is refused, for being
       // read-only; and the internal seam refuses the wire's packet, directly
       // and rebuilt around an owned one.
-      const writes = writesThrough(PUBLISHED, 'ReqEvent');
-      expect(writes.length, 'the probe enumerated the event').toBeGreaterThan(9);
-      const probe = [PUBLISHED, 'declare const value: ReqEvent;', ...writes].join('\n');
-      const offset = 3;
-      const answered = consumerDiagnostics(probe);
-      expect(
-        writes.filter(
-          (_write, at) =>
-            !answered.some((one) => one.line === at + offset && REFUSES_A_WRITE.has(one.code))
-        ),
-        'a write through the published event the types let through'
-      ).toEqual([]);
-      expect(
-        answered.filter((one) => one.line < offset || !REFUSES_A_WRITE.has(one.code)),
-        'the probe compiles apart from its refused writes'
-      ).toEqual([]);
+      // The event is asked about as the named type and as the handle hands it
+      // out — each variant of the handle's state that carries events — since
+      // the two are separate declarations that could drift apart.
+      const carrying = variantsWith(PUBLISHED, "Published.ReqHandle['state']", 'status', 'events');
+      expect(carrying, 'the handle’s states that carry events').toContain('settled');
+      const eventTypes = [
+        'Published.ReqEvent',
+        ...carrying.map(
+          (status) =>
+            `Extract<Published.ReqHandle['state'], { status: '${status}' }>['events'][number]`
+        )
+      ];
+      for (const eventType of eventTypes) {
+        const writes = writesThrough(PUBLISHED, eventType);
+        expect(writes.length, `${eventType}: the probe enumerated the event`).toBeGreaterThan(9);
+        const probe = [PUBLISHED, `declare const value: ${eventType};`, ...writes].join('\n');
+        const offset = 3;
+        const answered = consumerDiagnostics(probe);
+        expect(
+          writes.filter(
+            (_write, at) =>
+              !answered.some((one) => one.line === at + offset && REFUSES_A_WRITE.has(one.code))
+          ),
+          `${eventType}: a write through the published event the types let through`
+        ).toEqual([]);
+        expect(
+          answered.filter((one) => one.line < offset || !REFUSES_A_WRITE.has(one.code)),
+          `${eventType}: the probe compiles apart from its refused writes`
+        ).toEqual([]);
+      }
 
       // Its positive control: the same probe over a type that permits every
       // write is refused nowhere, so a refusal above is the event's type
@@ -414,6 +473,18 @@ describe('the event a consumer holds is this library’s own', () => {
         ),
         'a write through a mutable type was refused'
       ).toEqual([]);
+
+      // And at run time, past any type: a clone of an owned event is typed owned
+      // — `structuredClone` is typed as the identity — and a cast types anything,
+      // so the fold asks who made the event. The control is the owned packet it
+      // takes.
+      const clone = { event: structuredClone(owned?.event) } as OwnedPacket;
+      expect(() => foldEvent(emptyEventSet, clone), 'a clone of an owned event').toThrow(TypeError);
+      expect(
+        () => foldEvent(emptyEventSet, wire as unknown as OwnedPacket),
+        'the wire’s packet, cast'
+      ).toThrow(TypeError);
+      expect(() => foldEvent(emptyEventSet, owned as OwnedPacket)).not.toThrow();
 
       const smuggled = refusedLines(SMUGGLES);
       const said = consumerDiagnostics(SMUGGLES);
