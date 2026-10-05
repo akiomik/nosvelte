@@ -130,10 +130,11 @@ function reachable(root: unknown): Set<object> {
 }
 
 /**
- * What makes `reachable` exact: every object reachable from `root` is plain data
- * — no accessor, whose getter's closure reflection cannot read, no symbol key,
- * and no prototype but the built-in object and array ones. Returns what breaks
- * that, by path.
+ * What makes `reachable` exact and what the boundary made unchangeable: every
+ * object reachable from `root` is plain, frozen data — no accessor, whose
+ * getter's closure reflection cannot read, no symbol key, no prototype but the
+ * built-in object and array ones, and nothing left open to a write. Returns
+ * what breaks that, by path.
  */
 function plainDataBreaches(root: unknown): string[] {
   const breaches: string[] = [];
@@ -144,6 +145,10 @@ function plainDataBreaches(root: unknown): string[] {
     const prototype: unknown = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== Array.prototype)
       breaches.push(`${path} has a prototype of its own`);
+    // Frozen at every level: with no accessor anywhere, `isFrozen` is the whole
+    // answer — a registered packet whose payload could be replaced is the
+    // boundary's object holding somebody else's event.
+    if (!Object.isFrozen(value)) breaches.push(`${path} is not frozen`);
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key === 'symbol') {
         breaches.push(`${path} has a symbol key`);
@@ -451,6 +456,12 @@ describe('the event a consumer holds is this library’s own', () => {
       expect(owned).toBeDefined();
       expect(Reflect.ownKeys(owned ?? {})).toEqual(['event']);
       expect(plainDataBreaches(owned), 'what is stored is plain data').toEqual([]);
+      // And the payload of the boundary's own object cannot be replaced: a
+      // registered packet holding the wire's event would pass every question
+      // about who made it.
+      expect(Reflect.set(owned as object, 'event', wire.event), 'the payload replaced').toBe(false);
+      expect(Reflect.defineProperty(owned as object, 'event', { value: wire.event })).toBe(false);
+      expect(owned?.event).not.toBe(wire.event);
       const theirs = reachable(wire);
       expect(
         [...reachable(owned)].filter((one) => theirs.has(one)),
@@ -495,15 +506,34 @@ describe('the event a consumer holds is this library’s own', () => {
 
       // Its positive control: the same probe over a type that permits every
       // write is refused nowhere, so a refusal above is the event's type
-      // answering and not the probe failing to compile.
-      const open = writesThrough('', '{ a: string; b: string[]; c: { d: number } }');
-      expect(open.length).toBeGreaterThan(4);
+      // answering and not the probe failing to compile. The type reaches each
+      // kind of line the probe emits — a tuple's rest position, a reachable
+      // `any` and a member that can be called — and each is asked for by name,
+      // so a branch of the probe that stopped emitting would show here.
+      const mutable =
+        '{ a: string; b: string[]; c: { d: number }; t: [string, ...number[][]]; x: any; m: { add(one: string): void } }';
+      const open = writesThrough('', mutable);
+      expect(open).toEqual(
+        expect.arrayContaining([
+          'value.b!.push(value.b![0]!);',
+          'value.t![1]![0] = value.t![1]![0]!;',
+          'value.x!.anything = value.x!;',
+          'void value.m!.add!.call;'
+        ])
+      );
       expect(
-        consumerDiagnostics(
-          ['declare const value: { a: string; b: string[]; c: { d: number } };', ...open].join('\n')
-        ),
+        consumerDiagnostics([`declare const value: ${mutable};`, ...open].join('\n')),
         'a write through a mutable type was refused'
       ).toEqual([]);
+      // And where the probe cannot certify a type it throws, rather than
+      // return having emitted nothing for it — each of those is asked for too.
+      expect(() => writesThrough('', '{ a: string[] | number }')).toThrow(/is a union/);
+      expect(() =>
+        writesThrough('declare const key: unique symbol;', '{ [key]: string[] }')
+      ).toThrow(/a symbol member the probe cannot name/);
+      expect(() => writesThrough('', '{ a: { b: { c: { d: { e: string[] } } } } }')).toThrow(
+        /is deeper than 4/
+      );
 
       // And at run time, past any type: a clone of an owned event is typed owned
       // — `structuredClone` is typed as the identity — and a cast types anything,

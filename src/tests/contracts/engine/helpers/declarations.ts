@@ -74,15 +74,19 @@ export const REFUSES_A_WRITE: ReadonlySet<number> = new Set([2540, 2542, 2339]);
 
 /**
  * Every write a consumer could attempt through a value of `typeText`, resolved
- * in a consumer's file after `imports`: an assignment to each property the type
- * checker gives the type — inherited, mapped and aliased ones included — and,
- * for an array, a `push` and an assignment to an element; recursively, to
- * `depth` levels. Each write is one line, so a diagnostic can be laid against
- * it.
+ * in a consumer's file after `imports`: an assignment to each property, index
+ * signature and well-known-symbol member the type checker gives the type —
+ * inherited, mapped and aliased ones included — and, for an array or a tuple,
+ * a `push` and an assignment to each position; recursively, to `depth` levels.
+ * A value the walk cannot look inside is not passed over: an `any`, and a value
+ * that can be called, are each emitted as a line that compiles, so they read as
+ * writes the types let through. Each write is one line, so a diagnostic can be
+ * laid against it.
  *
  * A union is refused rather than walked: a write to a member some constituents
  * lack is an error for that reason, which would read as a refusal. Walk each
- * variant instead ({@link variantsWith}).
+ * variant instead ({@link variantsWith}). So is a symbol member the probe
+ * cannot name, and a value with members past `depth`.
  */
 export function writesThrough(imports: string, typeText: string, depth = 4): string[] {
   const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
@@ -96,8 +100,17 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
   const isIdentifier = (name: string): boolean => /^[A-Za-z_$][\w$]*$/.test(name);
 
   const visit = (expression: string, type: ts.Type, level: number): void => {
-    if (level > depth) return;
     const flags = type.getFlags();
+    // **`any` is not "nothing writable".** It has no properties to enumerate,
+    // so it used to end the walk as if it had been read; a write through it
+    // compiles, and this one is emitted so that it does — and is reported as a
+    // write the types let through. `unknown` cannot be written into without a
+    // narrowing, so it does end the walk.
+    if (flags & ts.TypeFlags.Any) {
+      writes.push(`${expression}.anything = ${expression};`);
+      return;
+    }
+    if (flags & ts.TypeFlags.Unknown) return;
     if (
       flags &
       (ts.TypeFlags.StringLike |
@@ -110,18 +123,36 @@ export function writesThrough(imports: string, typeText: string, depth = 4): str
         ts.TypeFlags.Void)
     )
       return;
+    // Past `depth`, a value with anything inside it is reported rather than
+    // passed over: returning would certify as read a list the walk never
+    // reached. A primitive there has nothing to write into, and ended above.
+    if (level > depth) throw new Error(`writesThrough: ${expression} is deeper than ${depth}`);
     if (type.isUnion()) throw new Error(`writesThrough: ${expression} is a union`);
     if (checker.isArrayType(type) || checker.isTupleType(type)) {
       writes.push(`${expression}.push(${expression}[0]!);`);
-      writes.push(`${expression}[0] = ${expression}[0]!;`);
-      const element = checker.getTypeArguments(type as ts.TypeReference)[0];
-      if (element !== undefined) visit(`${expression}[0]!`, element, level + 1);
+      // Every position, not the first: a tuple's positions and its rest
+      // element can each have a type of their own, so `[readonly string[],
+      // ...string[][]]` is readonly at 0 and mutable from 1. An array's one type
+      // argument is its element, at every index.
+      const elements = checker.getTypeArguments(type as ts.TypeReference);
+      for (const [at, element] of elements.entries()) {
+        writes.push(`${expression}[${at}] = ${expression}[${at}]!;`);
+        visit(`${expression}[${at}]!`, element, level + 1);
+      }
       return;
     }
+    // **A value that can be called is reported, not walked.** What a call does
+    // — a `Set`'s `add`, a `Date`'s setters, a closure over the event — is not
+    // something a readonly modifier answers, and `Readonly<Set<string>>` still
+    // has an `add` to call. So a callable value is emitted as a line that
+    // compiles exactly when it is callable, which reads as a write the types
+    // let through. Data has no such member.
+    if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0)
+      writes.push(`void ${expression}.call;`);
     for (const property of checker.getPropertiesOfType(type)) {
       const name = property.getName();
-      // A private name (`#…`) cannot be written from outside its class, so it is
-      // the one member a consumer has no write to attempt.
+      // A private name (`#…`) cannot be written or called from outside its
+      // class, so it is the one member a consumer has no write to attempt.
       if (name.startsWith('__#')) continue;
       let access: string;
       if (name.startsWith('__@')) {
