@@ -1154,9 +1154,10 @@ export interface ReqHandle {
    * consumer's replacement was every later reader's `refresh`. Declared
    * `readonly`, the slot is refused by the type; the handle is sealed, so the
    * write is refused at run time however it is spelled; and the call is the
-   * same call. The function's own `call`, `apply` and `bind` stay assignable in
-   * TypeScript's declarations of every function — the exception `B5-C8` states
-   * — and the sealed function refuses them at run time.
+   * same call. The members TypeScript declares on every function — `call`,
+   * `prototype`, `caller` and the rest — stay assignable in those declarations,
+   * the exception `B5-C8` states, and the sealed function refuses them at run
+   * time.
    */
   readonly refresh: () => Promise<RefreshOutcome>;
 }

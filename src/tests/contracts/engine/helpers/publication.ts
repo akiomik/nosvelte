@@ -63,7 +63,7 @@ import { types } from 'node:util';
 
 /** A live interface a hook hands out: the getters and commands it names, and nothing else. */
 export interface LiveInterface {
-  /** Accessors this interface may hold: each getter's output is checked, read once. */
+  /** Accessors this interface may hold: each getter's output is checked, read twice. */
   readonly getters: readonly string[];
   /** Data members this interface may hold, each a function — what it resolves with is the arrangement's to check. */
   readonly commands: readonly string[];
@@ -143,6 +143,23 @@ const memberOf = (path: string, holder: object, key: string | symbol): string =>
   return `${path}.${key}`;
 };
 
+/**
+ * Whether `value` can be called with `new`, asked without calling it:
+ * `Reflect.construct` checks its third argument is a constructor before it
+ * builds anything, and builds with `String`, not with `value`. A command or a
+ * getter that can be constructed hands a consumer an instance whose prototype
+ * is the function's own — a regular function's open `prototype`, or a bound
+ * function's target's — shared by every instance.
+ */
+const constructible = (value: object): boolean => {
+  try {
+    Reflect.construct(String, [], value as () => unknown);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** What a prototype's own `constructor` calls itself, read without running anything. */
 const nameOf = (prototype: object): string => {
   const constructor: unknown = Reflect.getOwnPropertyDescriptor(prototype, 'constructor')?.value;
@@ -216,24 +233,33 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
     }
     const isFunction = typeof value === 'function';
     const isInterface = named !== undefined && !isFunction;
-    if (!isFunction && role === 'value') {
-      const proto = Reflect.getPrototypeOf(value);
-      const admitted = isInterface
-        ? proto === Object.prototype || proto === null
-        : proto === Object.prototype ||
-          proto === null ||
-          (Array.isArray(value) && proto === Array.prototype) ||
-          (proto !== null && discipline.errors.has(proto));
-      if (!admitted) {
-        found.push(`${path}: a kind this discipline does not admit`);
-        return;
-      }
+    // **In every role**: a host object wearing a borrowed prototype is one
+    // whether it is held, inherited, or a function's own `prototype`.
+    if (!isFunction) {
       const slotted = SLOTTED.find(([, is]) => is(value));
       if (slotted !== undefined) {
         found.push(`${path}: a host object with internal state (${slotted[0]})`);
         return;
       }
     }
+    if (!isFunction && role === 'value') {
+      const proto = Reflect.getPrototypeOf(value);
+      const admitted = isInterface
+        ? proto === Object.prototype || proto === null
+        : proto === Object.prototype ||
+          proto === null ||
+          proto === Array.prototype ||
+          (proto !== null && discipline.errors.has(proto));
+      if (!admitted) {
+        found.push(`${path}: a kind this discipline does not admit`);
+        return;
+      }
+    }
+    // A command, a getter's function and a function interface are called,
+    // never constructed — a class reached through a prototype is the one
+    // function a consumer may construct.
+    if (isFunction && role !== 'prototype' && named !== undefined && constructible(value))
+      found.push(`${path}: a constructible function`);
     if (Reflect.isExtensible(value)) found.push(`${path}: extensible`);
     chain(value, path);
 
@@ -257,8 +283,14 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
           if (!command) found.push(`${where}: a member the interface does not name`);
           else if (typeof held !== 'function')
             found.push(`${where}: a command that is not a function`);
+          else if (constructible(held)) found.push(`${where}: a constructible function`);
           visit(held, where, command ? 'function' : 'value');
         } else if (role === 'prototype' && !isFunction) {
+          // A prototype's `constructor` is its class; any other function on it
+          // is a method every instance inherits, whose answer nothing here can
+          // read — so a library prototype holds none.
+          if (typeof held === 'function' && key !== 'constructor')
+            found.push(`${where}: a method every instance inherits`);
           if (typeof held === 'function') visit(held, where, 'function');
           else if (typeof held === 'object' && held !== null)
             found.push(`${where}: data every instance inherits`);
@@ -283,6 +315,8 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
           }`
         );
       if (slot.get === undefined) continue;
+      if (getter && constructible(slot.get))
+        found.push(`${where} (its getter): a constructible function`);
       visit(slot.get, `${where} (its getter)`, 'function');
       if (!getter || named.unwalked?.includes(key as string) === true) continue;
       // **Twice**: a getter that hands out a closed value on its first read and

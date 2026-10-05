@@ -438,6 +438,24 @@ export type { FailureSource };
  * configured write-only is a capability to change, a relay they never configured
  * is a list to add to.
  */
+/**
+ * **The library's own decisions ask a brand, not `instanceof`.** `instanceof`
+ * answers what the class's `Symbol.hasInstance` says, and every class here
+ * inherits that from the platform's `Error` — which a consumer reaches from any
+ * published Error as `Object.getPrototypeOf(error.constructor)`. One
+ * `Object.defineProperty(Error, Symbol.hasInstance, …)` from a published value
+ * made `relayOf` miss a `RelayNotInScopeError`, and two unrelated requests then
+ * shared one refused entry, the second reading the first's `url` — measured
+ * after `sealClass` had closed this library's own classes. Membership of a
+ * module-private `WeakSet`, filled by the constructor, is a question nothing
+ * reachable from a published value can answer.
+ */
+const RELAY_NOT_IN_SCOPE = new WeakSet<object>();
+
+/** Whether `value` was made by {@link RelayNotInScopeError}'s constructor. */
+export const isRelayNotInScope = (value: unknown): value is RelayNotInScopeError =>
+  typeof value === 'object' && value !== null && RELAY_NOT_IN_SCOPE.has(value);
+
 export class RelayNotInScopeError extends Error {
   /** See {@link UnsupportedFilterError}'s re-declaration for why these are here. */
   declare readonly message: string;
@@ -470,6 +488,7 @@ export class RelayNotInScopeError extends Error {
     hardenOwned(this);
     this.url = url;
     this.configured = configured;
+    RELAY_NOT_IN_SCOPE.add(this);
     Object.freeze(this);
   }
 }

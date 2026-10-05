@@ -44,7 +44,11 @@ import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type { ResumeHints } from './resume.svelte.js';
 import { createResumeHints } from './resume.svelte.js';
 import type { RelayInput, RelayScope, TransportKeys } from './scope.svelte.js';
-import { createRelayScope, RelayConfigurationError } from './scope.svelte.js';
+import {
+  createRelayScope,
+  isRelayConfigurationError,
+  type RelayConfigurationError
+} from './scope.svelte.js';
 import type { NostrSigner } from './send.svelte.js';
 
 const KEY = Symbol('nosvelte');
@@ -808,7 +812,7 @@ export function createNostrContext(options: {
   try {
     scope = createRelayScope(runtime.transport, options.relays ?? [], options.transportKeys);
   } catch (error) {
-    if (!(error instanceof RelayConfigurationError)) {
+    if (!isRelayConfigurationError(error)) {
       if (runtime.environment === 'browser') runtime.transport.dispose();
       throw error;
     }
@@ -956,7 +960,7 @@ export function createNostrContext(options: {
         // swallowed that would be shown a live provider that cannot ask
         // anything. It is rethrown before anything is recorded, so the last
         // refusal a consumer can act on is not overwritten by one they cannot.
-        if (!(error instanceof RelayConfigurationError)) throw error;
+        if (!isRelayConfigurationError(error)) throw error;
         diagnostics.refuse(error);
         return;
       }

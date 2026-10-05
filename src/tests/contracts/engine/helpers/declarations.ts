@@ -174,14 +174,28 @@ export interface WalkOptions {
   /** How many levels to walk; past it, a value with members throws. */
   readonly depth?: number;
   /**
-   * What a callable member this repository declares is. `'data'`, the default,
+   * What a callable this repository declares is. `'data'`, the default,
    * reports it: data has no such member, and the published event has none.
-   * `'api'` takes it for a published handle's method — `refresh` — whose slot
-   * must still be refused, and whose result, awaited, is walked as a value the
-   * consumer holds. A method the probe cannot call with no arguments is
-   * reported.
+   * `'api'` takes it for a command — a function at the root of a walk, or a
+   * member named in {@link commands} — whose slot must still be refused, whose
+   * own members are walked, and whose result, awaited, is walked as a value
+   * the consumer holds; anywhere else a function is reported as data's. A
+   * function with more than one signature is reported; a required argument is
+   * handed `never`.
    */
   readonly callables?: 'data' | 'api';
+  /** The members `'api'` takes for commands, by name. */
+  readonly commands?: readonly string[];
+}
+
+/**
+ * A list the walk met, as a consumer's line reaches it: the guard that narrows
+ * to it, the expression, and whether its type is a tuple.
+ */
+export interface ListSite {
+  readonly guard: string;
+  readonly expression: string;
+  readonly tuple: boolean;
 }
 
 export function writesThrough(
@@ -206,8 +220,31 @@ export function writesThroughEach(
   typeTexts: readonly string[],
   options: WalkOptions = {}
 ): string[][] {
+  return walkEach(imports, typeTexts, options).writes;
+}
+
+/**
+ * Every list the walk of {@link writesThroughEach} meets, for each type: where
+ * a consumer's line reaches it — so an arm can ask a question of every
+ * published list rather than of the ones somebody wrote down.
+ */
+export function listsThroughEach(
+  imports: string,
+  typeTexts: readonly string[],
+  options: WalkOptions = {}
+): ListSite[][] {
+  return walkEach(imports, typeTexts, options).lists;
+}
+
+function walkEach(
+  imports: string,
+  typeTexts: readonly string[],
+  options: WalkOptions
+): { writes: string[][]; lists: ListSite[][] } {
   const depth = options.depth ?? 4;
   const callables = options.callables ?? 'data';
+  const commands = options.commands ?? [];
+  let lists: ListSite[] = [];
   const roots = typeTexts.map((_, at) => rootOf(at, typeTexts.length));
   const { program, consumer } = programOver(
     `${imports}\n${STANDARD}\n${typeTexts.map((typeText, at) => `declare const ${roots[at]}: ${typeText};`).join('\n')}\n`
@@ -361,7 +398,14 @@ export function writesThroughEach(
       writes.push(`${guard}${access} = ${access}!;`);
       const declared = library(property);
       if (declared === undefined)
-        visit(`${access}!`, present(checker.getTypeOfSymbol(property)), level + 1, guard);
+        visit(
+          `${access}!`,
+          present(checker.getTypeOfSymbol(property)),
+          level + 1,
+          guard,
+          false,
+          name
+        );
       else if (!standard(declared) && callable(checker.getTypeOfSymbol(property)))
         writes.push(`${guard}void ${access}!.call;`);
     }
@@ -380,7 +424,8 @@ export function writesThroughEach(
     type: ts.Type,
     level: number,
     guard: string,
-    claimed = false
+    claimed = false,
+    member: string | undefined = undefined
   ): void => {
     const flags = type.getFlags();
     // **`any` is not "nothing writable".** It has no properties to enumerate,
@@ -421,7 +466,7 @@ export function writesThroughEach(
       if (constituents.every(primitive)) return;
       const [only] = constituents;
       if (constituents.length === 1 && only !== undefined)
-        return visit(expression, only, level, guard);
+        return visit(expression, only, level, guard, false, member);
       if (constituents.some(primitive))
         throw new Error(`writesThrough: ${expression} is a union of values and objects`);
       const discriminant = discriminantOf(constituents);
@@ -441,6 +486,7 @@ export function writesThroughEach(
       return;
     }
     if (checker.isArrayType(type) || checker.isTupleType(type)) {
+      lists.push({ guard, expression, tuple: checker.isTupleType(type) });
       writes.push(`${guard}${expression}.push(${expression}[0]!);`);
       // Every position, not the first: a tuple's positions and its rest
       // element can each have a type of their own, so `[readonly string[],
@@ -491,7 +537,8 @@ export function writesThroughEach(
     // compiles exactly when it is callable, which reads as a write the types
     // let through. Data has no such member.
     const emitted = writes.length;
-    if (callable(type) && callables === 'api' && ours(type)) {
+    const command = level === 0 || (member !== undefined && commands.includes(member));
+    if (callable(type) && callables === 'api' && ours(type) && command) {
       // A method of a published handle: what it resolves with is what the
       // consumer holds, so that is walked, as a value of its own.
       //
@@ -520,6 +567,28 @@ export function writesThroughEach(
       standardMembers(expression, type, guard);
       const returned = call.getReturnType();
       const awaited = checker.getAwaitedType(returned) ?? returned;
+      // **What a command returns is the platform's promise, and nothing more.**
+      // It is the caller's own — a fresh one each call — so its members are
+      // not walked; one with members of this library's on it would be a
+      // published value the walk never asked about, and is reported.
+      if (awaited !== returned) {
+        const own = checker.getPropertiesOfType(returned).filter((property) => {
+          const declared = property.getDeclarations() ?? [];
+          return !(
+            declared.length > 0 &&
+            declared.every(
+              (one) =>
+                program.isSourceFileDefaultLibrary(one.getSourceFile()) &&
+                ts.isInterfaceDeclaration(one.parent) &&
+                ['Promise', 'PromiseLike'].includes(one.parent.name.text)
+            )
+          );
+        });
+        if (own.length > 0)
+          throw new Error(
+            `writesThrough: ${expression} returns a promise with members of its own: ${own.map((one) => one.getName()).join(', ')}`
+          );
+      }
       // Bound to a name each line, so a guard can narrow it: a call is a new
       // value every time it is written, and nothing narrows one.
       const name = `__result${(results += 1)}`;
@@ -552,17 +621,22 @@ export function writesThroughEach(
       throw new Error(`writesThrough: ${expression} has nothing the probe can enumerate`);
     standardMembers(expression, type, guard);
   };
-  return roots.map((root) => {
+  const walkedEach = roots.map((root) => {
     const declaration = declarations.find(
       (one) => ts.isIdentifier(one.name) && one.name.text === root
     );
     if (declaration === undefined) throw new Error(`the probe declared no ${root}`);
     writes = [];
+    lists = [];
     walked = new Set<ts.Type>();
     results = 0;
     visit(root, checker.getTypeAtLocation(declaration.name), 0, '');
-    return writes;
+    return { writes, lists };
   });
+  return {
+    writes: walkedEach.map((one) => one.writes),
+    lists: walkedEach.map((one) => one.lists)
+  };
 }
 
 /**
@@ -710,7 +784,8 @@ function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
     target: ts.PropertyAccessExpression | ts.ElementAccessExpression,
     receiver: ts.Type
   ): boolean => {
-    const callable = receiver.getCallSignatures().length > 0;
+    const callable =
+      receiver.getCallSignatures().length > 0 || receiver.getConstructSignatures().length > 0;
     // An element access names its member by a key: a well-known symbol is
     // found by the name the checker gives it (`__@iterator@…`), among the
     // receiver's members and the universal ones, and a string literal by itself.
@@ -732,7 +807,7 @@ function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
     const declarations = symbol?.getDeclarations() ?? [];
     const declaring = [
       'Object',
-      ...(callable ? ['Function', 'CallableFunction'] : []),
+      ...(callable ? ['Function', 'CallableFunction', 'NewableFunction'] : []),
       ...(isReadonlyList(receiver) ? ['ReadonlyArray'] : [])
     ];
     return (
@@ -904,33 +979,43 @@ export function snippetArgumentsOf(imports: string, typeTexts: readonly string[]
       checker.getTypeAtLocation(declaration.name)
     )) {
       const type = checker.getNonNullableType(checker.getTypeOfSymbol(property));
-      const symbol = type.getSymbol();
-      const fromSvelte = (symbol?.getDeclarations() ?? []).some((one) =>
-        one.getSourceFile().fileName.includes('/node_modules/svelte/')
-      );
-      if (symbol?.getName() !== 'Snippet' || !fromSvelte) continue;
-      const [signature, ...others] = type.getCallSignatures();
-      const [parameter] = signature?.getParameters() ?? [];
-      if (signature === undefined || others.length > 0 || parameter === undefined)
+      // **Every prop that can be called is one this library calls** — a
+      // snippet, or a callback, under whatever name or interface it is
+      // declared — and what it is called with is handed to the consumer. A
+      // prop that cannot be called is the consumer's to write.
+      const signatures = type.getCallSignatures();
+      if (signatures.length === 0) continue;
+      const [signature, ...others] = signatures;
+      if (signature === undefined || others.length > 0)
         throw new Error(
-          `snippetArgumentsOf: ${property.getName()} is a snippet the probe cannot read`
+          `snippetArgumentsOf: ${property.getName()} is a prop the probe cannot read`
         );
-      const handed = checker.getTypeOfSymbol(parameter);
-      // **Every argument it is handed, not the first.** A snippet whose
-      // parameters are not a tuple is one the probe cannot read, and is
-      // reported rather than passed over as a snippet handed nothing.
-      if (!checker.isTupleType(handed))
-        throw new Error(
-          `snippetArgumentsOf: ${property.getName()} is handed something that is not a list of arguments`
-        );
-      for (const [position, argument] of checker
-        .getTypeArguments(handed as ts.TypeReference)
-        .entries()) {
+      const parameters = signature.getParameters();
+      const [only] = parameters;
+      const declaration = only?.valueDeclaration;
+      // A snippet takes its arguments as one rest list; a callback, one by one.
+      const rest =
+        parameters.length === 1 &&
+        declaration !== undefined &&
+        ts.isParameter(declaration) &&
+        declaration.dotDotDotToken !== undefined;
+      let handed: readonly ts.Type[];
+      const prop = `NonNullable<(${typeTexts[at]})[${JSON.stringify(property.getName())}]>`;
+      if (rest && only !== undefined) {
+        const list = checker.getTypeOfSymbol(only);
+        // A rest list that is not a tuple is one the probe cannot read, and is
+        // reported rather than passed over as a snippet handed nothing.
+        if (!checker.isTupleType(list))
+          throw new Error(
+            `snippetArgumentsOf: ${property.getName()} is handed something that is not a list of arguments`
+          );
+        handed = checker.getTypeArguments(list as ts.TypeReference);
+      } else handed = parameters.map((parameter) => checker.getTypeOfSymbol(parameter));
+      const spelled = (position: number): string => `Parameters<${prop}>[${position}]`;
+      for (const [position, argument] of handed.entries()) {
         if (seen.has(argument)) continue;
         seen.add(argument);
-        found.push(
-          `Parameters<NonNullable<(${typeTexts[at]})[${JSON.stringify(property.getName())}]>>[${position}]`
-        );
+        found.push(spelled(position));
       }
     }
   }
@@ -961,5 +1046,19 @@ export function declaredHere(imports: string, typeText: string): string[] {
         );
       })
     )
+    .map((property) => property.getName());
+}
+
+/** The names of every member the type checker gives `typeText`, after `imports`. */
+export function memberNamesOf(imports: string, typeText: string): string[] {
+  const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
+  const checker = program.getTypeChecker();
+  const declaration = consumer.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => statement.declarationList.declarations)
+    .find((one) => ts.isIdentifier(one.name) && one.name.text === 'value');
+  if (declaration === undefined) throw new Error('the probe declared no value');
+  return checker
+    .getPropertiesOfType(checker.getTypeAtLocation(declaration.name))
     .map((property) => property.getName());
 }

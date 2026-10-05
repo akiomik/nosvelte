@@ -86,6 +86,9 @@ import {
   exportsOf,
   judgeWrites,
   judgeWritesEach,
+  type ListSite,
+  listsThroughEach,
+  memberNamesOf,
   snippetArgumentsOf,
   writesThrough,
   writesThroughEach
@@ -380,6 +383,7 @@ const POPULATION = [
   'useRelayDiagnostics(), a notice that was not text',
   'useSend()',
   'a send, refused',
+  'its events outlet, over useReq()’s handle',
   'a send, settled',
   'a refresh, not started with no readable relay',
   'a refresh, cancelled because the provider was disposed',
@@ -490,6 +494,13 @@ function disciplineControls(): void {
   }
   Object.freeze(Methodical.prototype);
   Object.freeze(Methodical);
+  const Described = sealed(
+    class Described extends Error {
+      describe(): number {
+        return 1;
+      }
+    }
+  );
   // And a class nobody closed, reached through what its instances inherit.
   class Open extends Error {}
   // Closed the way this library closes its own Errors: `stack` made data, then frozen.
@@ -501,7 +512,9 @@ function disciplineControls(): void {
   const control: Discipline = {
     interfaces: new Map(),
     errors: new Set(
-      [Ours, Setting, Leaf, Sharing, Gotten, Methodical, Open].map((one) => one.prototype as object)
+      [Ours, Setting, Leaf, Sharing, Gotten, Methodical, Described, Open].map(
+        (one) => one.prototype as object
+      )
     )
   };
   const breaches = (value: unknown, discipline = control): string[] =>
@@ -560,6 +573,16 @@ function disciplineControls(): void {
       'held (inherited from Methodical).describe: extensible'
     ],
     ['a class nobody closed', owned(new Open('x')), 'held (inherited from Open): extensible'],
+    [
+      'a method every instance inherits, closed',
+      owned(new Described('x')),
+      'held (inherited from Described).describe: a method every instance inherits'
+    ],
+    [
+      'a host object with internal state, under no prototype',
+      closed({ host: closed(Object.setPrototypeOf(new Map(), null) as object) }),
+      'held.host: a host object with internal state (isMap)'
+    ],
     ['a list’s `length`', Object.preventExtensions([]), 'held.length: writable'],
     [
       'a symbol-keyed slot',
@@ -603,7 +626,7 @@ function disciplineControls(): void {
     [
       'a host object, under its own prototype',
       closed({ map: closed(new Map()) }),
-      'held.map: a kind this discipline does not admit'
+      'held.map: a host object with internal state (isMap)'
     ],
     [
       'internal state under a borrowed prototype',
@@ -766,6 +789,67 @@ function disciplineControls(): void {
       'held: a kind this discipline does not admit'
     ],
     [
+      'a configurable getter on an interface',
+      Object.preventExtensions(
+        Object.defineProperties(
+          {},
+          {
+            state: { get: closed(() => 1), configurable: true },
+            raw: getter(1),
+            refresh: { value: command }
+          }
+        )
+      ),
+      'held.state: configurable'
+    ],
+    [
+      'a named getter with a setter',
+      handle({
+        state: { get: closed(() => 1), set: closed(() => undefined) },
+        raw: getter(1),
+        refresh: { value: command }
+      }),
+      'held.state: a setter'
+    ],
+    [
+      'a command it names and does not hold',
+      handle({ state: getter(1), raw: getter(1) }),
+      'held.refresh: named and absent'
+    ],
+    [
+      'a command that can be constructed, and its open prototype',
+      handle({
+        state: getter(1),
+        raw: getter(1),
+        refresh: { value: closed(function regular() {}) }
+      }),
+      'held.refresh.prototype: extensible'
+    ],
+    [
+      'a bound command, whose instances share its target’s prototype',
+      handle({
+        state: getter(1),
+        raw: getter(1),
+        refresh: { value: closed(function regular() {}.bind(null)) }
+      }),
+      'held.refresh: a constructible function'
+    ],
+    [
+      'a function’s own prototype that is a host object',
+      handle({
+        state: getter(1),
+        raw: getter(1),
+        refresh: {
+          value: closed(
+            Object.assign(function regular() {}, {
+              prototype: closed(Object.setPrototypeOf(new Map(), Object.prototype) as object)
+            })
+          )
+        }
+      }),
+      'held.refresh.prototype: a host object with internal state (isMap)'
+    ],
+    [
       'a command whose prototype carries a getter',
       handle({
         state: getter(1),
@@ -788,6 +872,38 @@ function disciplineControls(): void {
   ];
   for (const [rule, value, finding, interfaceSpec] of interfaceRules)
     expect(over(value, interfaceSpec), `the interface’s control: ${rule}`).toContain(finding);
+  // **A setter on the platform's own chain**, past the first link: installed
+  // for this one question and taken back, since it runs on every assignment
+  // to that name in this process while it is there.
+  Object.defineProperty(Object.prototype, '__pb13Probe', {
+    set: () => undefined,
+    configurable: true
+  });
+  try {
+    expect(
+      breaches(owned(new Ours('x'))),
+      'the discipline’s control: a setter the platform holds, two links up'
+    ).toContain('held: inherits a setter, __pb13Probe');
+  } finally {
+    Reflect.deleteProperty(Object.prototype, '__pb13Probe');
+  }
+  // **And an object judged in each role it is reached in**: a host object
+  // that is first a link of a chain, then a value beside it.
+  const slottedLink = closed(Object.setPrototypeOf(new Map(), Object.prototype) as object);
+  const linked = closed(Object.create(slottedLink) as object);
+  expect(
+    breaches(closed({ first: linked, then: slottedLink }), {
+      interfaces: new Map(),
+      errors: new Set([slottedLink])
+    }),
+    'the discipline’s control: one object, two roles'
+  ).toEqual(
+    expect.arrayContaining([
+      'held.first (inherited from a prototype): a host object with internal state (isMap)',
+      'held.then: a host object with internal state (isMap)'
+    ])
+  );
+
   // Each host kind with internal state, under a borrowed prototype: admitted as
   // a record by its prototype, and refused by its slots.
   const hosts: [string, () => object][] = [
@@ -860,7 +976,12 @@ const NOT_GIVEN_OUT: Readonly<Record<string, string>> = {
  * component the surface record names — and each component's props are read off
  * its source as one of the outlet types.
  */
-function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; exceptions: string[] } {
+function publishedTypeBreaches(): {
+  shapes: string[];
+  breaches: string[];
+  exceptions: string[];
+  lists: ListSite[][];
+} {
   const exported = exportsOf('$lib/v1/index.js');
   const names = new Set(exported.map((one) => one.name));
   // Both edges of the exclusion: each name it leaves out is a name the entry
@@ -896,11 +1017,32 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
   // `prototype` TypeScript gives every class — so what this asks of it is that
   // it holds nothing of this library's; at run time the class is sealed, and
   // the discipline reads it through every instance's chain.
-  for (const one of exported.filter((each) => each.kind === 'class'))
+  for (const one of exported.filter((each) => each.kind === 'class')) {
     expect(
       declaredHere(PUBLISHED, `typeof Published.${one.name}`),
       `${one.name}'s static side declares nothing of this library's`
     ).toEqual([]);
+    // **And what it does hold, pinned**: the platform's — `ErrorConstructor`'s
+    // members, as the default library and the host's typings declare them,
+    // and the `prototype` TypeScript gives every class. Each type-checks as
+    // an assignment, and the sealed class refuses it at run time, which is the
+    // price `B5-C8` states; a member added here is a change to that price.
+    expect(
+      memberNamesOf(PUBLISHED, `typeof Published.${one.name}`).sort(),
+      `${one.name}'s static side is the platform's`
+    ).toEqual([
+      'captureStackTrace',
+      'isError',
+      'prepareStackTrace',
+      'prototype',
+      'stackTraceLimit'
+    ]);
+  }
+  // Its control: a class that declares a static of its own is found to.
+  expect(
+    declaredHere('export {};\nclass Registry { static registry = 1; }', 'typeof Registry'),
+    'the static side’s control'
+  ).toEqual(['registry']);
   const shapes = [
     ...exported
       .filter((one) => one.kind !== 'value' && NOT_GIVEN_OUT[one.name] === undefined)
@@ -912,7 +1054,11 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
     ...MAIN_SURFACE.hooks.map((hook) => `ReturnType<typeof Published.${hook}>`),
     ...outlets
   ];
-  const writes = writesThroughEach(PUBLISHED, shapes, { callables: 'api', depth: 6 });
+  // A function is a command only where the handle names one, and at a root —
+  // `useSend()`'s answer; anywhere else it is data's, and is reported.
+  const walk = { callables: 'api', commands: ['refresh'], depth: 6 } as const;
+  const writes = writesThroughEach(PUBLISHED, shapes, walk);
+  const lists = listsThroughEach(PUBLISHED, shapes, walk);
   const verdicts = judgeWritesEach(PUBLISHED, shapes, writes);
   const judged = shapes.flatMap((typeText, at) =>
     (verdicts[at] ?? []).map((one) => ({ ...one, line: `${typeText}: ${one.write}` }))
@@ -927,19 +1073,72 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
       ),
       `what ${hook} answers is walked`
     ).toBe(true);
-  // **One exception, stated in the row rather than hidden here**: a standard
-  // method's slot — a read-only list's, a function's `call`, `apply` and
-  // `bind` — is assignable in TypeScript's own declarations, and the lists stay
-  // arrays rather than refuse that one write by type. Returned apart, so an arm
-  // asserts it by name.
+  // **One exception, stated in the row rather than hidden here**: a member
+  // TypeScript's default library declares on every value of its kind —
+  // `Object`'s, a function's, a read-only list's — is an assignable slot in
+  // those declarations, and the lists stay arrays rather than refuse that write
+  // by type. Returned apart, so an arm asserts the whole table by name.
   const breaches = judged
     .filter((one) => one.verdict !== 'refused' && one.verdict !== 'a standard member slot')
     .map((one) => `${one.line} (${one.verdict})`);
   const exceptions = judged
     .filter((one) => one.verdict === 'a standard member slot')
     .map((one) => one.line);
-  return { shapes, breaches, exceptions };
+  return { shapes, breaches, exceptions, lists };
 }
+
+/**
+ * Every member the stated exception admits, by how a consumer spells it:
+ * `Object`'s on any value, `Function`'s, `CallableFunction`'s and
+ * `NewableFunction`'s on a function, `ReadonlyArray`'s on a read-only list —
+ * the table the rows give examples from, pinned whole, so a TypeScript library
+ * that declares one more widens the exception here rather than silently.
+ */
+const STANDARD_SLOTS = [
+  '.apply',
+  '.arguments',
+  '.at',
+  '.bind',
+  '.call',
+  '.caller',
+  '.concat',
+  '.constructor',
+  '.entries',
+  '.every',
+  '.filter',
+  '.find',
+  '.findIndex',
+  '.findLast',
+  '.findLastIndex',
+  '.flat',
+  '.flatMap',
+  '.forEach',
+  '.hasOwnProperty',
+  '.includes',
+  '.indexOf',
+  '.isPrototypeOf',
+  '.join',
+  '.keys',
+  '.lastIndexOf',
+  '.map',
+  '.propertyIsEnumerable',
+  '.prototype',
+  '.reduce',
+  '.reduceRight',
+  '.slice',
+  '.some',
+  '.toLocaleString',
+  '.toReversed',
+  '.toSorted',
+  '.toSpliced',
+  '.toString',
+  '.valueOf',
+  '.values',
+  '.with',
+  '[Symbol.hasInstance]',
+  '[Symbol.iterator]',
+  '[Symbol.metadata]'
+];
 
 /**
  * The stated exception, held to its statement: every line it covers is an
@@ -948,6 +1147,16 @@ function publishedTypeBreaches(): { shapes: string[]; breaches: string[]; except
  * measured concession over a population, not a gap the probe stopped reading.
  */
 function exceptionStated(exceptions: readonly string[]): void {
+  expect(
+    [
+      ...new Set(
+        exceptions.map(
+          (line) => /(\.\w+|\[Symbol\.\w+\]) = [^=]*!;$/.exec(line)?.[1] ?? `? ${line}`
+        )
+      )
+    ].sort(),
+    'the members the exception admits, and no other'
+  ).toEqual(STANDARD_SLOTS);
   for (const line of exceptions)
     expect(line, 'an exception line is a slot written with its own member').toMatch(
       /^[^:]+: (?:if \(.*?\) |for \(.*?\) )*(.+?)(\.\w+|\[Symbol\.\w+\]) = \1\2!;$/
@@ -1795,7 +2004,14 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await settle();
         expect(held.value.state.status, 'the premise: deferred').toBe('loading');
         check('a deferred request', held.value, engine(held.value));
-        const outcome = await held.value.refresh();
+        // **What a command returns is the platform's `Promise`, the caller's
+        // own**: a fresh one each call, so a write to one reaches no other
+        // caller. What it settles with is this library's, checked below.
+        const asked = held.value.refresh();
+        const askedAgain = held.value.refresh();
+        expect(asked, 'the premise: a fresh promise each call').not.toBe(askedAgain);
+        await askedAgain;
+        const outcome = await asked;
         expect(outcome, 'the premise: deferred').toEqual({
           kind: 'not-started',
           reason: 'deferred'
@@ -1967,6 +2183,11 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await settle(400);
         expect(request.value.state.status, 'the premise: useReq(), incomplete').toBe('incomplete');
         check('useReq()', request.value, [[request.value, REQ_HANDLE]]);
+        // What a component hands its outlet: built over `useReq()`'s handle,
+        // which is what every request component renders through.
+        check('its events outlet, over useReq()’s handle', outlet(request.value, false, 'events'), [
+          [request.value, REQ_HANDLE]
+        ]);
         const outcome = request.value.refresh();
         await nextOf(server, 'REQ');
         const refreshed = await outcome;
@@ -2000,6 +2221,10 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const refusedSend = await sender.value({} as never);
         expect(refusedSend.status, 'the premise: a send refused').toBe('refused');
         check('a send, refused', refusedSend);
+        const sent = sender.value({} as never);
+        const sentAgain = sender.value({} as never);
+        expect(sent, 'the premise: a fresh promise each send').not.toBe(sentAgain);
+        await Promise.all([sent, sentAgain]);
         const signed = {
           id: 'a'.repeat(64),
           pubkey: 'b'.repeat(64),
@@ -2131,6 +2356,60 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           rejectedWith(code, rejected);
           check(`a refresh, rejected with ${code}`, rejected);
           hook.destroy();
+        }
+
+        // **And what this library decides does not read what a published
+        // value reaches.** A published Error reaches its class, which is
+        // sealed, and past it the platform's `Error`, which is not this
+        // library's to seal: one `Symbol.hasInstance` there made the refused
+        // cache key — which names the relay a refusal is about — miss it, and
+        // two requests whose names differ only past the message's bound then
+        // shared one entry. Measured; the brand the key reads now is a set
+        // nothing reachable can answer for.
+        const refusal = (held[0]?.[1].value.state as { error?: Error } | undefined)?.error;
+        expect(refusal, 'the premise: a published refusal to reach from').toBeInstanceOf(
+          RelayNotInScopeError
+        );
+        const platform = Object.getPrototypeOf(refusal?.constructor) as object;
+        expect(platform, 'the premise: past the class, the platform’s Error').toBe(Error);
+        expect(
+          () =>
+            Object.defineProperty(refusal?.constructor as object, Symbol.hasInstance, {
+              value: () => false
+            }),
+          'the class itself refuses'
+        ).toThrow(TypeError);
+        Object.defineProperty(platform, Symbol.hasInstance, {
+          value: () => false,
+          configurable: true
+        });
+        try {
+          expect(
+            refusal instanceof RelayNotInScopeError,
+            'the premise: `instanceof` now answers what a consumer wrote'
+          ).toBe(false);
+          const stem = `wss://b.example/${'x'.repeat(250)}`;
+          const named = ['one', 'two'].map((end) =>
+            mount(() =>
+              useStreamedReq(() => ({
+                namespace: 'pb13-hasinstance',
+                filters: [{ kinds: [1] }],
+                relays: [`${stem}/${end}`],
+                reqIdBase: `pb13-hasinstance-${end}`,
+                settleTimeoutMs: 300
+              }))
+            )
+          );
+          await settle(150);
+          expect(
+            named.map(
+              (one) => (one.value.state as { error?: { url?: string } }).error?.url?.slice(-4) ?? ''
+            ),
+            'each request keeps its own refusal'
+          ).toEqual(['/one', '/two']);
+          for (const one of named) one.destroy();
+        } finally {
+          Reflect.deleteProperty(platform, Symbol.hasInstance);
         }
         provider.destroy();
       }
@@ -2329,6 +2608,45 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
 
       // At compile time: every member of every published type but the event
       // refuses a write, but the stated exception.
+      // **The words the replaced designs were described in**, read for across
+      // the library and its arms: a comment that still says them describes a
+      // design that is gone, and two rounds of review found one each time.
+      // Spelled in pieces here, so this file does not match itself.
+      const retired = [
+        ['standard ', 'method slot'],
+        ['Hook', 'Image'],
+        ['`call`, `apply` and ', '`bind` stay'],
+        ['callable ', 'with nothing'],
+        ['Readonly', 'List<'],
+        ['write', 'Everything(']
+      ].map((parts) => parts.join(''));
+      const sources = ['lib/v1', 'tests/contracts'].flatMap((under) =>
+        (readdirSync(resolve(LIBRARY, '../..', under), { recursive: true }) as string[])
+          .filter((file) => /\.(ts|svelte)$/.test(file))
+          .map((file) => join(resolve(LIBRARY, '../..', under), file))
+      );
+      expect(
+        sources.flatMap((file) =>
+          retired
+            .filter((phrase) => readFileSync(file, 'utf8').includes(phrase))
+            .map((phrase) => `${file}: ${phrase}`)
+        ),
+        'a comment describing a replaced design'
+      ).toEqual([]);
+
+      // **The interfaces the discipline is told about, against the types**:
+      // `useReq()`'s handle is `ReqHandle` member for member, the engine's is
+      // that and its two seams, and `useRelayDiagnostics()` answers its type.
+      const named = (spec: LiveInterface): string[] => [...spec.getters, ...spec.commands].sort();
+      expect(named(REQ_HANDLE), 'useReq()’s handle is `ReqHandle`').toEqual(
+        memberNamesOf(PUBLISHED, 'Published.ReqHandle').sort()
+      );
+      expect(named(ENGINE_HANDLE), 'the engine’s handle is that and its two seams').toEqual(
+        [...named(REQ_HANDLE), 'raw', 'projected'].sort()
+      );
+      expect(named(RELAY_DIAGNOSTICS), 'useRelayDiagnostics() answers its type').toEqual(
+        memberNamesOf(PUBLISHED, 'ReturnType<typeof Published.useRelayDiagnostics>').sort()
+      );
       const typed = publishedTypeBreaches();
       expect(typed.shapes.length, 'the published shapes, counted').toBeGreaterThan(25);
       expect(typed.breaches, 'a write a published type lets through').toEqual([]);
@@ -2351,7 +2669,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'void value.open!.set!.call;',
         'value.chain!.next = value.chain!.next!;'
       ];
-      const lines = writesThrough(declarations, mutable, { callables: 'api' });
+      const commands = { callables: 'api', commands: ['refresh', 'send'] } as const;
+      const lines = writesThrough(declarations, mutable, commands);
       expect(lines, 'the probe’s controls, each asked for by name').toEqual(
         expect.arrayContaining(asked)
       );
@@ -2364,15 +2683,18 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'a read-only collection’s operations are admitted'
       ).toEqual([]);
 
-      // **And for what this round added.** A method is one signature callable
-      // with nothing, or it is reported; a function's own members are walked
-      // and its `call` is written to; a collection's payload is reported rather
-      // than passed over; an index signature is written under a key no member
-      // has; and the exception is a read-only list's or a function's standard
-      // slot, never a mutable list's.
+      // **And for each branch the walk grew.** A command is one signature, or
+      // it is reported, and a required argument is handed `never`; it returns
+      // a promise and nothing more, or it is reported; a function anywhere a
+      // command is not named is data's; a function's own members are walked
+      // and its standard ones written to; a collection's payload and a list
+      // that is not an array are reported rather than passed over; an index
+      // signature is written under a key no member has; every prop that can be
+      // called hands its arguments out; and the exception is a standard
+      // member's slot, never a mutable list's.
       const throwsOn = (typeText: string): string => {
         try {
-          writesThrough(declarations, typeText, { callables: 'api' });
+          writesThrough(declarations, typeText, commands);
         } catch (thrown) {
           return (thrown as Error).message;
         }
@@ -2383,9 +2705,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'the probe’s control: an overloaded method'
       ).toMatch(/cannot call/);
       expect(
-        writesThrough(declarations, '{ send(input: string): Promise<{ n: number }> }', {
-          callables: 'api'
-        }),
+        writesThrough(declarations, '{ send(input: string): Promise<{ n: number }> }', commands),
         'the probe’s control: a function with a required argument is walked, handed `never`'
       ).toContain(
         'for (const __result1 of [await value.send!(null as never)]) __result1.n = __result1.n!;'
@@ -2394,12 +2714,32 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         throwsOn('{ seen: ReadonlyMap<string, { n: number }> }'),
         'the probe’s control: a collection’s payload'
       ).toMatch(/payload the probe does not walk/);
+      expect(
+        throwsOn(
+          '{ list: { readonly [K in keyof ReadonlyArray<string>]: ReadonlyArray<string>[K] } }'
+        ),
+        'the probe’s control: a list that is not an array'
+      ).toMatch(/indexed by number and is not an array/);
+      expect(
+        throwsOn('{ refresh(): Promise<number> & { readonly progress: number[] } }'),
+        'the probe’s control: a command whose promise carries members'
+      ).toMatch(/returns a promise with members of its own: progress/);
+      expect(
+        writesThrough(declarations, '{ refusal: { retry(): Promise<void> } }', commands),
+        'the probe’s control: a function on a snapshot is data’s, not a command'
+      ).toContain('void value.refusal!.retry!.call;');
+      expect(
+        snippetArgumentsOf("import type { Snippet } from 'svelte';", [
+          '{ onsettled?: (settled: { readonly n: number }) => void; children: Snippet<[{ readonly s: string }]> }'
+        ]),
+        'the probe’s control: a callback prop is handed its arguments too'
+      ).toHaveLength(2);
       // A method this repository declares, with a member of its own; and two
       // lists of different types, since a type is walked where it is first met.
       const withMethod = 'export {};\ninterface Refresh { (): Promise<number>; cell: string[] }';
       const shaped =
         '{ refresh: Refresh; list: number[]; frozen: readonly string[]; named: { __key: string; [key: string]: string } }';
-      const shapedLines = writesThrough(withMethod, shaped, { callables: 'api' });
+      const shapedLines = writesThrough(withMethod, shaped, commands);
       const own = [
         'value.refresh!.cell = value.refresh!.cell!;',
         'value.refresh!.call = value.refresh!.call!;',
@@ -2436,49 +2776,53 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // consumer's `$state.snapshot`, a non-empty tuple, and an `instanceof`
       // narrowing, compiled against the published types.
       const entry = "import type * as Published from '$lib/v1/index.js';";
-      // **Every list the entry publishes, each where it is published** — a
-      // check at one site holds that site, and a list type changed at another
-      // left it green. Each is snapshotted and mapped; each `causes` is taken
-      // as the non-empty tuple; and a narrowing by `instanceof` keeps them
-      // read-only.
-      const lists: [string, string][] = [
-        ["Extract<Published.ReqState, { status: 'streaming' }>", 'events'],
-        ["Extract<Published.ReqState, { status: 'settled' }>", 'events'],
-        ["Extract<Published.ReqState, { status: 'incomplete' }>", 'events'],
-        ["Extract<Published.ReqState, { status: 'error' }>", 'events'],
-        ["Extract<Published.ReqState, { status: 'incomplete' }>", 'causes'],
-        ["Extract<Published.RefreshOutcome, { kind: 'incomplete' }>", 'causes'],
-        ["Extract<Published.Completion, { kind: 'incomplete' }>", 'causes'],
-        ['InstanceType<typeof Published.IncompleteResultError>', 'incompleteCauses'],
-        ['Published.ReqDiagnostics', 'refusals'],
-        ['Published.RelayDiagnostic', 'configuredUrls'],
-        ["Extract<Published.SendResult, { status: 'settled' }>", 'relays'],
-        ['InstanceType<typeof Published.RelayConfigurationError>', 'urls'],
-        ['Published.ReqEvent', 'tags']
-      ];
-      const tuples = new Set(['causes', 'incompleteCauses']);
+      // **Every list the entry publishes, each where it is published** — read
+      // off the walk rather than written down: a list of sites somebody wrote
+      // held those sites, and a list type changed at another left it green.
+      // Each is snapshotted and mapped; each tuple the walk meets is taken as
+      // a non-empty one; and each, narrowed by `instanceof`, is still refused
+      // as a writable list — the one diagnostic expected, once a site.
+      const sites = typed.lists.flatMap((each, at) => each.map((site) => ({ ...site, root: at })));
+      expect(sites.length, 'the premise: the lists the walk met').toBeGreaterThan(20);
+      expect(
+        sites.filter((site) => site.tuple).length,
+        'the premise: the non-empty lists among them'
+      ).toBeGreaterThan(3);
+      const said = consumerDiagnostics(
+        [
+          PUBLISHED,
+          ...typed.shapes.map((shape, at) => `export declare const value_${at}: ${shape};`),
+          ...sites.flatMap((site, at) => [
+            `${site.guard}{ const snapshot${at} = $state.snapshot(${site.expression}).map((one: unknown) => one); void snapshot${at}; }`,
+            ...(site.tuple
+              ? [
+                  `${site.guard}{ const tuple${at}: readonly [unknown, ...unknown[]] = ${site.expression}; void tuple${at}; }`
+                ]
+              : []),
+            `${site.guard}if (${site.expression} instanceof Array) { const kept${at}: readonly unknown[] = ${site.expression}; void kept${at}; const lost${at}: unknown[] = ${site.expression}; void lost${at}; }`
+          ])
+        ].join('\n')
+      );
+      expect(
+        said.filter((one) => one.code !== 4104),
+        'a consumer’s snapshot, tuple and narrowing, on every list'
+      ).toEqual([]);
+      expect(said.length, 'and every narrowed list is still not a writable one').toBe(sites.length);
+      // The tuple's and the narrowing's controls: a list that is not a tuple
+      // is refused as one, and a writable list narrowed is assigned freely —
+      // so the diagnostics above are the published types answering.
       expect(
         consumerDiagnostics(
           [
-            entry,
-            ...lists.flatMap(([holder, list], at) => [
-              `declare const held${at}: ${holder};`,
-              `export const mapped${at} = $state.snapshot(held${at}).${list}.map((one) => one);`,
-              ...(tuples.has(list)
-                ? [
-                    `export const tuple${at}: readonly [Published.IncompleteCause, ...Published.IncompleteCause[]] = held${at}.${list};`,
-                    `export const head${at}: Published.IncompleteCause = held${at}.${list}[0];`
-                  ]
-                : []),
-              `if (held${at}.${list} instanceof Array) {`,
-              '  // @ts-expect-error -- still read-only after the narrowing',
-              `  held${at}.${list}.length = 0;`,
-              '}'
-            ])
+            'export {};',
+            'declare const list: readonly string[];',
+            'declare const writable: string[];',
+            'export const tuple: readonly [unknown, ...unknown[]] = list;',
+            'if (writable instanceof Array) { const lost: unknown[] = writable; void lost; }'
           ].join('\n')
-        ),
-        'a consumer’s snapshot, tuple and narrowing'
-      ).toEqual([]);
+        ).map((one) => one.code),
+        'the tuple’s and the narrowing’s controls'
+      ).toEqual([2322]);
       // Its control: the list type this row gave up, under the same snapshot —
       // so a clean compile above is the arrays, and not a check that reads
       // nothing.
@@ -2488,8 +2832,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
             // The same import, which is what declares `$state` to a `.ts` file.
             entry,
             'export type Held = Published.ReqState;',
-            'type ReadonlyList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };',
-            'declare const settled: { readonly events: ReadonlyList<{ readonly id: string }> };',
+            'type MappedList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };',
+            'declare const settled: { readonly events: MappedList<{ readonly id: string }> };',
             'export const ids = $state.snapshot(settled).events.map((event: { readonly id: string }) => event.id);'
           ].join('\n')
         ).map((one) => one.code),

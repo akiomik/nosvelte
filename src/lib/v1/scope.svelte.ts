@@ -210,6 +210,30 @@ export type RelayConfigurationErrorCode =
  * value. What that costs is stated rather than hidden: the most common
  * misconfiguration is the one whose `urls` is empty.
  */
+/**
+ * **The library's own decisions ask a brand, not `instanceof`.** `instanceof`
+ * answers what the class's `Symbol.hasInstance` says, and every class here
+ * inherits that from the platform's `Error` — which a consumer reaches from any
+ * published Error as `Object.getPrototypeOf(error.constructor)`. One
+ * `Object.defineProperty(Error, Symbol.hasInstance, …)` from a published value
+ * made `relayOf` miss a `RelayNotInScopeError`, and two unrelated requests then
+ * shared one refused entry, the second reading the first's `url` — measured
+ * after `sealClass` had closed this library's own classes; the provider asks
+ * the same question of its own refusals here. Membership of a
+ * module-private `WeakSet`, filled by the constructor, is a question nothing
+ * reachable from a published value can answer.
+ */
+const RELAY_CONFIGURATION_REFUSALS = new WeakSet<object>();
+const TRANSPORT_INCOMPATIBLE = new WeakSet<object>();
+
+/** Whether `value` was made by {@link RelayConfigurationError}'s constructor, or a subclass's. */
+export const isRelayConfigurationError = (value: unknown): value is RelayConfigurationError =>
+  typeof value === 'object' && value !== null && RELAY_CONFIGURATION_REFUSALS.has(value);
+
+/** Whether `value` was made by {@link TransportIncompatibleError}'s constructor. */
+export const isTransportIncompatible = (value: unknown): value is TransportIncompatibleError =>
+  typeof value === 'object' && value !== null && TRANSPORT_INCOMPATIBLE.has(value);
+
 export class RelayConfigurationError extends Error {
   /**
    * The three members `Error` gives this class, re-declared as `readonly`.
@@ -242,6 +266,7 @@ export class RelayConfigurationError extends Error {
     super(message);
     (this as { name: string }).name = 'RelayConfigurationError';
     hardenOwned(this);
+    RELAY_CONFIGURATION_REFUSALS.add(this);
     this.code = code;
     // **Copied and frozen, and the copy is not decoration.** The array handed
     // in is the scope's own list at several `throw` sites, and this Error is
@@ -721,6 +746,7 @@ export class TransportIncompatibleError extends RelayConfigurationError {
     this.asked = Object.freeze([...asked]);
     this.how = how;
     this.earlier = earlier === undefined ? undefined : describeValue(earlier);
+    TRANSPORT_INCOMPATIBLE.add(this);
     if (new.target === TransportIncompatibleError) Object.freeze(this);
   }
 }
@@ -1633,7 +1659,7 @@ export function resolveTargets(
       try {
         resolution = resolveRelayName(scope, raw);
       } catch (thrown) {
-        if (thrown instanceof TransportIncompatibleError) {
+        if (isTransportIncompatible(thrown)) {
           throw ownedByLibrary(new RequestTransportIncompatibleError(unnameableRelay(raw, thrown)));
         }
         throw ownedByLibrary(

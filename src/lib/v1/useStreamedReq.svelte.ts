@@ -43,7 +43,7 @@ import { InvalidDescriptorError, normalizeDescriptor, relayMessage } from './nor
 import { capture, providerDisposed, safely, terminalFailure } from './own.js';
 import { ownedByLibrary, sealInterface } from './owned.js';
 import type { ReqStateError } from './reqerror.js';
-import { RelayNotInScopeError } from './reqerror.js';
+import { isRelayNotInScope } from './reqerror.js';
 import type { ResumeHints } from './resume.svelte.js';
 import type { RelayScope } from './scope.svelte.js';
 import { resolveTargets, scopeGenerationOf } from './scope.svelte.js';
@@ -796,7 +796,7 @@ const RECOVERY_BACKOFF_SECONDS = [2, 5, 15, 60, 300] as const;
 
 /** The relay a refusal names, if it is one of this library's that names one. */
 const relayOf = (rejection: unknown): string | undefined => {
-  if (!(rejection instanceof RelayNotInScopeError)) return undefined;
+  if (!isRelayNotInScope(rejection)) return undefined;
   return rejection.url;
 };
 

@@ -114,10 +114,17 @@ export function sealOwned<T extends object>(value: T): T {
  * refuses the redefinition — and on that host it was never writable to begin
  * with. **No branch is written for "the close failed"**: on the resolved runtime
  * `defineProperty` cannot fail here — the own `stack` V8 installs is
- * configurable, and nothing runs between the base constructor and this call — so
- * such a branch would have no entrance, and this repository deletes branches
- * that have none. `WR28` reads the **effect** instead, over every class and
- * under both hostile globals.
+ * configurable, and nothing of this library's runs between the base
+ * constructor and this call — so such a branch would have no entrance, and this
+ * repository deletes branches that have none. `WR28` reads the **effect**
+ * instead, over every class and under both hostile globals.
+ *
+ * **One thing that is not this library's does run here**: reading `stack` runs
+ * whatever `Error.prepareStackTrace` holds, and a formatter that hangs an open
+ * object on the Error it formats puts it on a value this library then
+ * publishes. That is a consumer rewriting what the platform does for every
+ * Error — `B5-C8` puts it with the platform's objects, outside — rather than a
+ * write through a published value.
  */
 function closeStack(value: object): void {
   let held: unknown;
@@ -165,6 +172,10 @@ export function sealInterface<T extends object>(value: T): T {
   for (const key of Reflect.ownKeys(value)) {
     const member = Reflect.getOwnPropertyDescriptor(value, key);
     if (member?.get !== undefined) Object.freeze(member.get);
+    // No interface and no class of this library has a setter today; a helper
+    // that `sealClass` promises closes every accessor's function would be the
+    // defect it exists for the day one gains one.
+    if (member?.set !== undefined) Object.freeze(member.set);
     if (typeof member?.value === 'function') Object.freeze(member.value);
   }
   return Object.freeze(value);
