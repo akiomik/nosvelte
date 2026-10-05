@@ -264,7 +264,9 @@ function beforeTheCheck(eventset: string, event: string): string[] {
     }
     if (!statement.modifiers?.some((one) => one.kind === ts.SyntaxKind.ExportKeyword))
       breaches.push(`${name} is not exported`);
-    const initializer = statement.declarationList.declarations[0]?.initializer;
+    const initializer = statement.declarationList.declarations.find(
+      (one) => ts.isIdentifier(one.name) && one.name.text === name
+    )?.initializer;
     if (
       initializer === undefined ||
       !(ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))
@@ -895,13 +897,18 @@ describe('the event a consumer holds is this library’s own', () => {
         }
       };
       type Outcome = 'stored alongside' | 'replaces the incumbent' | 'unchanged' | 'flagged';
+      // What the set held, read off its own properties — a value on its
+      // prototype reads the same through `set[key]`, so a field moved there
+      // would pass for one kept — and its prototype, and its map's entries.
       type Snapshot = {
-        fields: readonly (readonly [PropertyKey, unknown])[];
+        prototype: unknown;
+        fields: readonly (readonly [PropertyKey, PropertyDescriptor | undefined])[];
         entries: readonly (readonly [string, unknown])[];
       };
       const snapshot = (set: CachedEventSet): Snapshot => ({
+        prototype: Object.getPrototypeOf(set),
         fields: Reflect.ownKeys(set).map(
-          (key) => [key, (set as unknown as Record<PropertyKey, unknown>)[key]] as const
+          (key) => [key, Object.getOwnPropertyDescriptor(set, key)] as const
         ),
         entries: [...set.entries]
       });
@@ -923,12 +930,20 @@ describe('the event a consumer holds is this library’s own', () => {
         // The input as it was: the same fields, each the same value — the
         // flag a fold sets on the set it returns included — and its map
         // holding what it held.
-        const fields = Reflect.ownKeys(before);
+        const now = snapshot(before);
         const intact =
-          fields.length === held.fields.length &&
-          held.fields.every(
-            ([key, value]) => (before as unknown as Record<PropertyKey, unknown>)[key] === value
-          ) &&
+          now.prototype === held.prototype &&
+          now.fields.length === held.fields.length &&
+          held.fields.every(([key, was]) => {
+            const is = now.fields.find(([one]) => one === key)?.[1];
+            return (
+              is !== undefined &&
+              was !== undefined &&
+              'value' in is &&
+              'value' in was &&
+              is.value === was.value
+            );
+          }) &&
           before.entries.size === held.entries.length &&
           keeps(before.entries);
         if (outcome === 'unchanged') return intact && after === before;
@@ -1087,14 +1102,47 @@ describe('the event a consumer holds is this library’s own', () => {
           `${path}: a packet the boundary did not make, taken by the fold`
         ).toEqual([]);
       }
-      // The snapshot's control: a fold that wrote a field of the set it was
-      // handed, and handed that same set back, is not "unchanged".
-      const handed = { ...emptyEventSet };
-      const handedBefore = snapshot(handed);
-      (handed as { ephemeralOmitted?: boolean }).ephemeralOmitted = true;
+      // The snapshot's controls: a fold that changed the set it was handed,
+      // and handed that same set back, is not "unchanged" — whether it added
+      // a field, replaced one's value, or replaced the prototype.
+      const changes: Record<string, (set: Record<string, unknown>) => void> = {
+        'a field written in place': (set) => {
+          set['ephemeralOmitted'] = true;
+        },
+        'a field’s value replaced in place': (set) => {
+          set['backlog'] = {};
+        },
+        'the prototype replaced': (set) => {
+          Object.setPrototypeOf(set, { ephemeralOmitted: true });
+        }
+      };
+      for (const [what, change] of Object.entries(changes)) {
+        const handed = { ...emptyEventSet };
+        const handedBefore = snapshot(handed);
+        change(handed as unknown as Record<string, unknown>);
+        expect(
+          shows('unchanged', handedBefore, handed, handed, ownedPacket, undefined),
+          `the snapshot’s control: ${what}`
+        ).toBe(false);
+      }
+      // And one moved to the prototype, with a key in its place: every read
+      // through the set answers as before, and the set is not as it was.
+      const moved = { ...emptyEventSet } as unknown as Record<string, unknown>;
+      const movedBefore = snapshot(moved as unknown as CachedEventSet);
+      const { failure } = moved;
+      delete moved['failure'];
+      Object.setPrototypeOf(moved, { failure });
+      moved['placeholder'] = undefined;
       expect(
-        shows('unchanged', handedBefore, handed, handed, ownedPacket, undefined),
-        'the snapshot’s control: a field written in place'
+        shows(
+          'unchanged',
+          movedBefore,
+          moved as unknown as CachedEventSet,
+          moved as unknown as CachedEventSet,
+          ownedPacket,
+          undefined
+        ),
+        'the snapshot’s control: a field moved to the prototype'
       ).toBe(false);
 
       // **And the check comes first**: nothing in the fold runs before it, so
@@ -1131,6 +1179,19 @@ describe('the event a consumer holds is this library’s own', () => {
         ],
         'a redeclared isOwnedPacket': [
           `${eventset}\nconst isOwnedPacket = (packet: unknown): boolean => packet !== undefined;\n`,
+          event
+        ],
+        'a safe decoy declared ahead of the fold': [
+          eventset.replace(
+            opening,
+            [
+              'export const decoy = (set: CachedEventSet, packet: OwnedPacket): CachedEventSet => {',
+              "  if (!isOwnedPacket(packet)) throw new TypeError('decoy');",
+              '  return set;',
+              '}, foldEvent = (set: CachedEventSet, packet: OwnedPacket): CachedEventSet => {',
+              '  void set;'
+            ].join('\n')
+          ),
           event
         ],
         'the fold as a function declaration': [
