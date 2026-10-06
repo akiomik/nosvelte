@@ -82,7 +82,6 @@ import { useStreamedReq, type UseStreamedReqOpts } from '$lib/v1/useStreamedReq.
 import Outlets from './fixtures/Outlets.svelte';
 import {
   consumerDiagnostics,
-  declaredHere,
   exportsOf,
   judgeWrites,
   judgeWritesEach,
@@ -367,6 +366,8 @@ const POPULATION = [
   'a refresh, not started because the plan is deferred',
   'a live request whose leg ended',
   'an Error, invalid-descriptor',
+  'an Error, invalid-descriptor, refused before the boundary',
+  'a refresh, rejected with invalid-descriptor, refused before the boundary',
   'an Error, descriptor-unreadable',
   'an Error, accumulator-contract',
   'an Error, accumulator-contract, from a relay’s failure',
@@ -1019,10 +1020,6 @@ function publishedTypeBreaches(): {
   // it holds nothing of this library's; at run time the class is sealed, and
   // the discipline reads it through every instance's chain.
   for (const one of exported.filter((each) => each.kind === 'class')) {
-    expect(
-      declaredHere(PUBLISHED, `typeof Published.${one.name}`),
-      `${one.name}'s static side declares nothing of this library's`
-    ).toEqual([]);
     // **And what it does hold, pinned**: the platform's — `ErrorConstructor`'s
     // members, as the default library and the host's typings declare them,
     // and the `prototype` TypeScript gives every class. Each type-checks as
@@ -1039,11 +1036,6 @@ function publishedTypeBreaches(): {
       'stackTraceLimit'
     ]);
   }
-  // Its control: a class that declares a static of its own is found to.
-  expect(
-    declaredHere('export {};\nclass Registry { static registry = 1; }', 'typeof Registry'),
-    'the static side’s control'
-  ).toEqual(['registry']);
   const shapes = [
     ...exported
       .filter((one) => one.kind !== 'value' && NOT_GIVEN_OUT[one.name] === undefined)
@@ -2033,8 +2025,18 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
             throw new Error('a consumer’s getter threw');
           }
         };
-        const arranged: [string, () => UseStreamedReqOpts][] = [
+        // **Two doors for `invalid-descriptor`**: a published field the
+        // boundary refuses, whose Error `capture` freezes on its way to the
+        // channel, and a value refused before the boundary — a `deferred` that
+        // is not a boolean, at the engine's seam — which the class's own
+        // freeze is all that closes.
+        const arranged: [string, () => UseStreamedReqOpts, string?][] = [
           ['invalid-descriptor', options('pb13-invalid', rxNostr, { settleTimeoutMs: -1 })],
+          [
+            'invalid-descriptor',
+            options('pb13-invalid-seam', rxNostr, { deferred: 'yes' as unknown as boolean }),
+            ', refused before the boundary'
+          ],
           ['descriptor-unreadable', options('pb13-unreadable', rxNostr, { filters: [unreadable] })],
           [
             'accumulator-contract',
@@ -2050,16 +2052,16 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           ]
         ];
         const held = arranged.map(
-          ([code, given]) => [code, mount(() => useStreamedReq(given))] as const
+          ([code, given, door = '']) => [code, mount(() => useStreamedReq(given)), door] as const
         );
         await settle(150);
-        for (const [code, hook] of held) {
+        for (const [code, hook, door] of held) {
           reached(code, (hook.value.state as { error?: unknown }).error);
-          check(`an Error, ${code}`, hook.value, engine(hook.value));
+          check(`an Error, ${code}${door}`, hook.value, engine(hook.value));
           if (code !== 'accumulator-contract') {
             const rejected = await rejectionOf(hook.value.refresh());
             rejectedWith(code, rejected);
-            check(`a refresh, rejected with ${code}`, rejected);
+            check(`a refresh, rejected with ${code}${door}`, rejected);
           }
           hook.destroy();
         }
@@ -2731,10 +2733,10 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       ).toContain('void value.refusal!.retry!.call;');
       expect(
         snippetArgumentsOf("import type { Snippet } from 'svelte';", [
-          '{ onsettled?: (settled: { readonly n: number }) => void; children: Snippet<[{ readonly s: string }]> }'
+          '{ onsettled?: (settled: { readonly n: number }, also: { readonly m: number }) => void; children: Snippet<[{ readonly s: string }, { readonly t: string }]> }'
         ]),
-        'the probe’s control: a callback prop is handed its arguments too'
-      ).toHaveLength(2);
+        'the probe’s control: a callback prop and a snippet, each handed two arguments'
+      ).toHaveLength(4);
       // A method this repository declares, with a member of its own; and two
       // lists of different types, since a type is walked where it is first met.
       const withMethod = 'export {};\ninterface Refresh { (): Promise<number>; cell: string[] }';

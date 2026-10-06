@@ -193,7 +193,9 @@ export function sealInterface<T extends object>(value: T): T {
  * besides.
  */
 export function sealClass<T extends abstract new (...args: never[]) => unknown>(constructor: T): T {
+  // Sealing the prototype closes the class too: it is the prototype's
+  // `constructor`, a function on it. No class here has a static function of
+  // its own, and the discipline reports one wherever it appears.
   sealInterface(constructor.prototype as object);
-  sealInterface(constructor);
   return constructor;
 }

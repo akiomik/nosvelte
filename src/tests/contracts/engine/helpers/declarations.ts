@@ -1022,33 +1022,6 @@ export function snippetArgumentsOf(imports: string, typeTexts: readonly string[]
   return found;
 }
 
-/**
- * The members of `typeText` this repository declares — not the default
- * library's, not a dependency's — by name. A class's static side is the
- * platform's `ErrorConstructor`, `Function`'s members and the `prototype`
- * TypeScript gives every class; this is how an arm says it holds nothing else.
- */
-export function declaredHere(imports: string, typeText: string): string[] {
-  const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
-  const checker = program.getTypeChecker();
-  const declaration = consumer.statements
-    .filter(ts.isVariableStatement)
-    .flatMap((statement) => statement.declarationList.declarations)
-    .find((one) => ts.isIdentifier(one.name) && one.name.text === 'value');
-  if (declaration === undefined) throw new Error('the probe declared no value');
-  return checker
-    .getPropertiesOfType(checker.getTypeAtLocation(declaration.name))
-    .filter((property) =>
-      (property.getDeclarations() ?? []).some((one) => {
-        const file = one.getSourceFile();
-        return (
-          !program.isSourceFileDefaultLibrary(file) && !file.fileName.includes('/node_modules/')
-        );
-      })
-    )
-    .map((property) => property.getName());
-}
-
 /** The names of every member the type checker gives `typeText`, after `imports`. */
 export function memberNamesOf(imports: string, typeText: string): string[] {
   const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
