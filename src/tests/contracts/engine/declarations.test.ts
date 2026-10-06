@@ -29,6 +29,11 @@ function heldModule(): { file: string; asked: string; done: () => void } {
 
 const codesOf = (source: string): number[] => consumerDiagnostics(source).map((one) => one.code);
 const ALONE = 'export const alone: number = 1;\n';
+/**
+ * A window of questions is dozens of programs: well under a second each here,
+ * and slower on a CI runner, so these do not run under the default 5 s.
+ */
+const WINDOW_TIME = 60_000;
 /** A full window of questions that import nothing: what is held after it is `ALONE`'s files alone. */
 const settle = (): number => {
   for (let at = 0; at < HELD_FOR; at += 1) consumerDiagnostics(ALONE);
@@ -36,74 +41,90 @@ const settle = (): number => {
 };
 
 describe('the probe’s parsed files', () => {
-  it('a second question parses no project file again, and holds no question', () => {
-    consumerDiagnostics(ALONE);
-    const first = probeParses();
-    expect(first.held, 'the premise: the project’s files are held').toBeGreaterThan(100);
-    consumerDiagnostics('export const other: string = "other";\n');
-    expect(probeParses(), 'another question: nothing parsed, nothing more held').toEqual(first);
-    // And for longer than the window: a file every question reads stays held.
-    for (let at = 0; at < 2 * HELD_FOR; at += 1) consumerDiagnostics(ALONE);
-    expect(probeParses(), 'two windows of questions later: still nothing parsed again').toEqual(
-      first
-    );
-  });
-
-  it('a file whose text changed is parsed again, under the very same timestamp', () => {
-    const held = heldModule();
-    try {
-      writeFileSync(held.file, 'export type Held = number;\n');
-      // A whole second, so the time is exactly what was set on any filesystem.
-      const at = new Date(Math.floor(Date.now() / 1000) * 1000);
-      utimesSync(held.file, at, at);
-      const stamped = statSync(held.file, { bigint: true }).mtimeNs;
-      expect(codesOf(held.asked), 'the premise: the file as first written').toEqual([]);
-      writeFileSync(held.file, 'export type Held = string;\n');
-      utimesSync(held.file, at, at);
-      expect(
-        statSync(held.file, { bigint: true }).mtimeNs,
-        'the premise: the edit carries the first write’s timestamp, to the nanosecond'
-      ).toBe(stamped);
-      expect(codesOf(held.asked), 'the file as edited, parsed again').toEqual([2322]);
-    } finally {
-      held.done();
-    }
-  });
-
-  it('a held file that can no longer be read is let go, and read again once it can', () => {
-    const held = heldModule();
-    const read = probeReader.read;
-    try {
-      writeFileSync(held.file, 'export type Held = number;\n');
-      const without = settle();
-      expect(codesOf(held.asked), 'the premise: the file read').toEqual([]);
-      expect(probeParses().held, 'the premise: and held').toBe(without + 1);
-      // A read that fails for every user, root included, which a file mode
-      // does not give.
-      probeReader.read = (name) => (name === held.file ? undefined : read(name));
-      expect(codesOf(held.asked), 'unreadable, it is not found').toEqual([2307]);
-      expect(probeParses().held, 'and no longer held').toBe(without);
-      probeReader.read = read;
-      expect(codesOf(held.asked), 'readable again, it is read').toEqual([]);
-    } finally {
-      probeReader.read = read;
-      held.done();
-    }
-  });
-
-  it('a file no recent question asked for is let go', () => {
-    const held = heldModule();
-    try {
-      writeFileSync(held.file, 'export type Held = number;\n');
-      const without = settle();
-      expect(codesOf(held.asked), 'the premise: the file read').toEqual([]);
-      expect(probeParses().held, 'the premise: and held').toBe(without + 1);
-      for (let at = 1; at < HELD_FOR; at += 1) consumerDiagnostics(ALONE);
-      expect(probeParses().held, 'held while a recent question read it').toBe(without + 1);
+  it(
+    'a second question parses no project file again, and holds no question',
+    () => {
       consumerDiagnostics(ALONE);
-      expect(probeParses().held, 'let go once none of the last questions did').toBe(without);
-    } finally {
-      held.done();
-    }
-  });
+      const first = probeParses();
+      expect(first.held, 'the premise: the project’s files are held').toBeGreaterThan(100);
+      consumerDiagnostics('export const other: string = "other";\n');
+      expect(probeParses(), 'another question: nothing parsed, nothing more held').toEqual(first);
+      // And for longer than the window: a file every question reads stays held.
+      for (let at = 0; at < 2 * HELD_FOR; at += 1) consumerDiagnostics(ALONE);
+      expect(probeParses(), 'two windows of questions later: still nothing parsed again').toEqual(
+        first
+      );
+    },
+    WINDOW_TIME
+  );
+
+  it(
+    'a file whose text changed is parsed again, under the very same timestamp',
+    () => {
+      const held = heldModule();
+      try {
+        writeFileSync(held.file, 'export type Held = number;\n');
+        // A whole second, so the time is exactly what was set on any filesystem.
+        const at = new Date(Math.floor(Date.now() / 1000) * 1000);
+        utimesSync(held.file, at, at);
+        const stamped = statSync(held.file, { bigint: true }).mtimeNs;
+        expect(codesOf(held.asked), 'the premise: the file as first written').toEqual([]);
+        writeFileSync(held.file, 'export type Held = string;\n');
+        utimesSync(held.file, at, at);
+        expect(
+          statSync(held.file, { bigint: true }).mtimeNs,
+          'the premise: the edit carries the first write’s timestamp, to the nanosecond'
+        ).toBe(stamped);
+        expect(codesOf(held.asked), 'the file as edited, parsed again').toEqual([2322]);
+      } finally {
+        held.done();
+      }
+    },
+    WINDOW_TIME
+  );
+
+  it(
+    'a held file that can no longer be read is let go, and read again once it can',
+    () => {
+      const held = heldModule();
+      const read = probeReader.read;
+      try {
+        writeFileSync(held.file, 'export type Held = number;\n');
+        const without = settle();
+        expect(codesOf(held.asked), 'the premise: the file read').toEqual([]);
+        expect(probeParses().held, 'the premise: and held').toBe(without + 1);
+        // A read that fails for every user, root included, which a file mode
+        // does not give.
+        probeReader.read = (name) => (name === held.file ? undefined : read(name));
+        expect(codesOf(held.asked), 'unreadable, it is not found').toEqual([2307]);
+        expect(probeParses().held, 'and no longer held').toBe(without);
+        probeReader.read = read;
+        expect(codesOf(held.asked), 'readable again, it is read').toEqual([]);
+      } finally {
+        probeReader.read = read;
+        held.done();
+      }
+    },
+    WINDOW_TIME
+  );
+
+  it(
+    'a file no recent question asked for is let go',
+    () => {
+      const held = heldModule();
+      try {
+        writeFileSync(held.file, 'export type Held = number;\n');
+        const without = settle();
+        expect(codesOf(held.asked), 'the premise: the file read').toEqual([]);
+        expect(probeParses().held, 'the premise: and held').toBe(without + 1);
+        for (let at = 1; at < HELD_FOR; at += 1) consumerDiagnostics(ALONE);
+        expect(probeParses().held, 'held while a recent question read it').toBe(without + 1);
+        consumerDiagnostics(ALONE);
+        expect(probeParses().held, 'let go once none of the last questions did').toBe(without);
+      } finally {
+        held.done();
+      }
+    },
+    WINDOW_TIME
+  );
 });
