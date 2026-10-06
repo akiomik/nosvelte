@@ -3478,6 +3478,14 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
             `<script module lang="ts">\n  import type { EventListProps } from './outlets.js';\n</script>\n<script lang="ts">\n  import type { Unsafe as EventListProps } from './elsewhere.js';\n  let { ids }: EventListProps = $props();\n</script>`
           ],
           [
+            'imported from elsewhere',
+            `<script lang="ts">\n  import type { EventListProps } from './elsewhere.js';\n  let { ids }: EventListProps = $props();\n</script>`
+          ],
+          [
+            'declared in the module script beside the instance’s import',
+            `<script module lang="ts">\n  type EventListProps = { onsettled?: () => void };\n</script>\n${imported}  let { ids }: EventListProps = $props();\n</script>`
+          ],
+          [
             'imported in the module script alone',
             `<script module lang="ts">\n  import type { EventListProps } from './outlets.js';\n</script>\n<script lang="ts">\n  let { ids }: EventListProps = $props();\n</script>`
           ]
@@ -3491,6 +3499,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'read twice: refused',
         'an alias of another outlet type: refused',
         'imported in the module script, aliased in the instance: refused',
+        'imported from elsewhere: refused',
+        'declared in the module script beside the instance’s import: refused',
         'imported in the module script alone: refused'
       ]);
       // A method this repository declares, with a member of its own; and two
