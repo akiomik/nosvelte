@@ -116,8 +116,10 @@ export function sealOwned<T extends object>(value: T): T {
  * `defineProperty` cannot fail here — the own `stack` V8 installs is
  * configurable, and nothing of this library's runs between the base
  * constructor and this call — so such a branch would have no entrance, and this
- * repository deletes branches that have none. `WR28` reads the **effect**
- * instead, over every class and under both hostile globals.
+ * repository deletes branches that have none. `PB9` reads the **effect**
+ * instead — a published Error's `stack` is not one hook's to rewrite — and
+ * the spike's `WR28`, which `B5-C9` names and its port will carry, reads it
+ * over every class and under both hostile globals.
  *
  * **One thing that is not this library's does run here**: reading `stack` runs
  * whatever `Error.prepareStackTrace` holds, and a formatter that hangs an open
@@ -143,7 +145,7 @@ function closeStack(value: object): void {
       enumerable: false
     });
   } catch {
-    // A host that will not let us. `PB1` reads the effect rather than this call.
+    // A host that will not let us. `PB9` reads the effect rather than this call.
   }
 }
 

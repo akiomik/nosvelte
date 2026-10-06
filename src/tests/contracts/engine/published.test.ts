@@ -81,7 +81,7 @@ import {
   TransportIncompatibleError,
   TransportKeyMismatchError
 } from '$lib/v1/scope.svelte.js';
-import { useSend } from '$lib/v1/send.svelte.js';
+import { type NostrSigner, useSend } from '$lib/v1/send.svelte.js';
 import { MAIN_SURFACE } from '$lib/v1/surface.js';
 import { useStreamedReq, type UseStreamedReqOpts } from '$lib/v1/useStreamedReq.svelte.js';
 
@@ -397,6 +397,7 @@ const POPULATION = [
   'a send, refused',
   'its events outlet, over useReq()â€™s handle',
   'a send, settled',
+  'a send, refused by its signer',
   'a refresh, not started with no readable relay',
   'a refresh, cancelled because the provider was disposed',
   'a refresh, rejected because the provider was disposed',
@@ -2484,13 +2485,32 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
             })
           ]
         ];
+        // Each arranged twice: a second hook on the same descriptor reads the
+        // refused entry the first did, and the Error they share is written to.
         const held = arranged.map(
-          ([code, given, door = '']) => [code, mount(() => useStreamedReq(given)), door] as const
+          ([code, given, door = '']) =>
+            [
+              code,
+              mount(() => useStreamedReq(given)),
+              door,
+              mount(() => useStreamedReq(given))
+            ] as const
         );
         await settle(150);
-        for (const [code, hook, door] of held) {
+        const unshared: string[] = [];
+        for (const [code, hook, door, twin] of held) {
           reached(code, (hook.value.state as { error?: unknown }).error);
           check(`an Error, ${code}${door}`, hook.value, engine(hook.value));
+          const errorOf = (one: typeof hook): unknown =>
+            (one.value.state as { error?: unknown }).error;
+          if (errorOf(twin) === errorOf(hook))
+            sharedAndKept(`an Error, ${code}${door}, two hooks share`, {
+              'the value written to': () => errorOf(hook),
+              'a second hook': () => errorOf(twin),
+              'the same hook, read again': () => errorOf(hook)
+            });
+          else unshared.push(`${code}${door}`);
+          twin.destroy();
           if (code !== 'accumulator-contract') {
             const rejected = await rejectionOf(() => hook.value.refresh());
             rejectedWith(code, rejected);
@@ -2498,6 +2518,11 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
           }
           hook.destroy();
         }
+        // The one code two hooks do not share: with no provider there is no
+        // cache, and each hook builds its own.
+        expect(unshared, 'the codes two hooks on one descriptor do not share').toEqual([
+          'missing-provider'
+        ]);
         // **And the one built after the channel's own freeze**: a relay's
         // failure that comes back out of the accumulator seam is re-derived
         // into an `accumulator-contract` on its way to the state, past the
@@ -2589,7 +2614,12 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         sharedAndKept('the legâ€™s end', {
           'the value written to': () => held.value.diagnostics.legEnded?.error,
           'a second hook': () => again.value.diagnostics.legEnded?.error,
-          'the same hook, read again': () => held.value.diagnostics.legEnded?.error
+          'the same hook, read again': () => held.value.diagnostics.legEnded?.error,
+          // Where the cache holds it: the query's data, which the
+          // diagnostics are projected from.
+          'the cache': () =>
+            (held.value.raw as { data?: { forward?: { end?: { error?: unknown } } } }).data?.forward
+              ?.end?.error
         });
         again.destroy();
         held.destroy();
@@ -2638,9 +2668,10 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         const refreshed = await outcome;
         expect(refreshed.kind, 'the premise: through useReq(), incomplete').toBe('incomplete');
         check('a refresh through useReq(), incomplete', refreshed);
-        // **And refused, through the entry's own hook**: the promise its
-        // `refresh()` returns on the error path is built apart from the
-        // engine's, and is asked the same.
+        // **And refused, through the entry's own hook**: `useReq()`'s
+        // `refresh` forwards the engine's promise, and this is the case that
+        // asks the forwarded one on the error path â€” a wrapper that built its
+        // own there, or reused one, is read here and nowhere else.
         const outOfScope = mount(() =>
           useReq(() => ({
             kind: 'request',
@@ -2701,7 +2732,9 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
           tags: [['t', 'sent']],
           created_at: 1
         };
-        const sending = sender.value(signed);
+        // Every path a send takes builds its own promise, and each is asked:
+        // refused above, accepted here, abandoned below.
+        const sending = bare(sender.value(signed), 'what an accepted send returns');
         await nextOf(server, 'EVENT');
         server.send(['OK', signed.id, true, 'saved: thanks']);
         const settledSend = await sending;
@@ -2713,11 +2746,14 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         ).toEqual(['accepted']);
         check('a send, settled', settledSend);
         // And one no relay answers, which the teardown below abandons.
-        const unanswered = sender.value({
-          ...signed,
-          id: 'd'.repeat(64),
-          content: 'pb13-unanswered'
-        });
+        const unanswered = bare(
+          sender.value({
+            ...signed,
+            id: 'd'.repeat(64),
+            content: 'pb13-unanswered'
+          }),
+          'what an abandoned send returns'
+        );
         await nextOf(server, 'EVENT');
 
         const nowhere = mount(() =>
@@ -2778,6 +2814,61 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         check('useRelayDiagnostics(), after its provider is gone', diagnostics.value, [
           [diagnostics.value, RELAY_DIAGNOSTICS]
         ]);
+      }
+
+      // **The signer's template is the signer's, and only because of how it
+      // is made**: `B5-C8` leaves it out of the population as a fresh copy
+      // each call, compared with a frozen copy once signed. So a signer that
+      // rewrites a tag in place and signs what it rewrote is refused, and two
+      // calls are handed two templates, the first's rewrite reaching neither
+      // the second nor what the library compared against.
+      {
+        const url = nextUrl();
+        const server = new WS(url, { jsonProtocol: true });
+        const handed: object[] = [];
+        const asHanded: (string | undefined)[] = [];
+        const rewriting: NostrSigner = {
+          signEvent: async (template) => {
+            handed.push(template);
+            asHanded.push(template.tags[0]?.[1]);
+            (template.tags[0] as string[])[1] = 'rewritten by the signer';
+            return {
+              ...template,
+              id: 'e'.repeat(64),
+              pubkey: 'f'.repeat(64),
+              sig: '0'.repeat(128)
+            } as never;
+          }
+        };
+        const provider = mount(() => {
+          const built = createNostrContext({
+            relays: [url],
+            harness: HARNESS_DIVERGENCES,
+            verifyEvent: acceptAnyEvent,
+            signer: rewriting
+          });
+          setNostrContext(built);
+          return built;
+        });
+        const signing = mount(() => useSend());
+        const template = { kind: 1, content: 'pb13-signed', tags: [['t', 'as written']] };
+        const first = await bare(signing.value(template), 'what a signed send returns');
+        const second = await bare(signing.value(template), 'what a signed send returns');
+        expect(
+          [first, second].map((one) => (one.status === 'refused' ? one.code : one.status)),
+          'a signer that signs its own rewrite is refused, each time'
+        ).toEqual(['signer-failed', 'signer-failed']);
+        check('a send, refused by its signer', first);
+        expect(handed, 'the premise: the signer was asked twice').toHaveLength(2);
+        expect(handed[0], 'two calls, two templates').not.toBe(handed[1]);
+        expect(
+          asHanded,
+          'each handed as written: the firstâ€™s rewrite reached neither the second nor the comparison'
+        ).toEqual(['as written', 'as written']);
+        expect(template.tags[0]?.[1], 'and the callerâ€™s own template untouched').toBe('as written');
+        signing.destroy();
+        provider.destroy();
+        server.close();
       }
 
       // A provider whose transport cannot name one relay: a request naming it
@@ -2904,7 +2995,10 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
       }
 
       // The refusal a provider publishes, one of each class, read through the
-      // hook that publishes it.
+      // hook that publishes it â€” **through the entry's own door wherever one
+      // exists**: a relay list as `NostrApp` hands it, under the transport this
+      // library resolves. Only the two a transport's own names decide are
+      // arranged through `transportKeys`, the seam a consumer cannot reach.
       const refusals: [
         RelayConfigurationErrorCode,
         { readonly prototype: object },
@@ -2917,29 +3011,16 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
             relays: [
               { url: 'wss://a.example', read: true, write: true },
               { url: 'wss://a.example', read: false, write: true }
-            ],
-            transportKeys: (urls) => [...urls]
+            ]
           }
         ],
-        [
-          'invalid-relay-input',
-          InvalidRelayInputError,
-          { relays: ['nostr.example.com'], transportKeys: (urls) => [...urls] }
-        ],
+        ['invalid-relay-input', InvalidRelayInputError, { relays: ['nostr.example.com'] }],
         [
           'non-idempotent-url',
           NonIdempotentRelayUrlError,
-          {
-            relays: ['wss://h.example/raw'],
-            transportKeys: (urls) =>
-              urls.map((one) =>
-                one === 'wss://h.example/raw'
-                  ? 'wss://h.example/first'
-                  : one === 'wss://h.example/first'
-                    ? 'wss://h.example/second'
-                    : one
-              )
-          }
+          // rx-nostr's normaliser decodes a percent-escape once a pass, so
+          // `%2525` names a different relay each time it is named.
+          { relays: ['wss://h.example/%2525'] }
         ],
         [
           'transport-key-mismatch',
