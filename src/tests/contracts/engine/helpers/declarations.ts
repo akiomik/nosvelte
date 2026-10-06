@@ -184,7 +184,11 @@ export interface WalkOptions {
    * handed `never`.
    */
   readonly callables?: 'data' | 'api';
-  /** The members `'api'` takes for commands, by name. */
+  /**
+   * The members `'api'` takes for commands: `Holder.member` names a member of
+   * one interface or type alias (`ReqHandle.refresh`), so the same name on a
+   * snapshot is data's; a bare `member` names it on any holder.
+   */
   readonly commands?: readonly string[];
 }
 
@@ -364,6 +368,17 @@ function walkEach(
     }
     return isIdentifier(name) ? `${expression}.${name}` : `${expression}[${JSON.stringify(name)}]`;
   };
+  // The interface or type alias a member is declared on, by name — what a
+  // command is qualified by.
+  const holderOf = (property: ts.Symbol): string | undefined => {
+    const parent = (property.valueDeclaration ?? property.declarations?.[0])?.parent;
+    if (parent === undefined) return undefined;
+    if (ts.isInterfaceDeclaration(parent) || ts.isClassDeclaration(parent))
+      return parent.name?.text;
+    if (ts.isTypeLiteralNode(parent) && ts.isTypeAliasDeclaration(parent.parent))
+      return parent.parent.name.text;
+    return undefined;
+  };
   // **The members every value has, and no type lists.** `Object`'s on every
   // object, and `Function`'s on every function: each slot a consumer can spell
   // is written to, and none is walked into — they are the language's, not the
@@ -404,7 +419,7 @@ function walkEach(
           level + 1,
           guard,
           false,
-          name
+          holderOf(property) === undefined ? name : `${holderOf(property)}.${name}`
         );
       else if (!standard(declared) && callable(checker.getTypeOfSymbol(property)))
         writes.push(`${guard}void ${access}!.call;`);
@@ -417,6 +432,23 @@ function walkEach(
   // A union's variants are all claimed before any is walked, so a variant met
   // again inside a sibling's `cause` is not walked there, one level down, but
   // here, where the union is.
+  // A write through each index signature, under a key the type checker cannot
+  // see — a dynamic key is a write a named property list never shows.
+  const indexes = (expression: string, type: ts.Type, level: number, guard: string): void => {
+    const named = new Set(checker.getPropertiesOfType(type).map((one) => one.getName()));
+    for (const info of checker.getIndexInfosOfType(type)) {
+      // A literal key no named member has, so the write lands on the signature
+      // itself — and a literal, so a guard can narrow through it. **Chosen
+      // against the members**, since a type that names `__key` would have taken
+      // the write on that member and reported it as the signature's.
+      const numeric = (info.keyType.getFlags() & ts.TypeFlags.NumberLike) !== 0;
+      let free = numeric ? '999' : '__key';
+      while (named.has(free)) free = numeric ? `${free}9` : `${free}_`;
+      const key = numeric ? free : `'${free}'`;
+      writes.push(`${guard}${expression}[${key}] = ${expression}[${key}]!;`);
+      visit(`${expression}[${key}]!`, present(info.type), level + 1, guard);
+    }
+  };
   let walked = new Set<ts.Type>();
   let results = 0;
   const visit = (
@@ -537,7 +569,12 @@ function walkEach(
     // compiles exactly when it is callable, which reads as a write the types
     // let through. Data has no such member.
     const emitted = writes.length;
-    const command = level === 0 || (member !== undefined && commands.includes(member));
+    const command =
+      level === 0 ||
+      (member !== undefined &&
+        commands.some((one) =>
+          one.includes('.') ? one === member : one === member.split('.').pop()
+        ));
     if (callable(type) && callables === 'api' && ours(type) && command) {
       // A method of a published handle: what it resolves with is what the
       // consumer holds, so that is walked, as a value of its own.
@@ -564,6 +601,7 @@ function walkEach(
       // **And the function is a value too.** Its declared members are walked
       // like any object's, and the members every function has are written to.
       members(expression, type, level, false, guard);
+      indexes(expression, type, level, guard);
       standardMembers(expression, type, guard);
       const returned = call.getReturnType();
       const awaited = checker.getAwaitedType(returned) ?? returned;
@@ -571,7 +609,13 @@ function walkEach(
       // It is the caller's own — a fresh one each call — so its members are
       // not walked; one with members of this library's on it would be a
       // published value the walk never asked about, and is reported.
-      if (awaited !== returned) {
+      if (awaited === returned)
+        throw new Error(`writesThrough: ${expression} is a command that does not return a promise`);
+      if (checker.getIndexInfosOfType(returned).length > 0)
+        throw new Error(
+          `writesThrough: ${expression} returns a promise with members of its own: an index signature`
+        );
+      {
         const own = checker.getPropertiesOfType(returned).filter((property) => {
           const declared = property.getDeclarations() ?? [];
           return !(
@@ -593,27 +637,13 @@ function walkEach(
       // value every time it is written, and nothing narrows one.
       const name = `__result${(results += 1)}`;
       const called = `${expression}(${Array.from({ length: required }, () => 'null as never').join(', ')})`;
-      const invoked = awaited === returned ? called : `await ${called}`;
+      const invoked = `await ${called}`;
       visit(name, present(awaited), level + 1, `${guard}for (const ${name} of [${invoked}]) `);
       return;
     }
     if (callable(type)) writes.push(`${guard}void ${expression}.call;`);
     members(expression, type, level, false, guard);
-    // And a write through each index signature, under a key the type checker
-    // cannot see — a dynamic key is a write a named property list never shows.
-    const named = new Set(checker.getPropertiesOfType(type).map((one) => one.getName()));
-    for (const info of checker.getIndexInfosOfType(type)) {
-      // A literal key no named member has, so the write lands on the signature
-      // itself — and a literal, so a guard can narrow through it. **Chosen
-      // against the members**, since a type that names `__key` would have taken
-      // the write on that member and reported it as the signature's.
-      const numeric = (info.keyType.getFlags() & ts.TypeFlags.NumberLike) !== 0;
-      let free = numeric ? '999' : '__key';
-      while (named.has(free)) free = numeric ? `${free}9` : `${free}_`;
-      const key = numeric ? free : `'${free}'`;
-      writes.push(`${guard}${expression}[${key}] = ${expression}[${key}]!;`);
-      visit(`${expression}[${key}]!`, present(info.type), level + 1, guard);
-    }
+    indexes(expression, type, level, guard);
     // An object type the walk found nothing in — `object`, `{}`, a type
     // parameter — is not an empty one: a consumer narrows it to whatever they
     // like. Returning would certify it as read.
@@ -970,56 +1000,119 @@ export function snippetArgumentsOf(imports: string, typeTexts: readonly string[]
     .flatMap((statement) => statement.declarationList.declarations);
   const seen = new Set<ts.Type>();
   const found: string[] = [];
+  // A member of `text` by name, from whichever variant of it has one — a prop
+  // only one variant of a union declares is a prop all the same.
+  const memberText = (text: string, name: string): string => {
+    const key = JSON.stringify(name);
+    return `NonNullable<(${text}) extends infer V ? (V extends unknown ? (${key} extends keyof V ? V[${key}] : never) : never) : never>`;
+  };
+  const ours = (property: ts.Symbol): boolean =>
+    (property.getDeclarations() ?? []).some(
+      (one) => !program.isSourceFileDefaultLibrary(one.getSourceFile())
+    );
+  // **Every prop that can be called is one this library calls** — a
+  // snippet, a callback or a class, under whatever name or interface it is
+  // declared, at the top of the props or inside one of them — and what it is
+  // called with is handed to the consumer. A prop that cannot be called is
+  // the consumer's to write; one the probe cannot read at all is reported.
+  const read = (type: ts.Type, text: string, label: string, depth: number): void => {
+    const variants = type.isUnion() ? type.types : [type];
+    const names = new Set(
+      variants
+        .flatMap((variant) => checker.getPropertiesOfType(variant))
+        .filter(ours)
+        .map((one) => one.getName())
+    );
+    for (const name of names) {
+      const member = memberText(text, name);
+      const types = variants
+        .map((variant) => checker.getPropertyOfType(variant, name))
+        .filter((one): one is ts.Symbol => one !== undefined)
+        .map((one) => checker.getNonNullableType(checker.getTypeOfSymbol(one)));
+      for (const held of types) {
+        if (held.getFlags() & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))
+          throw new Error(`snippetArgumentsOf: ${label}.${name} is a prop the probe cannot read`);
+        const calls = held.getCallSignatures();
+        const constructs = held.getConstructSignatures();
+        if (calls.length + constructs.length === 0) {
+          // An object the consumer hands in may still hold something this
+          // library calls; a list, a string or a number holds nothing of it.
+          if (
+            depth < 3 &&
+            (held.getFlags() & ts.TypeFlags.Object) !== 0 &&
+            !checker.isArrayType(held) &&
+            !checker.isTupleType(held)
+          )
+            read(held, member, `${label}.${name}`, depth + 1);
+          continue;
+        }
+        if (calls.length + constructs.length > 1)
+          throw new Error(`snippetArgumentsOf: ${label}.${name} is a prop the probe cannot read`);
+        const signature = (calls[0] ?? constructs[0]) as ts.Signature;
+        const listOf = calls.length > 0 ? 'Parameters' : 'ConstructorParameters';
+        const parameters = signature.getParameters();
+        const [only] = parameters;
+        const declared = only?.valueDeclaration;
+        // A snippet takes its arguments as one rest list; a callback, one by one.
+        const rest =
+          parameters.length === 1 &&
+          declared !== undefined &&
+          ts.isParameter(declared) &&
+          declared.dotDotDotToken !== undefined;
+        let handed: readonly ts.Type[];
+        if (rest && only !== undefined) {
+          const list = checker.getTypeOfSymbol(only);
+          // A rest list that is not a tuple is one the probe cannot read, and
+          // is reported rather than passed over as a snippet handed nothing.
+          if (!checker.isTupleType(list))
+            throw new Error(
+              `snippetArgumentsOf: ${label}.${name} is handed something that is not a list of arguments`
+            );
+          handed = checker.getTypeArguments(list as ts.TypeReference);
+        } else handed = parameters.map((parameter) => checker.getTypeOfSymbol(parameter));
+        for (const [position, argument] of handed.entries()) {
+          if (seen.has(argument)) continue;
+          seen.add(argument);
+          found.push(`${listOf}<${member}>[${position}]`);
+        }
+      }
+    }
+  };
   for (const [at, root] of roots.entries()) {
     const declaration = declarations.find(
       (one) => ts.isIdentifier(one.name) && one.name.text === root
     );
     if (declaration === undefined) throw new Error(`the probe declared no ${root}`);
-    for (const property of checker.getPropertiesOfType(
-      checker.getTypeAtLocation(declaration.name)
-    )) {
-      const type = checker.getNonNullableType(checker.getTypeOfSymbol(property));
-      // **Every prop that can be called is one this library calls** — a
-      // snippet, or a callback, under whatever name or interface it is
-      // declared — and what it is called with is handed to the consumer. A
-      // prop that cannot be called is the consumer's to write.
-      const signatures = type.getCallSignatures();
-      if (signatures.length === 0) continue;
-      const [signature, ...others] = signatures;
-      if (signature === undefined || others.length > 0)
-        throw new Error(
-          `snippetArgumentsOf: ${property.getName()} is a prop the probe cannot read`
-        );
-      const parameters = signature.getParameters();
-      const [only] = parameters;
-      const declaration = only?.valueDeclaration;
-      // A snippet takes its arguments as one rest list; a callback, one by one.
-      const rest =
-        parameters.length === 1 &&
-        declaration !== undefined &&
-        ts.isParameter(declaration) &&
-        declaration.dotDotDotToken !== undefined;
-      let handed: readonly ts.Type[];
-      const prop = `NonNullable<(${typeTexts[at]})[${JSON.stringify(property.getName())}]>`;
-      if (rest && only !== undefined) {
-        const list = checker.getTypeOfSymbol(only);
-        // A rest list that is not a tuple is one the probe cannot read, and is
-        // reported rather than passed over as a snippet handed nothing.
-        if (!checker.isTupleType(list))
-          throw new Error(
-            `snippetArgumentsOf: ${property.getName()} is handed something that is not a list of arguments`
-          );
-        handed = checker.getTypeArguments(list as ts.TypeReference);
-      } else handed = parameters.map((parameter) => checker.getTypeOfSymbol(parameter));
-      const spelled = (position: number): string => `Parameters<${prop}>[${position}]`;
-      for (const [position, argument] of handed.entries()) {
-        if (seen.has(argument)) continue;
-        seen.add(argument);
-        found.push(spelled(position));
-      }
-    }
+    read(checker.getTypeAtLocation(declaration.name), typeTexts[at] as string, root, 0);
   }
   return found;
+}
+
+/**
+ * The members of `typeText` this repository declares — not the default
+ * library's, not a dependency's — by name. A class's static side is the
+ * platform's `ErrorConstructor`, `Function`'s members and the `prototype`
+ * TypeScript gives every class; this is how an arm says it holds nothing else.
+ */
+export function declaredHere(imports: string, typeText: string): string[] {
+  const { program, consumer } = programOver(`${imports}\ndeclare const value: ${typeText};\n`);
+  const checker = program.getTypeChecker();
+  const declaration = consumer.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => statement.declarationList.declarations)
+    .find((one) => ts.isIdentifier(one.name) && one.name.text === 'value');
+  if (declaration === undefined) throw new Error('the probe declared no value');
+  return checker
+    .getPropertiesOfType(checker.getTypeAtLocation(declaration.name))
+    .filter((property) =>
+      (property.getDeclarations() ?? []).some((one) => {
+        const file = one.getSourceFile();
+        return (
+          !program.isSourceFileDefaultLibrary(file) && !file.fileName.includes('/node_modules/')
+        );
+      })
+    )
+    .map((property) => property.getName());
 }
 
 /** The names of every member the type checker gives `typeText`, after `imports`. */

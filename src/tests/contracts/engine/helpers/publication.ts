@@ -41,11 +41,12 @@
  * and what it returns each time is checked under the same rules, and an
  * exemption is one named edge of one interface rather than a property name.
  *
- * **The platform's prototypes are out of scope; this library's are not.** A
- * consumer who rewrites `Array.prototype.map` or `Error.prototype.toString`
- * changes what every reader of every value computes, and that is not a write
- * *through a published value* — the same exclusion as tampering with
- * `WeakSet.prototype`. Every prototype on a value's chain that is not the
+ * **The platform's built-ins are assumed; this library's prototypes are not.**
+ * The discipline, like the library, takes the platform's built-ins to be as
+ * the language defines them: a consumer who rewrites `Array.prototype.map`,
+ * `WeakSet.prototype.has` or `Error`'s `Symbol.hasInstance` changes what every
+ * reader of every value computes, this library's decisions included, and that
+ * is outside `B5-C8` rather than a write *through a published value*. Every prototype on a value's chain that is not the
  * platform's — this library's classes, reached as `error.constructor` — is read
  * like any other object: closed, its methods and its class closed as functions,
  * and no object data and no accessor every instance would inherit. And an
@@ -277,6 +278,10 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
         if (slot.writable === true) found.push(`${where}: writable`);
         const held: unknown = slot.value;
         if (isFunction && key === 'prototype') {
+          // A function's own `prototype` is an object its instances inherit;
+          // one that is itself a function is a second function no rule here
+          // names, handed out through the first.
+          if (typeof held === 'function') found.push(`${where}: a function as a prototype`);
           visit(held, where, 'prototype');
         } else if (isInterface) {
           const command = typeof key === 'string' && named.commands.includes(key);
@@ -286,14 +291,18 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
           else if (constructible(held)) found.push(`${where}: a constructible function`);
           visit(held, where, command ? 'function' : 'value');
         } else if (role === 'prototype' && !isFunction) {
-          // A prototype's `constructor` is its class; any other function on it
-          // is a method every instance inherits, whose answer nothing here can
-          // read — so a library prototype holds none.
-          if (typeof held === 'function' && key !== 'constructor')
-            found.push(`${where}: a method every instance inherits`);
+          // **A library prototype holds its class and nothing else**: any other
+          // member — a method, whose answer nothing here can read, data every
+          // instance shares, even a primitive — is one more thing each instance
+          // inherits that no rule names. And its `constructor` is the class
+          // whose `prototype` it is, not some other function wearing the name.
+          if (key !== 'constructor') found.push(`${where}: a member every instance inherits`);
+          else if (
+            typeof held !== 'function' ||
+            Reflect.getOwnPropertyDescriptor(held, 'prototype')?.value !== value
+          )
+            found.push(`${where}: a constructor that is not this prototype's class`);
           if (typeof held === 'function') visit(held, where, 'function');
-          else if (typeof held === 'object' && held !== null)
-            found.push(`${where}: data every instance inherits`);
         } else {
           visit(held, where, 'value');
         }
@@ -310,7 +319,7 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
             isInterface
               ? 'an accessor the interface does not name'
               : role === 'prototype' && !isFunction
-                ? 'an accessor every instance inherits'
+                ? 'a member every instance inherits'
                 : 'an accessor in a snapshot'
           }`
         );

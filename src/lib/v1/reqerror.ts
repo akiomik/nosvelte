@@ -46,7 +46,7 @@
 import type { IncompleteCauses } from './eventset.js';
 import { boundedMessage } from './normalize.js';
 import type { FailureSource } from './own.js';
-import { hardenOwned, sealClass } from './owned.js';
+import { hardenOwned, isOwnedByLibrary, sealClass } from './owned.js';
 
 /**
  * Everything this channel can hand a consumer, anywhere.
@@ -447,14 +447,22 @@ export type { FailureSource };
  * made `relayOf` miss a `RelayNotInScopeError`, and two unrelated requests then
  * shared one refused entry, the second reading the first's `url` — measured
  * after `sealClass` had closed this library's own classes. Membership of a
- * module-private `WeakSet`, filled by the constructor, is a question nothing
- * reachable from a published value can answer.
+ * module-private `WeakSet`, filled by the constructor, is a question the
+ * value's own prototype chain and `Symbol.hasInstance` do not answer — and it
+ * is asked together with the ownership registry, because the constructor is
+ * published: an instance a consumer built satisfies the class and was not
+ * made here. Like everything this library computes, it takes the platform's
+ * built-ins (`WeakSet.prototype.has` among them) to be as the language defines
+ * them; a consumer who rewrites one is outside `B5-C8`.
  */
 const RELAY_NOT_IN_SCOPE = new WeakSet<object>();
 
 /** Whether `value` was made by {@link RelayNotInScopeError}'s constructor. */
 export const isRelayNotInScope = (value: unknown): value is RelayNotInScopeError =>
-  typeof value === 'object' && value !== null && RELAY_NOT_IN_SCOPE.has(value);
+  typeof value === 'object' &&
+  value !== null &&
+  RELAY_NOT_IN_SCOPE.has(value) &&
+  isOwnedByLibrary(value);
 
 export class RelayNotInScopeError extends Error {
   /** See {@link UnsupportedFilterError}'s re-declaration for why these are here. */

@@ -25,7 +25,7 @@ import { untrack } from 'svelte';
 
 import { describeValue, InvalidDescriptorError } from './normalize.js';
 import { saidBy } from './own.js';
-import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
+import { hardenOwned, isOwnedByLibrary, ownedByLibrary, sealClass } from './owned.js';
 import { RelayNotInScopeError, RequestTransportIncompatibleError } from './reqerror.js';
 
 /**
@@ -220,19 +220,30 @@ export type RelayConfigurationErrorCode =
  * shared one refused entry, the second reading the first's `url` — measured
  * after `sealClass` had closed this library's own classes; the provider asks
  * the same question of its own refusals here. Membership of a
- * module-private `WeakSet`, filled by the constructor, is a question nothing
- * reachable from a published value can answer.
+ * module-private `WeakSet`, filled by the constructor, is a question the
+ * value's own prototype chain and `Symbol.hasInstance` do not answer — and it
+ * is asked together with the ownership registry, because the constructor is
+ * published: an instance a consumer built satisfies the class and was not
+ * made here. Like everything this library computes, it takes the platform's
+ * built-ins (`WeakSet.prototype.has` among them) to be as the language defines
+ * them; a consumer who rewrites one is outside `B5-C8`.
  */
 const RELAY_CONFIGURATION_REFUSALS = new WeakSet<object>();
 const TRANSPORT_INCOMPATIBLE = new WeakSet<object>();
 
 /** Whether `value` was made by {@link RelayConfigurationError}'s constructor, or a subclass's. */
 export const isRelayConfigurationError = (value: unknown): value is RelayConfigurationError =>
-  typeof value === 'object' && value !== null && RELAY_CONFIGURATION_REFUSALS.has(value);
+  typeof value === 'object' &&
+  value !== null &&
+  RELAY_CONFIGURATION_REFUSALS.has(value) &&
+  isOwnedByLibrary(value);
 
 /** Whether `value` was made by {@link TransportIncompatibleError}'s constructor. */
 export const isTransportIncompatible = (value: unknown): value is TransportIncompatibleError =>
-  typeof value === 'object' && value !== null && TRANSPORT_INCOMPATIBLE.has(value);
+  typeof value === 'object' &&
+  value !== null &&
+  TRANSPORT_INCOMPATIBLE.has(value) &&
+  isOwnedByLibrary(value);
 
 export class RelayConfigurationError extends Error {
   /**

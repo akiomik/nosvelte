@@ -82,6 +82,7 @@ import { useStreamedReq, type UseStreamedReqOpts } from '$lib/v1/useStreamedReq.
 import Outlets from './fixtures/Outlets.svelte';
 import {
   consumerDiagnostics,
+  declaredHere,
   exportsOf,
   judgeWrites,
   judgeWritesEach,
@@ -496,6 +497,15 @@ function disciplineControls(): void {
   }
   Object.freeze(Methodical.prototype);
   Object.freeze(Methodical);
+  class MarkedClass extends Error {}
+  Object.defineProperty(MarkedClass.prototype, 'kind', { value: 'marked' });
+  const Marked = sealed(MarkedClass);
+  class ImpostorClass extends Error {}
+  Object.defineProperty(ImpostorClass.prototype, 'constructor', {
+    value: Object.freeze(function stranger() {}.bind(null))
+  });
+  Object.freeze(ImpostorClass.prototype);
+  const Impostor = ImpostorClass;
   const Described = sealed(
     class Described extends Error {
       describe(): number {
@@ -514,7 +524,7 @@ function disciplineControls(): void {
   const control: Discipline = {
     interfaces: new Map(),
     errors: new Set(
-      [Ours, Setting, Leaf, Sharing, Gotten, Methodical, Described, Open].map(
+      [Ours, Setting, Leaf, Sharing, Gotten, Methodical, Described, Open, Marked, Impostor].map(
         (one) => one.prototype as object
       )
     )
@@ -562,12 +572,12 @@ function disciplineControls(): void {
     [
       'inherited data',
       owned(new Sharing('x')),
-      'held (inherited from SharingClass).shared: data every instance inherits'
+      'held (inherited from SharingClass).shared: a member every instance inherits'
     ],
     [
       'an inherited accessor',
       owned(new Gotten('x')),
-      'held (inherited from Gotten).extra: an accessor every instance inherits'
+      'held (inherited from Gotten).extra: a member every instance inherits'
     ],
     [
       'an inherited method left open',
@@ -576,9 +586,19 @@ function disciplineControls(): void {
     ],
     ['a class nobody closed', owned(new Open('x')), 'held (inherited from Open): extensible'],
     [
+      'a primitive every instance inherits',
+      owned(new Marked('x')),
+      'held (inherited from MarkedClass).kind: a member every instance inherits'
+    ],
+    [
+      'a constructor that is not its prototype’s class',
+      owned(new Impostor('x')),
+      "held (inherited from bound stranger).constructor: a constructor that is not this prototype's class"
+    ],
+    [
       'a method every instance inherits, closed',
       owned(new Described('x')),
-      'held (inherited from Described).describe: a method every instance inherits'
+      'held (inherited from Described).describe: a member every instance inherits'
     ],
     [
       'a host object with internal state, under no prototype',
@@ -837,6 +857,26 @@ function disciplineControls(): void {
       'held.refresh: a constructible function'
     ],
     [
+      'a bound getter, whose instances share its target’s prototype',
+      handle({
+        state: { get: closed(function regular() {}.bind(null)) },
+        raw: getter(1),
+        refresh: { value: command }
+      }),
+      'held.state (its getter): a constructible function'
+    ],
+    [
+      'a function whose own prototype is a function',
+      handle({
+        state: getter(1),
+        raw: getter(1),
+        refresh: {
+          value: closed(Object.assign(() => undefined, { prototype: closed(() => ({})) }))
+        }
+      }),
+      'held.refresh.prototype: a function as a prototype'
+    ],
+    [
       'a function’s own prototype that is a host object',
       handle({
         state: getter(1),
@@ -869,7 +909,7 @@ function disciplineControls(): void {
           )
         }
       }),
-      'held.refresh (inherited from a prototype).ledger: an accessor every instance inherits'
+      'held.refresh (inherited from a prototype).ledger: a member every instance inherits'
     ]
   ];
   for (const [rule, value, finding, interfaceSpec] of interfaceRules)
@@ -889,6 +929,16 @@ function disciplineControls(): void {
   } finally {
     Reflect.deleteProperty(Object.prototype, '__pb13Probe');
   }
+  // **A function interface that can be constructed** — `useSend()`'s answer
+  // shape, bound to a regular function — is reported, as a command is.
+  const sendLike = closed(function regular() {}.bind(null));
+  expect(
+    breaches(sendLike, {
+      interfaces: new Map([[sendLike, { getters: [], commands: [] }]]),
+      errors: control.errors
+    }),
+    'the discipline’s control: a function interface that can be constructed'
+  ).toContain('held: a constructible function');
   // **And an object judged in each role it is reached in**: a host object
   // that is first a link of a chain, then a value beside it.
   const slottedLink = closed(Object.setPrototypeOf(new Map(), Object.prototype) as object);
@@ -1020,6 +1070,13 @@ function publishedTypeBreaches(): {
   // it holds nothing of this library's; at run time the class is sealed, and
   // the discipline reads it through every instance's chain.
   for (const one of exported.filter((each) => each.kind === 'class')) {
+    // Nothing of this library's on it — read by where each member is declared,
+    // since a static of this library's under a name the platform also uses
+    // (`isError`) passes the list below by name.
+    expect(
+      declaredHere(PUBLISHED, `typeof Published.${one.name}`),
+      `${one.name}'s static side declares nothing of this library's`
+    ).toEqual([]);
     // **And what it does hold, pinned**: the platform's — `ErrorConstructor`'s
     // members, as the default library and the host's typings declare them,
     // and the `prototype` TypeScript gives every class. Each type-checks as
@@ -1038,7 +1095,7 @@ function publishedTypeBreaches(): {
   }
   const shapes = [
     ...exported
-      .filter((one) => one.kind !== 'value' && NOT_GIVEN_OUT[one.name] === undefined)
+      .filter((one) => one.kind !== 'value' && !Object.hasOwn(NOT_GIVEN_OUT, one.name))
       .map((one) =>
         one.kind === 'class'
           ? `InstanceType<typeof Published.${one.name}>`
@@ -1047,14 +1104,26 @@ function publishedTypeBreaches(): {
     ...MAIN_SURFACE.hooks.map((hook) => `ReturnType<typeof Published.${hook}>`),
     ...outlets
   ];
-  // A function is a command only where the handle names one, and at a root —
-  // `useSend()`'s answer; anywhere else it is data's, and is reported.
-  const walk = { callables: 'api', commands: ['refresh'], depth: 6 } as const;
+  // Its control: a class that declares a static of its own, under a name the
+  // platform also uses.
+  expect(
+    declaredHere(
+      'export {};\nclass Registry extends Error { static override isError(value: unknown): value is Error { return value instanceof Error; } }',
+      'typeof Registry'
+    ),
+    'the static side’s control'
+  ).toEqual(['isError']);
+  // A function is a command only where the handle names one — `ReqHandle`'s
+  // `refresh`, by the type that declares it — and at a root, `useSend()`'s
+  // answer; anywhere else it is data's, and is reported.
+  const walk = { callables: 'api', commands: ['ReqHandle.refresh'], depth: 6 } as const;
   const writes = writesThroughEach(PUBLISHED, shapes, walk);
   const lists = listsThroughEach(PUBLISHED, shapes, walk);
   const verdicts = judgeWritesEach(PUBLISHED, shapes, writes);
   const judged = shapes.flatMap((typeText, at) =>
-    (verdicts[at] ?? []).map((one) => ({ ...one, line: `${typeText}: ${one.write}` }))
+    // ` :: ` between the shape and the line, since a shape's own text can
+    // hold a colon (a conditional type does).
+    (verdicts[at] ?? []).map((one) => ({ ...one, line: `${typeText} :: ${one.write}` }))
   );
   // What each hook answers is walked, and something in it is refused — so a
   // hook whose answer fell out of the walk is a failure, not one type fewer.
@@ -1062,7 +1131,8 @@ function publishedTypeBreaches(): {
     expect(
       judged.some(
         (one) =>
-          one.line.startsWith(`ReturnType<typeof Published.${hook}>:`) && one.verdict === 'refused'
+          one.line.startsWith(`ReturnType<typeof Published.${hook}> ::`) &&
+          one.verdict === 'refused'
       ),
       `what ${hook} answers is walked`
     ).toBe(true);
@@ -1152,7 +1222,7 @@ function exceptionStated(exceptions: readonly string[]): void {
   ).toEqual(STANDARD_SLOTS);
   for (const line of exceptions)
     expect(line, 'an exception line is a slot written with its own member').toMatch(
-      /^[^:]+: (?:if \(.*?\) |for \(.*?\) )*(.+?)(\.\w+|\[Symbol\.\w+\]) = \1\2!;$/
+      /^.+? :: (?:if \(.*?\) |for \(.*?\) )*(.+?)(\.\w+|\[Symbol\.\w+\]) = \1\2!;$/
     );
   for (const list of [
     'events',
@@ -1744,6 +1814,15 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         reached(code, rejected);
         rejections.add(code);
       };
+      // **What a command returns is the platform's `Promise` and nothing
+      // more**: one with a member of its own would be a value this library
+      // hands out that no case here reads.
+      const bare = (returned: Promise<unknown>, name: string): void => {
+        expect(Object.getPrototypeOf(returned), `${name}: a promise of the platform’s`).toBe(
+          Promise.prototype
+        );
+        expect(Reflect.ownKeys(returned), `${name}: with nothing of its own`).toEqual([]);
+      };
       const rejectionOf = async (pending: Promise<unknown>): Promise<unknown> => {
         try {
           await pending;
@@ -2003,6 +2082,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const asked = held.value.refresh();
         const askedAgain = held.value.refresh();
         expect(asked, 'the premise: a fresh promise each call').not.toBe(askedAgain);
+        bare(asked, 'what the engine’s refresh() returns');
         await askedAgain;
         const outcome = await asked;
         expect(outcome, 'the premise: deferred').toEqual({
@@ -2192,6 +2272,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           [request.value, REQ_HANDLE]
         ]);
         const outcome = request.value.refresh();
+        bare(outcome, 'what useReq()’s refresh() returns');
         await nextOf(server, 'REQ');
         const refreshed = await outcome;
         expect(refreshed.kind, 'the premise: through useReq(), incomplete').toBe('incomplete');
@@ -2227,6 +2308,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const sent = sender.value({} as never);
         const sentAgain = sender.value({} as never);
         expect(sent, 'the premise: a fresh promise each send').not.toBe(sentAgain);
+        bare(sent, 'what a send returns');
         await Promise.all([sent, sentAgain]);
         const signed = {
           id: 'a'.repeat(64),
@@ -2361,14 +2443,16 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           hook.destroy();
         }
 
-        // **And what this library decides does not read what a published
-        // value reaches.** A published Error reaches its class, which is
-        // sealed, and past it the platform's `Error`, which is not this
-        // library's to seal: one `Symbol.hasInstance` there made the refused
-        // cache key — which names the relay a refusal is about — miss it, and
-        // two requests whose names differ only past the message's bound then
-        // shared one entry. Measured; the brand the key reads now is a set
-        // nothing reachable can answer for.
+        // **And what this library decides about its own classes does not read
+        // `instanceof`.** A published Error reaches its class, which is
+        // sealed, and past it the platform's `Error`: one `Symbol.hasInstance`
+        // there made the refused cache key — which names the relay a refusal
+        // is about — miss it, and two requests whose names differ only past
+        // the message's bound then shared one entry. Measured. The key reads a
+        // brand now. A rewritten built-in is outside `B5-C8`, which assumes the
+        // platform's built-ins as the language defines them; this arm holds
+        // the narrower claim that the decision does not go through
+        // `instanceof`, the one route that was measured.
         const refusal = (held[0]?.[1].value.state as { error?: Error } | undefined)?.error;
         expect(refusal, 'the premise: a published refusal to reach from').toBeInstanceOf(
           RelayNotInScopeError
@@ -2732,11 +2816,51 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'the probe’s control: a function on a snapshot is data’s, not a command'
       ).toContain('void value.refusal!.retry!.call;');
       expect(
+        throwsOn('{ refresh(): number }'),
+        'the probe’s control: a command that does not return a promise'
+      ).toMatch(/does not return a promise/);
+      expect(
+        throwsOn('{ refresh(): Promise<number> & { [key: string]: number } }'),
+        'the probe’s control: a command whose promise carries an index signature'
+      ).toMatch(/members of its own: an index signature/);
+      // A command's own index signature is written through, as an object's is.
+      const indexed =
+        'export {};\ninterface Handle { refresh: Indexed; snapshot: Snapshot }\ninterface Indexed { (): Promise<number>; [key: string]: number }\ninterface Snapshot { refresh(): Promise<number> }';
+      const qualified = writesThrough(indexed, 'Handle', {
+        callables: 'api',
+        commands: ['Handle.refresh']
+      });
+      expect(qualified, 'the probe’s control: a command’s own index signature').toContain(
+        "value.refresh!['__key'] = value.refresh!['__key']!;"
+      );
+      // And a command named by the type that holds it: the same name on a
+      // snapshot is data's.
+      expect(qualified, 'the probe’s control: a command is the holder’s, not the name’s').toContain(
+        'void value.snapshot!.refresh!.call;'
+      );
+      expect(
         snippetArgumentsOf("import type { Snippet } from 'svelte';", [
           '{ onsettled?: (settled: { readonly n: number }, also: { readonly m: number }) => void; children: Snippet<[{ readonly s: string }, { readonly t: string }]> }'
         ]),
         'the probe’s control: a callback prop and a snippet, each handed two arguments'
       ).toHaveLength(4);
+      expect(
+        snippetArgumentsOf("import type { Snippet } from 'svelte';", [
+          '({ kind: "a"; children: Snippet<[{ readonly a: number }]> } | { kind: "b"; only?: (handed: { readonly b: number }) => void }) & { on?: { settled?: (events: { readonly c: number }) => void }; as?: new (made: { readonly d: number }) => unknown }'
+        ]),
+        'the probe’s control: a prop one variant holds, one inside a prop, and a class'
+      ).toHaveLength(4);
+      expect(
+        (() => {
+          try {
+            snippetArgumentsOf('export {};', ['{ loose: any }']);
+          } catch (thrown) {
+            return (thrown as Error).message;
+          }
+          return 'read';
+        })(),
+        'the probe’s control: a prop it cannot read is reported'
+      ).toMatch(/a prop the probe cannot read/);
       // A method this repository declares, with a member of its own; and two
       // lists of different types, since a type is walked where it is first met.
       const withMethod = 'export {};\ninterface Refresh { (): Promise<number>; cell: string[] }';
