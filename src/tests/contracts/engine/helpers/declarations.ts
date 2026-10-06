@@ -28,21 +28,64 @@ export interface ConsumerDiagnostic {
 }
 
 /**
+ * The project's compiler options, read once a process: the configuration does
+ * not change while an arm runs.
+ */
+let projectOptions: ts.CompilerOptions | undefined;
+function optionsOfProject(): ts.CompilerOptions {
+  if (projectOptions === undefined) {
+    const read = ts.readConfigFile(resolve(ROOT, 'tsconfig.json'), (path) => ts.sys.readFile(path));
+    const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT);
+    projectOptions = { ...parsed.options, noEmit: true };
+  }
+  return projectOptions;
+}
+
+/**
+ * **Every file a program reads but the consumer's, parsed once a process.**
+ * A program is built per question — an arm asks dozens — and each used to
+ * parse the same few hundred files again: the default library, the
+ * dependencies' declarations and this library's source. Measured on `PB13`,
+ * that was 30 s of its 67, 85 programs at about 490 files each. None of
+ * them changes while an arm runs, so the file the next program would parse is
+ * the one already parsed, and a parsed file is shared the way the language
+ * service shares one between programs. **Keyed by the file's modification time
+ * too**, so a process that outlives an edit — a watch run, a mutation applied
+ * while a worker is alive — parses the edited file rather than answering for
+ * the old one. The consumer's file is the question, and is parsed every time.
+ */
+const parsedFiles = new Map<string, ts.SourceFile | undefined>();
+const keyOf = (name: string, language: ts.ScriptTarget | ts.CreateSourceFileOptions): string => {
+  const modified = String(ts.sys.getModifiedTime?.(name)?.getTime());
+  return typeof language === 'object'
+    ? `${name}\0${modified}\0${language.languageVersion}\0${String(language.impliedNodeFormat)}\0${String(language.jsDocParsingMode)}`
+    : `${name}\0${modified}\0${language}`;
+};
+
+/** How many times the probe has parsed a file in this process, the consumer's apart. */
+let parses = 0;
+export const parsedFileCount = (): number => parses;
+
+/**
  * A program over `source` written as a consumer's file inside the project,
  * under the project's own configuration — so `$lib` resolves and every
  * strictness flag applies. The file never touches the disk.
  */
 function programOver(source: string): { program: ts.Program; consumer: ts.SourceFile } {
-  const read = ts.readConfigFile(resolve(ROOT, 'tsconfig.json'), (path) => ts.sys.readFile(path));
-  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT);
-  const options = { ...parsed.options, noEmit: true };
+  const options = optionsOfProject();
   const host = ts.createCompilerHost(options);
   const getSourceFile = host.getSourceFile.bind(host);
   const fileExists = host.fileExists.bind(host);
-  host.getSourceFile = (name, language, ...rest) =>
-    resolve(name) === CONSUMER
-      ? ts.createSourceFile(name, source, language, true, ts.ScriptKind.TS)
-      : getSourceFile(name, language, ...rest);
+  host.getSourceFile = (name, language, onError, fresh) => {
+    if (resolve(name) === CONSUMER)
+      return ts.createSourceFile(name, source, language, true, ts.ScriptKind.TS);
+    const key = keyOf(name, language);
+    if (fresh !== true && parsedFiles.has(key)) return parsedFiles.get(key);
+    const file = getSourceFile(name, language, onError, fresh);
+    parses += 1;
+    parsedFiles.set(key, file);
+    return file;
+  };
   host.fileExists = (name) => resolve(name) === CONSUMER || fileExists(name);
   const program = ts.createProgram([CONSUMER], options, host);
   const consumer = program.getSourceFile(CONSUMER);
