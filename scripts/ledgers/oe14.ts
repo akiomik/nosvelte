@@ -14,8 +14,8 @@ export default {
   subject: '`B5-C6` (event ownership): its landing, `OE14`',
   files: ['src/tests/contracts/engine/ownership.test.ts'],
   calibration: {
-    measured: 'at 807ea1e, one worker, on a shared 10-core machine',
-    seconds: { OE14: 15 }
+    measured: 'at c2829ab, one worker, on a shared 10-core machine',
+    seconds: { OE14: 10 }
   },
   entries: [
     {

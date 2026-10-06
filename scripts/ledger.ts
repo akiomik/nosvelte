@@ -42,9 +42,10 @@
  * applied, the files' contents are written to a marker in the system's
  * temporary directory. They are restored, and read back, after the run,
  * however the run ends — on SIGINT and SIGTERM too, which is why the arm runs
- * in a child process the runner awaits rather than blocks on. A run that was
- * killed outright leaves the marker, and the next start refuses until
- * `restore` puts the files back.
+ * in a child process the runner awaits rather than blocks on, and stops with
+ * the runner. A run that was killed outright leaves the marker, and its
+ * Vitest process may run on; the next start refuses, before reading any
+ * anchor, until `restore` puts the files back.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -406,10 +407,6 @@ async function runCommand(
   chosen: readonly Entry[],
   flags: Map<string, string>
 ): Promise<void> {
-  if (existsSync(MARKER))
-    fail(
-      `a previous run left files mutated (${MARKER}); run \`node scripts/ledger.ts restore\` first`
-    );
   const options = optionsOf(flags);
   const revision = git('rev-parse', 'HEAD');
   const dirty = git('status', '--porcelain', '--untracked-files=no') !== '';
@@ -523,7 +520,9 @@ function tableCommand(ledger: Ledger, results: string): void {
       result === undefined
         ? 'not run'
         : result['verdict'] === 'killed'
-          ? String(result['message']).replace(/: expected[\s\S]*$/, '')
+          ? String(result['message'])
+              .replace(/^AssertionError: /, '')
+              .replace(/: expected[\s\S]*$/, '')
           : String(result['verdict']);
     return `| ${cell(entry.describe ?? entry.id)} | \`${entry.arm}\` | ${cell(outcome)} |`;
   });
@@ -544,6 +543,12 @@ async function main(): Promise<void> {
     } else positional.push(arg);
   }
   if (command === 'restore') return restoreCommand();
+  // Before any anchor is read: a run killed outright leaves its edits in
+  // the tree, and an anchor check would report them as missing anchors.
+  if (existsSync(MARKER))
+    fail(
+      `a previous run left files mutated (${MARKER}); run \`node scripts/ledger.ts restore\` first`
+    );
   const [name, ...ids] = positional;
   if (command === undefined || name === undefined)
     fail('usage: node scripts/ledger.ts plan|run|table|restore <ledger> [ids…]');
