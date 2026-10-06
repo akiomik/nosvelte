@@ -28,43 +28,44 @@ export interface ConsumerDiagnostic {
 }
 
 /**
- * The project's compiler options, read once a process: the configuration does
- * not change while an arm runs.
+ * The project's compiler options, read for every program: about 7 ms, and a
+ * configuration edited while a process lives is read as edited.
  */
-let projectOptions: ts.CompilerOptions | undefined;
 function optionsOfProject(): ts.CompilerOptions {
-  if (projectOptions === undefined) {
-    const read = ts.readConfigFile(resolve(ROOT, 'tsconfig.json'), (path) => ts.sys.readFile(path));
-    const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT);
-    projectOptions = { ...parsed.options, noEmit: true };
-  }
-  return projectOptions;
+  const read = ts.readConfigFile(resolve(ROOT, 'tsconfig.json'), (path) => ts.sys.readFile(path));
+  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT);
+  return { ...parsed.options, noEmit: true };
 }
 
 /**
- * **Every file a program reads but the consumer's, parsed once a process.**
- * A program is built per question — an arm asks dozens — and each used to
- * parse the same few hundred files again: the default library, the
- * dependencies' declarations and this library's source. Measured on `PB13`,
- * that was 30 s of its 67, 85 programs at about 490 files each. None of
- * them changes while an arm runs, so the file the next program would parse is
- * the one already parsed, and a parsed file is shared the way the language
- * service shares one between programs. **Keyed by the file's modification time
- * too**, so a process that outlives an edit — a watch run, a mutation applied
- * while a worker is alive — parses the edited file rather than answering for
- * the old one. The consumer's file is the question, and is parsed every time.
+ * **Every file a program reads but the consumer's, parsed once while it is
+ * unchanged.** A program is built per question — an arm asks dozens — and
+ * each used to parse the same few hundred files again: the default library,
+ * the dependencies' declarations and this library's source. Measured on
+ * `PB13`, that was 30 s of its 67: 85 programs at about 490 files each.
+ *
+ * A parsed file is shared between programs the way the language service
+ * shares one, and it is reused only for the text it was parsed from: each
+ * program reads the file and compares, so an edit is parsed whatever its
+ * modification time says. One parsed version is kept for each file, the
+ * current one; a file that could not be read is not remembered; and the
+ * whole store is keyed by the compiler options, which decide how a file is
+ * parsed and bound. The consumer's file is the question, and is parsed every
+ * time.
  */
-const parsedFiles = new Map<string, ts.SourceFile | undefined>();
-const keyOf = (name: string, language: ts.ScriptTarget | ts.CreateSourceFileOptions): string => {
-  const modified = String(ts.sys.getModifiedTime?.(name)?.getTime());
-  return typeof language === 'object'
-    ? `${name}\0${modified}\0${language.languageVersion}\0${String(language.impliedNodeFormat)}\0${String(language.jsDocParsingMode)}`
-    : `${name}\0${modified}\0${language}`;
-};
+const parsedFiles = new Map<string, ts.SourceFile>();
+const keyOf = (
+  options: string,
+  name: string,
+  language: ts.ScriptTarget | ts.CreateSourceFileOptions
+): string =>
+  typeof language === 'object'
+    ? `${options}\0${name}\0${language.languageVersion}\0${String(language.impliedNodeFormat)}\0${String(language.jsDocParsingMode)}`
+    : `${options}\0${name}\0${language}`;
 
-/** How many times the probe has parsed a file in this process, the consumer's apart. */
-let parses = 0;
-export const parsedFileCount = (): number => parses;
+/** How many project files the probe has parsed, and how many consumers' files it has created, in this process. */
+const parses = { files: 0, consumers: 0 };
+export const probeParses = (): { files: number; consumers: number } => ({ ...parses });
 
 /**
  * A program over `source` written as a consumer's file inside the project,
@@ -73,17 +74,26 @@ export const parsedFileCount = (): number => parses;
  */
 function programOver(source: string): { program: ts.Program; consumer: ts.SourceFile } {
   const options = optionsOfProject();
+  const optionsKey = JSON.stringify(options);
   const host = ts.createCompilerHost(options);
   const getSourceFile = host.getSourceFile.bind(host);
   const fileExists = host.fileExists.bind(host);
+  const readFile = host.readFile.bind(host);
   host.getSourceFile = (name, language, onError, fresh) => {
-    if (resolve(name) === CONSUMER)
-      return ts.createSourceFile(name, source, language, true, ts.ScriptKind.TS);
-    const key = keyOf(name, language);
-    if (fresh !== true && parsedFiles.has(key)) return parsedFiles.get(key);
+    if (resolve(name) === CONSUMER) {
+      const created = ts.createSourceFile(name, source, language, true, ts.ScriptKind.TS);
+      parses.consumers += 1;
+      return created;
+    }
+    const key = keyOf(optionsKey, name, language);
+    const text = readFile(name);
+    const held = parsedFiles.get(key);
+    if (fresh !== true && held !== undefined && text !== undefined && held.text === text)
+      return held;
     const file = getSourceFile(name, language, onError, fresh);
-    parses += 1;
-    parsedFiles.set(key, file);
+    parses.files += 1;
+    if (file === undefined) parsedFiles.delete(key);
+    else parsedFiles.set(key, file);
     return file;
   };
   host.fileExists = (name) => resolve(name) === CONSUMER || fileExists(name);
