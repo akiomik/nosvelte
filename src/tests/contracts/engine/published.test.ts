@@ -57,6 +57,7 @@ import {
 import { useRelayDiagnostics } from '$lib/v1/diagnostics.svelte.js';
 import { IncompleteResultError, type ReqHandle } from '$lib/v1/engine.js';
 import { beginAttempt, emptyEventSet, noteFailure } from '$lib/v1/eventset.js';
+import * as Entry from '$lib/v1/index.js';
 import { UnsupportedFilterError } from '$lib/v1/key.js';
 import { InvalidDescriptorError } from '$lib/v1/normalize.js';
 import { capture, providerDisposed, ReqFailure } from '$lib/v1/own.js';
@@ -2954,6 +2955,23 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'a comment describing a replaced design'
       ).toEqual([]);
 
+      // **The entry's own hooks and components are outside the population**,
+      // and open: a consumer imports them, no hook publishes them. The row
+      // says so, and this pins it — closing one is a change to that sentence.
+      const entryValues = [...MAIN_SURFACE.hooks, ...MAIN_SURFACE.components].map(
+        (name) => [name, (Entry as Record<string, unknown>)[name]] as const
+      );
+      expect(
+        entryValues.filter(([, value]) => typeof value !== 'function').map(([name]) => name),
+        'the premise: every hook and component the entry exports is a function'
+      ).toEqual([]);
+      expect(
+        entryValues
+          .filter(([, value]) => !Reflect.isExtensible(value as object))
+          .map(([name]) => name),
+        'the entry’s hooks and components are open, as the row prices'
+      ).toEqual([]);
+
       // **The interfaces the discipline is told about, against the types**:
       // `useReq()`'s handle is `ReqHandle` member for member, the engine's is
       // that and its two seams, and `useRelayDiagnostics()` answers its type.
@@ -3094,9 +3112,11 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           ),
           `the probe’s control: a command’s type on a snapshot, met ${order} the command`
         ).toContain('void value.effect!.call;');
-      const handedBy = (imports: string, typeText: string): string[] | string => {
+      // How many arguments the reader finds, or what it reports — a string
+      // either way, so a control expecting one fails on the other by name.
+      const handedBy = (imports: string, typeText: string): string => {
         try {
-          return handedArgumentsOf(imports, [typeText]).handed;
+          return `${handedArgumentsOf(imports, [typeText]).handed.length} handed`;
         } catch (thrown) {
           return (thrown as Error).message;
         }
@@ -3108,14 +3128,14 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           '{ onsettled?: (settled: { readonly n: number }, also: { readonly m: number }) => void; children: Snippet<[{ readonly s: string }, { readonly t: string }]> }'
         ),
         'the probe’s control: a callback prop and a snippet, each handed two arguments'
-      ).toHaveLength(4);
+      ).toBe('4 handed');
       expect(
         handedBy(
           snippet,
           '({ kind: "a"; children: Snippet<[{ readonly a: number }]> } | { kind: "b"; only?: (handed: { readonly b: number }) => void }) & { on?: { settled?: (events: { readonly c: number }) => void }; as?: new (made: { readonly d: number }) => unknown }'
         ),
         'the probe’s control: a prop one variant holds, one inside a prop, and a class'
-      ).toHaveLength(4);
+      ).toBe('4 handed');
       // Inside a prop, a callback is read through every shape that can hold
       // one: a union, an intersection, a list, a tuple, and a hook's
       // parameters.
@@ -3142,18 +3162,18 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(
           handedBy('export {};', typeText),
           `the probe’s control: a callback inside ${shape}`
-        ).toHaveLength(1);
+        ).toBe('1 handed');
       expect(
         handedBy(
           'export {};',
           '{ fn: ((x: { n: number[] }) => void) & { inner: (y: { m: number[] }) => void } }'
         ),
         'the probe’s control: a callback and one it holds'
-      ).toHaveLength(2);
+      ).toBe('2 handed');
       expect(
         handedBy('export {};', '{ a: { b: { c: { d: (x: { n: number }) => void } } } }'),
         'the probe’s control: a callback at the depth the probe reads'
-      ).toHaveLength(1);
+      ).toBe('1 handed');
       expect(
         handedBy('export {};', '{ a: { b: { c: { d: { e: (x: { n: number }) => void } } } } }'),
         'the probe’s control: a callback past it is reported'
