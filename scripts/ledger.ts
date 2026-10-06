@@ -13,7 +13,7 @@
  * entries at once.
  *
  *     node scripts/ledger.ts plan  <ledger> [ids…]  — checks, counts, estimate; runs nothing
- *     node scripts/ledger.ts run   <ledger> [ids…] [--out file] [--resume file] [--workers n] [--nice n]
+ *     node scripts/ledger.ts run   <ledger> [ids…] [--out file] [--resume file] [--workers n] [--nice n] [--limit s]
  *     node scripts/ledger.ts table <ledger> <results>  — the markdown table a PR quotes
  *     node scripts/ledger.ts restore                   — undo what an interrupted run left applied
  *
@@ -22,8 +22,9 @@
  * - `killed`: the entry's arm ran and failed;
  * - `survived`: the arm ran and passed;
  * - `error`: the arm never ran, because its file failed to load or the
- *   filter matched nothing. An error is not a kill. A mutation that breaks the
- *   build tells nothing about the clause the arm holds.
+ *   filter matched nothing, or the run was stopped at `--limit` (default
+ *   300 s). An error is not a kill. A mutation that breaks the build, or hangs
+ *   it, tells nothing about the clause the arm holds.
  *
  * A failure from a timed-out test is a kill flagged `timedOut`, since a loaded
  * machine can produce one. The arms of the selected entries must all pass
@@ -59,6 +60,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VITEST = join(ROOT, 'node_modules/.bin/vitest');
@@ -193,6 +195,8 @@ let running: ReturnType<typeof spawn> | undefined;
 interface Options {
   readonly workers: number;
   readonly nice: number | undefined;
+  /** Seconds a run may take before it is stopped and recorded as an error. */
+  readonly limit: number;
 }
 
 /**
@@ -218,9 +222,28 @@ function runArms(ledger: Ledger, arms: readonly string[], options: Options): Pro
   return new Promise((done) => {
     const child = spawn(command as string, rest, { cwd: ROOT, stdio: 'ignore' });
     running = child;
+    // **A run that never ends is stopped, not waited on**: a mutation can
+    // put an arm in a loop no test timeout interrupts, since a synchronous
+    // loop never yields to one. It is an error, not a kill — what the arm
+    // would have said is unknown.
+    let stopped = false;
+    const timer = setTimeout(() => {
+      stopped = true;
+      child.kill('SIGKILL');
+    }, options.limit * 1000);
     child.on('close', () => {
+      clearTimeout(timer);
       running = undefined;
-      done(resultsOf(report, arms));
+      done(
+        stopped
+          ? arms.map((arm) => ({
+              arm,
+              verdict: 'error',
+              timedOut: false,
+              message: `the run was stopped after ${options.limit} s`
+            }))
+          : resultsOf(report, arms)
+      );
       rmSync(directory, { recursive: true, force: true });
     });
   });
@@ -239,7 +262,7 @@ interface Report {
 }
 
 const firstLine = (text: string): string =>
-  (text.replace(/\u001b\[[0-9;]*m/g, '').split('\n')[0] ?? '').trim();
+  (stripVTControlCharacters(text).split('\n')[0] ?? '').trim();
 
 function resultsOf(report: string, arms: readonly string[]): ArmResult[] {
   let parsed: Report;
@@ -332,7 +355,9 @@ function optionsOf(flags: Map<string, string>): Options {
   const nice = niceness === undefined ? undefined : Number(niceness);
   if (nice !== undefined && (!Number.isInteger(nice) || nice < 0 || nice > 20))
     fail('--nice takes 0 to 20');
-  return { workers, nice };
+  const limit = Number(flags.get('limit') ?? '300');
+  if (!Number.isFinite(limit) || limit <= 0) fail('--limit takes seconds, above 0');
+  return { workers, nice, limit };
 }
 
 /** Seconds the calibration expects one run of `arms` to take: an upper bound, start-up counted once per arm. */
