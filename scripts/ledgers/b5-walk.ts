@@ -7,7 +7,9 @@
  * edit of the fold or of the bound and the arm it must fail. Moved here from
  * #141, where it was attached as a script, at 807ea1e. An id ending `@ARM`
  * holds one mutation against one of several arms; the runner runs such a
- * mutation once.
+ * mutation once. An entry of `ES6d` or `ES6f` requires both to fail, as the
+ * script did: they hold one clause, under a still clock and under one that
+ * moves between arrivals.
  */
 import type { Ledger } from '../ledger.ts';
 
@@ -268,6 +270,7 @@ export default {
     {
       id: 'C4-keep-latest-arrival',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -279,6 +282,7 @@ export default {
     {
       id: 'C5-keep-latest-arrival',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -378,6 +382,7 @@ export default {
     {
       id: 'C4-keep-oldest',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -389,6 +394,7 @@ export default {
     {
       id: 'C5-expiry-ranked',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -411,6 +417,7 @@ export default {
     {
       id: 'X2-older-wins@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -466,6 +473,7 @@ export default {
     {
       id: 'Y1-replaceable-by-id@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -477,6 +485,7 @@ export default {
     {
       id: 'Y1-replaceable-by-id@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -488,6 +497,7 @@ export default {
     {
       id: 'Y2-older-wins@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -499,6 +509,7 @@ export default {
     {
       id: 'Y3-bound-tie-reversed',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -598,6 +609,7 @@ export default {
     {
       id: 'Z6-low-replaceable-by-id@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -609,6 +621,7 @@ export default {
     {
       id: 'Z6-low-replaceable-by-id@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -620,6 +633,7 @@ export default {
     {
       id: 'Z6-addressable-by-id@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -631,6 +645,7 @@ export default {
     {
       id: 'Z6-addressable-by-id@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -719,6 +734,7 @@ export default {
     {
       id: 'W5-kind-3-by-id@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -730,6 +746,7 @@ export default {
     {
       id: 'W5-kind-3-by-id@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -774,6 +791,7 @@ export default {
     {
       id: 'V2-content-before-id-in-bound',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -796,6 +814,7 @@ export default {
     {
       id: 'V3-first-named-d@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -807,6 +826,7 @@ export default {
     {
       id: 'V3-first-named-d@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -818,6 +838,7 @@ export default {
     {
       id: 'V4-last-d@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -906,6 +927,7 @@ export default {
     {
       id: 'U1-tag-name-case-folded@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -917,6 +939,7 @@ export default {
     {
       id: 'U1-tag-name-case-folded@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -972,6 +995,7 @@ export default {
     {
       id: '15-1-bound-filters-by-payload',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -983,6 +1007,7 @@ export default {
     {
       id: '15-1s1-bound-filters-by-payload',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -994,6 +1019,7 @@ export default {
     {
       id: '15-1s2-bound-filters-by-payload',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -1005,6 +1031,7 @@ export default {
     {
       id: '15-1s3-bound-filters-by-payload',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -1016,6 +1043,7 @@ export default {
     {
       id: '15-1s4-bound-filters-by-payload',
       arm: 'ES6d',
+      requires: ['ES6f'],
       edits: [
         {
           file: 'src/lib/v1/eventset.ts',
@@ -1055,6 +1083,7 @@ export default {
     {
       id: 'W4-older-from-elsewhere@ES6d',
       arm: 'ES6d',
+      requires: ['ES6f'],
       reason:
         "Equivalent on every input: the fold's input never carries a relay, so a key or a winner that reads one cannot differ (retired in #139).",
       edits: [
@@ -1068,6 +1097,7 @@ export default {
     {
       id: 'W4-older-from-elsewhere@ES6f',
       arm: 'ES6f',
+      requires: ['ES6d'],
       reason:
         "Equivalent on every input: the fold's input never carries a relay, so a key or a winner that reads one cannot differ (retired in #139).",
       edits: [
