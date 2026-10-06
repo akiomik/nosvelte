@@ -3,23 +3,16 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * The compile probe's own behaviour, where no arm can see it: the files it
- * parses once while they are unchanged, and the files it parses again.
+ * parses once while they are unchanged, the files it parses again, and the
+ * files it lets go.
  */
-import {
-  chmodSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  utimesSync,
-  writeFileSync
-} from 'node:fs';
+import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { consumerDiagnostics, probeParses } from './helpers/declarations.js';
+import { consumerDiagnostics, HELD_FOR, probeParses, probeReader } from './helpers/declarations.js';
 
 /** A module in a directory of its own, and a consumer's line that reads it. */
 function heldModule(): { file: string; asked: string; done: () => void } {
@@ -35,52 +28,81 @@ function heldModule(): { file: string; asked: string; done: () => void } {
 }
 
 const codesOf = (source: string): number[] => consumerDiagnostics(source).map((one) => one.code);
+const ALONE = 'export const alone: number = 1;\n';
+/** A full window of questions that import nothing: what is held after it is `ALONE`'s files alone. */
+const settle = (): number => {
+  for (let at = 0; at < HELD_FOR; at += 1) consumerDiagnostics(ALONE);
+  return probeParses().held;
+};
 
 describe('the probe’s parsed files', () => {
-  it('a second question parses no project file again, and the consumer’s every time', () => {
-    const question = 'export const one: number = 1;\n';
-    consumerDiagnostics(question);
+  it('a second question parses no project file again, and holds no question', () => {
+    consumerDiagnostics(ALONE);
     const first = probeParses();
-    expect(first.files, 'the premise: the project’s files were parsed').toBeGreaterThan(100);
-    consumerDiagnostics(question);
-    expect(
-      probeParses(),
-      'the same question again: the project as parsed, the consumer anew'
-    ).toEqual({
-      files: first.files,
-      consumers: first.consumers + 1
-    });
+    expect(first.held, 'the premise: the project’s files are held').toBeGreaterThan(100);
+    consumerDiagnostics('export const other: string = "other";\n');
+    expect(probeParses(), 'another question: nothing parsed, nothing more held').toEqual(first);
+    // And for longer than the window: a file every question reads stays held.
+    for (let at = 0; at < 2 * HELD_FOR; at += 1) consumerDiagnostics(ALONE);
+    expect(probeParses(), 'two windows of questions later: still nothing parsed again').toEqual(
+      first
+    );
   });
 
-  it('a file whose text changed is parsed again, whatever its modification time says', () => {
+  it('a file whose text changed is parsed again, under the very same timestamp', () => {
     const held = heldModule();
     try {
       writeFileSync(held.file, 'export type Held = number;\n');
+      // A whole second, so the time is exactly what was set on any filesystem.
+      const at = new Date(Math.floor(Date.now() / 1000) * 1000);
+      utimesSync(held.file, at, at);
+      const stamped = statSync(held.file, { bigint: true }).mtimeNs;
       expect(codesOf(held.asked), 'the premise: the file as first written').toEqual([]);
-      const { atime, mtime } = statSync(held.file);
       writeFileSync(held.file, 'export type Held = string;\n');
-      // The edit carries the old timestamps, so only the text tells it apart.
-      utimesSync(held.file, atime, mtime);
-      expect(statSync(held.file).mtimeMs, 'the premise: the time is the old one').toBe(
-        mtime.getTime()
-      );
+      utimesSync(held.file, at, at);
+      expect(
+        statSync(held.file, { bigint: true }).mtimeNs,
+        'the premise: the edit carries the first write’s timestamp, to the nanosecond'
+      ).toBe(stamped);
       expect(codesOf(held.asked), 'the file as edited, parsed again').toEqual([2322]);
     } finally {
       held.done();
     }
   });
 
-  it('a file that could not be read is not remembered', () => {
+  it('a held file that can no longer be read is let go, and read again once it can', () => {
+    const held = heldModule();
+    const read = probeReader.read;
+    try {
+      writeFileSync(held.file, 'export type Held = number;\n');
+      const without = settle();
+      expect(codesOf(held.asked), 'the premise: the file read').toEqual([]);
+      expect(probeParses().held, 'the premise: and held').toBe(without + 1);
+      // A read that fails for every user, root included, which a file mode
+      // does not give.
+      probeReader.read = (name) => (name === held.file ? undefined : read(name));
+      expect(codesOf(held.asked), 'unreadable, it is not found').toEqual([2307]);
+      expect(probeParses().held, 'and no longer held').toBe(without);
+      probeReader.read = read;
+      expect(codesOf(held.asked), 'readable again, it is read').toEqual([]);
+    } finally {
+      probeReader.read = read;
+      held.done();
+    }
+  });
+
+  it('a file no recent question asked for is let go', () => {
     const held = heldModule();
     try {
       writeFileSync(held.file, 'export type Held = number;\n');
-      chmodSync(held.file, 0o000);
-      expect(() => readFileSync(held.file), 'the premise: the file cannot be read').toThrow();
-      expect(codesOf(held.asked), 'the premise: unreadable, it is not found').toEqual([2307]);
-      chmodSync(held.file, 0o644);
-      expect(codesOf(held.asked), 'readable again, it is read').toEqual([]);
+      const without = settle();
+      expect(codesOf(held.asked), 'the premise: the file read').toEqual([]);
+      expect(probeParses().held, 'the premise: and held').toBe(without + 1);
+      for (let at = 1; at < HELD_FOR; at += 1) consumerDiagnostics(ALONE);
+      expect(probeParses().held, 'held while a recent question read it').toBe(without + 1);
+      consumerDiagnostics(ALONE);
+      expect(probeParses().held, 'let go once none of the last questions did').toBe(without);
     } finally {
-      chmodSync(held.file, 0o644);
       held.done();
     }
   });

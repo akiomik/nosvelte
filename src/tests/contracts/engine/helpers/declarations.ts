@@ -45,27 +45,39 @@ function optionsOfProject(): ts.CompilerOptions {
  * `PB13`, that was 30 s of its 67: 85 programs at about 490 files each.
  *
  * A parsed file is shared between programs the way the language service
- * shares one, and it is reused only for the text it was parsed from: each
- * program reads the file and compares, so an edit is parsed whatever its
- * modification time says. One parsed version is kept for each file, the
- * current one; a file that could not be read is not remembered; and the
- * whole store is keyed by the compiler options, which decide how a file is
- * parsed and bound. The consumer's file is the question, and is parsed every
- * time.
+ * shares one, and only for the text it was parsed from: each program reads
+ * every file it needs and compares, so an edit is parsed again whatever its
+ * modification time says — the reading, decoding and comparing are paid every
+ * time, the parsing only on a change. **What is held is what the last
+ * {@link HELD_FOR} programs read**: a file none of them asked for is dropped,
+ * and so is one a program could not read, so the store is bounded by the files
+ * of a few programs — and an arm that alternates between questions with
+ * different imports does not parse either side's files again each time. A
+ * change of the compiler options, which decide how a file is parsed and bound,
+ * empties it. The consumer's file is the question, and is never held.
  */
-const parsedFiles = new Map<string, ts.SourceFile>();
-const keyOf = (
-  options: string,
-  name: string,
-  language: ts.ScriptTarget | ts.CreateSourceFileOptions
-): string =>
+export const HELD_FOR = 32;
+let held = { options: '', files: new Map<string, { file: ts.SourceFile; asked: number }>() };
+let programs = 0;
+const keyOf = (name: string, language: ts.ScriptTarget | ts.CreateSourceFileOptions): string =>
   typeof language === 'object'
-    ? `${options}\0${name}\0${language.languageVersion}\0${String(language.impliedNodeFormat)}\0${String(language.jsDocParsingMode)}`
-    : `${options}\0${name}\0${language}`;
+    ? `${name}\0${language.languageVersion}\0${String(language.impliedNodeFormat)}\0${String(language.jsDocParsingMode)}`
+    : `${name}\0${language}`;
 
-/** How many project files the probe has parsed, and how many consumers' files it has created, in this process. */
-const parses = { files: 0, consumers: 0 };
-export const probeParses = (): { files: number; consumers: number } => ({ ...parses });
+/**
+ * Where the probe reads a project file: the platform's reader, which an arm may
+ * stand in for — to make a read fail as no file permission can for every user.
+ */
+export const probeReader = {
+  read: (name: string): string | undefined => ts.sys.readFile(name)
+};
+
+/** How many project files the probe has parsed in this process, and how many it holds. */
+let parsed = 0;
+export const probeParses = (): { parsed: number; held: number } => ({
+  parsed,
+  held: held.files.size
+});
 
 /**
  * A program over `source` written as a consumer's file inside the project,
@@ -74,30 +86,37 @@ export const probeParses = (): { files: number; consumers: number } => ({ ...par
  */
 function programOver(source: string): { program: ts.Program; consumer: ts.SourceFile } {
   const options = optionsOfProject();
-  const optionsKey = JSON.stringify(options);
+  const signature = JSON.stringify(options);
+  if (signature !== held.options) held = { options: signature, files: new Map() };
+  const files = held.files;
+  const now = (programs += 1);
   const host = ts.createCompilerHost(options);
-  const getSourceFile = host.getSourceFile.bind(host);
   const fileExists = host.fileExists.bind(host);
-  const readFile = host.readFile.bind(host);
-  host.getSourceFile = (name, language, onError, fresh) => {
-    if (resolve(name) === CONSUMER) {
-      const created = ts.createSourceFile(name, source, language, true, ts.ScriptKind.TS);
-      parses.consumers += 1;
-      return created;
+  host.readFile = (name) => (resolve(name) === CONSUMER ? source : probeReader.read(name));
+  host.getSourceFile = (name, language, _onError, fresh) => {
+    if (resolve(name) === CONSUMER)
+      return ts.createSourceFile(name, source, language, true, ts.ScriptKind.TS);
+    const key = keyOf(name, language);
+    // Read once, and parsed from what was read: what the host's own
+    // `getSourceFile` would do, without its second read.
+    const text = probeReader.read(name);
+    if (text === undefined) {
+      files.delete(key);
+      return undefined;
     }
-    const key = keyOf(optionsKey, name, language);
-    const text = readFile(name);
-    const held = parsedFiles.get(key);
-    if (fresh !== true && held !== undefined && text !== undefined && held.text === text)
-      return held;
-    const file = getSourceFile(name, language, onError, fresh);
-    parses.files += 1;
-    if (file === undefined) parsedFiles.delete(key);
-    else parsedFiles.set(key, file);
+    const kept = files.get(key);
+    if (fresh !== true && kept?.file.text === text) {
+      kept.asked = now;
+      return kept.file;
+    }
+    const file = ts.createSourceFile(name, text, language);
+    parsed += 1;
+    files.set(key, { file, asked: now });
     return file;
   };
   host.fileExists = (name) => resolve(name) === CONSUMER || fileExists(name);
   const program = ts.createProgram([CONSUMER], options, host);
+  for (const [key, one] of files) if (now - one.asked >= HELD_FOR) files.delete(key);
   const consumer = program.getSourceFile(CONSUMER);
   if (consumer === undefined) throw new Error('the consumer file was not compiled');
   return { program, consumer };
