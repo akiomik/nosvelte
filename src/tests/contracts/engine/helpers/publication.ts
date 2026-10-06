@@ -25,10 +25,12 @@
  * cannot read off a descriptor. And it cannot see behaviour at all: a frozen
  * function that changes a closure is a command, and a command's effects are its
  * own contract (`refresh()` is meant to change shared state). So a function is
- * admitted in three places only — a command a live interface names, a getter's
- * own function object, and a live interface that is itself a function
- * (`useSend()`'s) — and what a command resolves with is checked by calling it,
- * in the arrangement, as a value.
+ * admitted in four places only — a command a live interface names, a getter's
+ * own function object, a live interface that is itself a function
+ * (`useSend()`'s), and a library class reached as its prototype's
+ * `constructor`, the one function a consumer may construct — and what a
+ * command resolves with is checked by calling it, in the arrangement, as a
+ * value.
  *
  * **Two roles, and what they carry.** A *snapshot* — a state, a diagnostics
  * value, an outcome, an Error, a refusal, an outlet's argument — is a closed
@@ -46,12 +48,14 @@
  * the language defines them: a consumer who rewrites `Array.prototype.map`,
  * `WeakSet.prototype.has` or `Error`'s `Symbol.hasInstance` changes what every
  * reader of every value computes, this library's decisions included, and that
- * is outside `B5-C8` rather than a write *through a published value*. Every prototype on a value's chain that is not the
- * platform's — this library's classes, reached as `error.constructor` — is read
- * like any other object: closed, its methods and its class closed as functions,
- * and no object data and no accessor every instance would inherit. And an
- * inherited **setter** runs on assignment even when the receiver is frozen, so
- * every setter on the chain is read, the platform's included.
+ * is outside `B5-C8` rather than a write *through a published value*. Every
+ * prototype on a value's chain that is not the platform's — this library's
+ * classes' — is read like any other object: closed, holding its class and
+ * nothing else, and its class, reached as `error.constructor`, closed as a
+ * function. And an inherited **setter** runs on assignment even when the
+ * receiver is frozen, so every setter on the chain is read, the platform's
+ * included: a setter a consumer installed on a built-in is not assumed away
+ * where a published value inherits it.
  *
  * **What reflection cannot see.** A host object keeps its state in internal
  * slots or private fields that no descriptor shows. Those `util.types` can name
@@ -302,7 +306,9 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
             Reflect.getOwnPropertyDescriptor(held, 'prototype')?.value !== value
           )
             found.push(`${where}: a constructor that is not this prototype's class`);
-          if (typeof held === 'function') visit(held, where, 'function');
+          // Walked either way: a class as a function, and anything else in its
+          // place as the value every instance reaches it as.
+          visit(held, where, typeof held === 'function' ? 'function' : 'value');
         } else {
           visit(held, where, 'value');
         }

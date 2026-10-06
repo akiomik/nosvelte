@@ -228,19 +228,10 @@ export function writesThroughEach(
 }
 
 /**
- * Every list the walk of {@link writesThroughEach} meets, for each type: where
- * a consumer's line reaches it — so an arm can ask a question of every
+ * {@link writesThroughEach}'s writes, and every list site the walk meets —
+ * where a consumer's line reaches it — so an arm can ask a question of every
  * published list rather than of the ones somebody wrote down.
  */
-export function listsThroughEach(
-  imports: string,
-  typeTexts: readonly string[],
-  options: WalkOptions = {}
-): ListSite[][] {
-  return walkEach(imports, typeTexts, options).lists;
-}
-
-/** {@link writesThroughEach} and {@link listsThroughEach} from one walk. */
 export function walkEach(
   imports: string,
   typeTexts: readonly string[],
@@ -278,11 +269,12 @@ export function walkEach(
   // `Set`'s, are TypeScript's declarations: not the event's data, and shared
   // by every value of the type, so the walk writes to their slots — which
   // must be refused — and does not walk into them. Of those that can be
-  // called, a standard read-only array operation is admitted, and only that:
-  // a member every declaration of which is the default library's
-  // `ReadonlyArray`. `Array`'s `push` is reported, a `Set`'s `add` is, and so
-  // is a member, or an overload of one, that anything else declares on the
-  // global array types — its declaration is not the default library's.
+  // called, a standard read-only collection operation is admitted, and only
+  // that: a member every declaration of which is the default library's
+  // `ReadonlyArray`, `ReadonlyMap` or `ReadonlySet`. `Array`'s `push` is
+  // reported, a `Set`'s `add` is, and so is a member, or an overload of one,
+  // that anything else declares on the global collection types — its
+  // declaration is not the default library's.
   const library = (property: ts.Symbol): readonly ts.Declaration[] | undefined => {
     const declarations = property.getDeclarations() ?? [];
     return declarations.length > 0 &&
@@ -488,9 +480,18 @@ export function walkEach(
     // Past `depth`, a value with anything inside it is reported rather than
     // passed over: returning would certify as read a list the walk never
     // reached. A primitive there has nothing to write into, and ended above.
-    if (walked.has(type) && !claimed) return;
+    // **Every list site, not every list type**: a site is where a consumer's
+    // line reaches the list, and one whose type was met elsewhere is a site
+    // all the same — the walk below goes into a type once.
+    if (checker.isArrayType(type) || checker.isTupleType(type))
+      lists.push({ guard, expression, tuple: checker.isTupleType(type) });
+    // **A function is classified where it is met, every time**: the same
+    // function type is a command under the handle and data's in a snapshot,
+    // and going into it once would let the second occurrence through as the
+    // first was judged.
+    if (walked.has(type) && !claimed && !callable(type)) return;
     if (level > depth) throw new Error(`writesThrough: ${expression} is deeper than ${depth}`);
-    if (!type.isUnion()) walked.add(type);
+    if (!type.isUnion() && !callable(type)) walked.add(type);
     if (type.isUnion()) {
       const constituents = type.types.filter(
         (one) =>
@@ -519,7 +520,6 @@ export function walkEach(
       return;
     }
     if (checker.isArrayType(type) || checker.isTupleType(type)) {
-      lists.push({ guard, expression, tuple: checker.isTupleType(type) });
       writes.push(`${guard}${expression}.push(${expression}[0]!);`);
       // Every position, not the first: a tuple's positions and its rest
       // element can each have a type of their own, so `[readonly string[],
@@ -610,14 +610,18 @@ export function walkEach(
       // It is the caller's own — a fresh one each call — so its members are
       // not walked; one with members of this library's on it would be a
       // published value the walk never asked about, and is reported.
-      if (awaited === returned)
-        throw new Error(`writesThrough: ${expression} is a command that does not return a promise`);
-      if (checker.getIndexInfosOfType(returned).length > 0)
-        throw new Error(
-          `writesThrough: ${expression} returns a promise with members of its own: an index signature`
-        );
-      {
-        const own = checker.getPropertiesOfType(returned).filter((property) => {
+      // **Each alternative it may return**, since a union's members are the
+      // ones every alternative shares, and one alternative's own would hide.
+      for (const alternative of returned.isUnion() ? returned.types : [returned]) {
+        if (checker.getAwaitedType(alternative) === alternative)
+          throw new Error(
+            `writesThrough: ${expression} is a command that does not return a promise`
+          );
+        if (checker.getIndexInfosOfType(alternative).length > 0)
+          throw new Error(
+            `writesThrough: ${expression} returns a promise with members of its own: an index signature`
+          );
+        const own = checker.getPropertiesOfType(alternative).filter((property) => {
           const declared = property.getDeclarations() ?? [];
           return !(
             declared.length > 0 &&
@@ -981,16 +985,27 @@ export function variantsWith(
 }
 
 /**
- * The argument each snippet member of `typeTexts`' types hands a consumer —
- * a component's outlets — as type texts a walk can take, one for each distinct
- * type: an outlet shared by every component that renders through it is walked
- * once rather than once a component.
+ * Every argument this library hands a consumer's code through `typeTexts` —
+ * what a snippet is rendered with, what a callback is called with, what a
+ * class is constructed with — as type texts a walk can take, one for each
+ * distinct type: an outlet shared by every component that renders through it is
+ * walked once rather than once a component.
+ *
+ * Each type is read for everything it holds that this library calls: a prop,
+ * a member of one, an element of a list, an alternative of a union. A value
+ * whose named type is in `theirs` is the consumer's, with what it is handed —
+ * not read, and returned by where it was met, so an arm asserts both edges of
+ * the exemption.
  *
  * A snippet is the published value here, not the props it sits in: the props
  * are the consumer's to write, and what the snippet is called with is the
  * library's to hand out.
  */
-export function snippetArgumentsOf(imports: string, typeTexts: readonly string[]): string[] {
+export function handedArgumentsOf(
+  imports: string,
+  typeTexts: readonly string[],
+  theirs: ReadonlySet<string> = new Set()
+): { handed: string[]; theirs: string[] } {
   const roots = typeTexts.map((_, at) => rootOf(at, typeTexts.length));
   const { program, consumer } = programOver(
     `${imports}\n${typeTexts.map((typeText, at) => `declare const ${roots[at]}: ${typeText};`).join('\n')}\n`
@@ -1001,6 +1016,7 @@ export function snippetArgumentsOf(imports: string, typeTexts: readonly string[]
     .flatMap((statement) => statement.declarationList.declarations);
   const seen = new Set<ts.Type>();
   const found: string[] = [];
+  const exempted: string[] = [];
   // A member of `text` by name, from whichever variant of it has one — a prop
   // only one variant of a union declares is a prop all the same.
   const memberText = (text: string, name: string): string => {
@@ -1011,82 +1027,168 @@ export function snippetArgumentsOf(imports: string, typeTexts: readonly string[]
     (property.getDeclarations() ?? []).some(
       (one) => !program.isSourceFileDefaultLibrary(one.getSourceFile())
     );
-  // **Every prop that can be called is one this library calls** — a
-  // snippet, a callback or a class, under whatever name or interface it is
-  // declared, at the top of the props or inside one of them — and what it is
-  // called with is handed to the consumer. A prop that cannot be called is
-  // the consumer's to write; one the probe cannot read at all is reported.
+  const plain =
+    ts.TypeFlags.StringLike |
+    ts.TypeFlags.NumberLike |
+    ts.TypeFlags.BooleanLike |
+    ts.TypeFlags.BigIntLike |
+    ts.TypeFlags.ESSymbolLike |
+    ts.TypeFlags.EnumLike |
+    ts.TypeFlags.Null |
+    ts.TypeFlags.Undefined |
+    ts.TypeFlags.Void |
+    ts.TypeFlags.Never;
+  // What one prop or callback that can be called or constructed is handed.
+  const handedBy = (held: ts.Type, text: string, label: string): void => {
+    const calls = held.getCallSignatures();
+    const constructs = held.getConstructSignatures();
+    if (calls.length + constructs.length > 1)
+      throw new Error(`handedArgumentsOf: ${label} is a prop the probe cannot read`);
+    const signature = (calls[0] ?? constructs[0]) as ts.Signature;
+    const listOf = calls.length > 0 ? 'Parameters' : 'ConstructorParameters';
+    const parameters = signature.getParameters();
+    const [only] = parameters;
+    const declared = only?.valueDeclaration;
+    // A snippet takes its arguments as one rest list; a callback, one by one.
+    const rest =
+      parameters.length === 1 &&
+      declared !== undefined &&
+      ts.isParameter(declared) &&
+      declared.dotDotDotToken !== undefined;
+    let handed: readonly ts.Type[];
+    if (rest && only !== undefined) {
+      const list = checker.getTypeOfSymbol(only);
+      // A rest list that is not a tuple is one the probe cannot read, and is
+      // reported rather than passed over as a snippet handed nothing.
+      if (!checker.isTupleType(list))
+        throw new Error(
+          `handedArgumentsOf: ${label} is handed something that is not a list of arguments`
+        );
+      handed = checker.getTypeArguments(list as ts.TypeReference);
+    } else handed = parameters.map((parameter) => checker.getTypeOfSymbol(parameter));
+    for (const [position, argument] of handed.entries()) {
+      if (seen.has(argument)) continue;
+      seen.add(argument);
+      found.push(`${listOf}<${text}>[${position}]`);
+    }
+  };
+  // **Every value a prop holds, read for what this library calls in it**:
+  // a callable is handed its arguments, a list its elements, a union each of
+  // its alternatives, an object its members. Every way this has of reading
+  // nothing is a verdict: a primitive holds nothing to call, and `any`, an
+  // `unknown`, or a value past the depth is reported rather than passed over.
+  const readHeld = (held: ts.Type, text: string, label: string, depth: number): void => {
+    if (held.getFlags() & plain) return;
+    const named = held.aliasSymbol ?? held.getSymbol();
+    if (
+      named !== undefined &&
+      theirs.has(named.getName()) &&
+      (named.getDeclarations() ?? []).some((one) =>
+        one.getSourceFile().fileName.includes('/src/lib/v1/')
+      )
+    ) {
+      exempted.push(label);
+      return;
+    }
+    if (held.getFlags() & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))
+      throw new Error(`handedArgumentsOf: ${label} is a prop the probe cannot read`);
+    if (depth > 4) throw new Error(`handedArgumentsOf: ${label} is deeper than the probe reads`);
+    // A callable is handed its arguments, and read for what it holds besides.
+    if (held.getCallSignatures().length + held.getConstructSignatures().length > 0) {
+      handedBy(held, text, label);
+      read(held, text, label, depth);
+      return;
+    }
+    if (checker.isArrayType(held) || checker.isTupleType(held)) {
+      for (const [position, element] of checker
+        .getTypeArguments(held as ts.TypeReference)
+        .entries())
+        readHeld(
+          checker.getNonNullableType(element),
+          `NonNullable<(${text})[${checker.isTupleType(held) ? position : 'number'}]>`,
+          `${label}[]`,
+          depth + 1
+        );
+      return;
+    }
+    if (held.isUnion()) {
+      const alternatives = held.types.filter((one) => (one.getFlags() & plain) === 0);
+      for (const alternative of alternatives)
+        if (alternative.getCallSignatures().length > 0)
+          handedBy(alternative, `Extract<${text}, (...args: never[]) => unknown>`, label);
+        else if (alternative.getConstructSignatures().length > 0)
+          handedBy(
+            alternative,
+            `Extract<${text}, abstract new (...args: never[]) => unknown>`,
+            label
+          );
+        else if (checker.isArrayType(alternative) || checker.isTupleType(alternative))
+          throw new Error(`handedArgumentsOf: ${label} is a union holding a list`);
+    }
+    read(held, text, label, depth);
+  };
+  // The members of `type`, from whichever variant has each — a member only one
+  // variant of a union declares is a member all the same.
   const read = (type: ts.Type, text: string, label: string, depth: number): void => {
     const variants = type.isUnion() ? type.types : [type];
     const names = new Set(
       variants
+        .filter((variant) => (variant.getFlags() & plain) === 0)
         .flatMap((variant) => checker.getPropertiesOfType(variant))
         .filter(ours)
         .map((one) => one.getName())
     );
-    for (const name of names) {
-      const member = memberText(text, name);
-      const types = variants
-        .map((variant) => checker.getPropertyOfType(variant, name))
-        .filter((one): one is ts.Symbol => one !== undefined)
-        .map((one) => checker.getNonNullableType(checker.getTypeOfSymbol(one)));
-      for (const held of types) {
-        if (held.getFlags() & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))
-          throw new Error(`snippetArgumentsOf: ${label}.${name} is a prop the probe cannot read`);
-        const calls = held.getCallSignatures();
-        const constructs = held.getConstructSignatures();
-        if (calls.length + constructs.length === 0) {
-          // An object the consumer hands in may still hold something this
-          // library calls; a list, a string or a number holds nothing of it.
-          if (
-            depth < 3 &&
-            (held.getFlags() & ts.TypeFlags.Object) !== 0 &&
-            !checker.isArrayType(held) &&
-            !checker.isTupleType(held)
-          )
-            read(held, member, `${label}.${name}`, depth + 1);
-          continue;
-        }
-        if (calls.length + constructs.length > 1)
-          throw new Error(`snippetArgumentsOf: ${label}.${name} is a prop the probe cannot read`);
-        const signature = (calls[0] ?? constructs[0]) as ts.Signature;
-        const listOf = calls.length > 0 ? 'Parameters' : 'ConstructorParameters';
-        const parameters = signature.getParameters();
-        const [only] = parameters;
-        const declared = only?.valueDeclaration;
-        // A snippet takes its arguments as one rest list; a callback, one by one.
-        const rest =
-          parameters.length === 1 &&
-          declared !== undefined &&
-          ts.isParameter(declared) &&
-          declared.dotDotDotToken !== undefined;
-        let handed: readonly ts.Type[];
-        if (rest && only !== undefined) {
-          const list = checker.getTypeOfSymbol(only);
-          // A rest list that is not a tuple is one the probe cannot read, and
-          // is reported rather than passed over as a snippet handed nothing.
-          if (!checker.isTupleType(list))
-            throw new Error(
-              `snippetArgumentsOf: ${label}.${name} is handed something that is not a list of arguments`
-            );
-          handed = checker.getTypeArguments(list as ts.TypeReference);
-        } else handed = parameters.map((parameter) => checker.getTypeOfSymbol(parameter));
-        for (const [position, argument] of handed.entries()) {
-          if (seen.has(argument)) continue;
-          seen.add(argument);
-          found.push(`${listOf}<${member}>[${position}]`);
-        }
+    for (const name of names)
+      for (const variant of variants) {
+        if (variant.getFlags() & plain) continue;
+        const property = checker.getPropertyOfType(variant, name);
+        if (property === undefined) continue;
+        readHeld(
+          checker.getNonNullableType(checker.getTypeOfSymbol(property)),
+          memberText(text, name),
+          `${label}.${name}`,
+          depth + 1
+        );
       }
-    }
   };
   for (const [at, root] of roots.entries()) {
     const declaration = declarations.find(
       (one) => ts.isIdentifier(one.name) && one.name.text === root
     );
     if (declaration === undefined) throw new Error(`the probe declared no ${root}`);
-    read(checker.getTypeAtLocation(declaration.name), typeTexts[at] as string, root, 0);
+    readHeld(checker.getTypeAtLocation(declaration.name), typeTexts[at] as string, root, 0);
   }
-  return found;
+  return { handed: found, theirs: exempted };
+}
+
+/**
+ * How many ways each of `typeTexts` can be called, and constructed — so an arm
+ * asks what a hook answers of the one signature `ReturnType` reads, rather
+ * than of the last of several.
+ */
+export function signaturesOf(
+  imports: string,
+  typeTexts: readonly string[]
+): { calls: number; constructs: number }[] {
+  const roots = typeTexts.map((_, at) => rootOf(at, typeTexts.length));
+  const { program, consumer } = programOver(
+    `${imports}\n${typeTexts.map((typeText, at) => `declare const ${roots[at]}: ${typeText};`).join('\n')}\n`
+  );
+  const checker = program.getTypeChecker();
+  const declarations = consumer.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => statement.declarationList.declarations);
+  return roots.map((root) => {
+    const declaration = declarations.find(
+      (one) => ts.isIdentifier(one.name) && one.name.text === root
+    );
+    if (declaration === undefined) throw new Error(`the probe declared no ${root}`);
+    const type = checker.getTypeAtLocation(declaration.name);
+    return {
+      calls: type.getCallSignatures().length,
+      constructs: type.getConstructSignatures().length
+    };
+  });
 }
 
 /**

@@ -11,6 +11,8 @@ import type { Snippet } from 'svelte';
 import type { ReqHandle } from '../engine.js';
 import type { ReqEvent } from '../event.js';
 import type { ReqOutletError } from '../reqerror.js';
+import type { RelayInput } from '../scope.svelte.js';
+import type { NostrSigner } from '../send.svelte.js';
 
 export interface RequestOutletContext {
   readonly request: ReqHandle;
@@ -21,6 +23,17 @@ export type Outlets<T> = {
   loading?: Snippet<[RequestOutletContext]>;
   error?: Snippet<[{ readonly request: ReqHandle; readonly error: ReqOutletError }]>;
   nodata?: Snippet<[RequestOutletContext]>;
+};
+
+/**
+ * The provider's props, here beside the request components' so that every
+ * component's props are one place a reader — and `B5-C8`'s type walk — finds
+ * them: what it calls (`children`) hands the consumer nothing.
+ */
+export type NostrAppProps = {
+  relays?: readonly RelayInput[];
+  signer?: NostrSigner;
+  children: Snippet;
 };
 
 export type Events = { readonly events: readonly ReqEvent[] };

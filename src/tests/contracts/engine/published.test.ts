@@ -30,6 +30,7 @@
  *
  * Port band 9600-9649.
  */
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,11 +88,12 @@ import {
   consumerDiagnostics,
   declaredHere,
   exportsOf,
+  handedArgumentsOf,
   judgeWrites,
   judgeWritesEach,
   type ListSite,
   memberNamesOf,
-  snippetArgumentsOf,
+  signaturesOf,
   walkEach,
   writesThrough
 } from './helpers/declarations.js';
@@ -381,7 +383,9 @@ const POPULATION = [
   'an Error a hook throws, missing-provider',
   'an Error a provider throws, missing-randomness',
   'useReq()',
+  'useReq(), refused',
   'a refresh through useReq(), incomplete',
+  'a refresh through useReq(), refused',
   'useRelayDiagnostics()',
   'useRelayDiagnostics(), a notice cut',
   'useRelayDiagnostics(), a notice that was not text',
@@ -515,8 +519,17 @@ function disciplineControls(): void {
       }
     }
   );
-  // And a class nobody closed, reached through what its instances inherit.
+  // And a class nobody closed, reached through what its instances inherit; one
+  // left open behind a closed prototype, reached as its `constructor`; and a
+  // record in the class's place, reached the same way.
   class Open extends Error {}
+  class HalfOpen extends Error {}
+  Object.freeze(HalfOpen.prototype);
+  class RecordedClass extends Error {}
+  Object.defineProperty(RecordedClass.prototype, 'constructor', {
+    value: { prototype: RecordedClass.prototype }
+  });
+  Object.freeze(RecordedClass.prototype);
   // Closed the way this library closes its own Errors: `stack` made data, then frozen.
   const owned = <T extends Error>(error: T): T => {
     Object.defineProperty(error, 'stack', { value: 'as it was', writable: false });
@@ -526,9 +539,20 @@ function disciplineControls(): void {
   const control: Discipline = {
     interfaces: new Map(),
     errors: new Set(
-      [Ours, Setting, Leaf, Sharing, Gotten, Methodical, Described, Open, Marked, Impostor].map(
-        (one) => one.prototype as object
-      )
+      [
+        Ours,
+        Setting,
+        Leaf,
+        Sharing,
+        Gotten,
+        Methodical,
+        Described,
+        Open,
+        HalfOpen,
+        RecordedClass,
+        Marked,
+        Impostor
+      ].map((one) => one.prototype as object)
     )
   };
   const breaches = (value: unknown, discipline = control): string[] =>
@@ -587,6 +611,21 @@ function disciplineControls(): void {
       'held (inherited from Methodical).describe: extensible'
     ],
     ['a class nobody closed', owned(new Open('x')), 'held (inherited from Open): extensible'],
+    [
+      'a class left open behind its closed prototype',
+      owned(new HalfOpen('x')),
+      'held (inherited from HalfOpen).constructor: extensible'
+    ],
+    [
+      'a record in the class’s place',
+      owned(new RecordedClass('x')),
+      "held (inherited from a prototype).constructor: a constructor that is not this prototype's class"
+    ],
+    [
+      'a record in the class’s place, left open',
+      owned(new RecordedClass('x')),
+      'held (inherited from a prototype).constructor: extensible'
+    ],
     [
       'a primitive every instance inherits',
       owned(new Marked('x')),
@@ -931,6 +970,34 @@ function disciplineControls(): void {
   } finally {
     Reflect.deleteProperty(Object.prototype, '__pb13Probe');
   }
+  // And the same with one dimension varied each: a symbol-keyed setter on a
+  // list's chain, and a setter of a name the language does not restrict on
+  // every function's.
+  const probe = Symbol('pb13Probe');
+  Object.defineProperty(Array.prototype, probe, { set: () => undefined, configurable: true });
+  Object.defineProperty(Function.prototype, '__pb13Probe', {
+    set: () => undefined,
+    configurable: true
+  });
+  try {
+    expect(
+      breaches(closed([])),
+      'the discipline’s control: a symbol-keyed setter the platform holds'
+    ).toContain('held: inherits a setter, Symbol(pb13Probe)');
+    expect(
+      breaches(
+        closed(() => undefined),
+        {
+          interfaces: new Map(),
+          errors: control.errors
+        }
+      ),
+      'the discipline’s control: a setter on every function’s chain, not a restricted one'
+    ).toContain('held: inherits a setter, __pb13Probe');
+  } finally {
+    Reflect.deleteProperty(Array.prototype, probe);
+    Reflect.deleteProperty(Function.prototype, '__pb13Probe');
+  }
   // **A function interface that can be constructed** — `useSend()`'s answer
   // shape, bound to a regular function — is reported, as a command is.
   const sendLike = closed(function regular() {}.bind(null));
@@ -1017,20 +1084,6 @@ const NOT_GIVEN_OUT: Readonly<Record<string, string>> = {
 };
 
 /**
- * Every write the published types let through, by type: each type the entry
- * gives out, each class's instances, what each hook answers, and what each
- * component's outlets are handed — walked by the compiler-asked probe, with a
- * handle's methods taken for its API (their slots refused, what they resolve
- * with walked).
- *
- * **The population is the entry's own, both ways.** It used to be the type
- * entry's names alone, and what a hook answers and what an outlet is handed are
- * not names there: `useRelayDiagnostics()`'s object and every snippet argument
- * were on no walk. So the entry's values are counted too — each one a hook or a
- * component the surface record names — and each component's props are read off
- * its source as one of the outlet types.
- */
-/**
  * Asked once a file: `LE16` and `PB13` both read it, and it is the costliest
  * thing either does. A run of one arm alone — as the mutation ledger runs
  * `PB13` — computes it, and so asserts everything inside it, itself.
@@ -1041,6 +1094,47 @@ function publishedTypeBreaches(): ReturnType<typeof computePublishedTypes> {
   return publishedOnce;
 }
 
+/**
+ * What this library hands a consumer's code and the consumer may write: the
+ * signer's template, fresh per call and compared with a frozen copy
+ * afterwards, so it reaches no other reader. A value of one of these types is
+ * not read for what it is handed.
+ */
+const HANDED_THEIRS: ReadonlySet<string> = new Set(['NostrSigner']);
+
+/**
+ * The type a component's `$props()` is annotated with — one name, imported
+ * from the outlets and declared nowhere in the component — or `undefined`, so
+ * a local type under an outlet type's name, an inline annotation or a second
+ * `$props()` fails the premise rather than passing on the name it shares.
+ */
+function propsTypeOf(source: string): string | undefined {
+  const named = /:\s*(\w+)\s*=\s*\$props\(\)/.exec(source)?.[1];
+  if (named === undefined || source.split('$props(').length !== 2) return undefined;
+  const imported = [...source.matchAll(/import type \{([^}]*)\} from '\.\/outlets\.js'/g)].flatMap(
+    (one) => (one[1] ?? '').split(',').map((name) => name.trim())
+  );
+  const declared = new RegExp(
+    `\\b(?:type|interface|class|enum|const|let|var|function)\\s+${named}\\b`
+  );
+  return imported.includes(named) && !declared.test(source) ? named : undefined;
+}
+
+/**
+ * Every write the published types let through, by type: each type the entry
+ * gives out, each class's instances, what each hook answers, and every
+ * argument this library hands a consumer's code — walked by the
+ * compiler-asked probe, with a handle's methods taken for its API (their slots
+ * refused, what they resolve with walked).
+ *
+ * **The population is the entry's own, both ways.** It used to be the type
+ * entry's names alone, and what a hook answers and what an outlet is handed are
+ * not names there: `useRelayDiagnostics()`'s object and every snippet argument
+ * were on no walk. So the entry's values are counted too — each one a hook or a
+ * component the surface record names — each component's props are read off
+ * its source as one of the outlet types, and what this library calls in them,
+ * in a hook's parameters and in a command's is read for what it is handed.
+ */
 function computePublishedTypes(): {
   shapes: string[];
   breaches: string[];
@@ -1057,23 +1151,57 @@ function computePublishedTypes(): {
   expect([...values].sort(), 'every value the entry exports is a hook or a component').toEqual(
     [...MAIN_SURFACE.hooks, ...MAIN_SURFACE.components].sort()
   );
-  // Each component's props are one of the outlet types — its `$props()` reads
-  // one by name — and the provider's are its own, with one snippet handed
-  // nothing (`PB13` reads its `{@render}`).
+  // **Every component's props are one of the outlet types**, the provider's
+  // included: its `$props()` reads one by name, imported from the outlets and
+  // declared nowhere in the component, so the type read below is the one the
+  // component has. In the probe's program a component is `Component<any>`, so
+  // its props are reached through its source rather than its type.
   const outletTypes = exportsOf('$lib/v1/components/outlets.js')
     .map((one) => one.name)
     .filter((name) => name.endsWith('Props'));
   const COMPONENTS = resolve(LIBRARY, 'components');
-  for (const component of MAIN_SURFACE.components.filter((one) => one !== 'NostrApp')) {
-    const annotated = /:\s*(\w+)\s*=\s*\$props\(\)/.exec(
-      readFileSync(join(COMPONENTS, `${component}.svelte`), 'utf8')
-    )?.[1];
-    expect(outletTypes, `${component}'s props are an outlet type`).toContain(annotated);
-  }
-  const outlets = snippetArgumentsOf(
+  for (const component of MAIN_SURFACE.components)
+    expect(outletTypes, `${component}'s props are an outlet type`).toContain(
+      propsTypeOf(readFileSync(join(COMPONENTS, `${component}.svelte`), 'utf8'))
+    );
+  // **A hook is one signature**, so `ReturnType` and `Parameters` read the one
+  // a consumer calls rather than the last of several; and what each answers
+  // that can be called is a command, whose parameters are read as a hook's are.
+  const hookTypes = MAIN_SURFACE.hooks.map((hook) => `typeof Published.${hook}`);
+  const answers = MAIN_SURFACE.hooks.map((hook) => `ReturnType<typeof Published.${hook}>`);
+  const counted = signaturesOf(PUBLISHED, [...hookTypes, ...answers]);
+  for (const [at, hook] of MAIN_SURFACE.hooks.entries())
+    expect(counted[at], `${hook} is one signature`).toEqual({ calls: 1, constructs: 0 });
+  const walk = { callables: 'api', commands: ['ReqHandle.refresh'], depth: 6 } as const;
+  const commandParameters = [
+    ...walk.commands.map((command) => {
+      const [holder, member] = command.split('.');
+      return `Parameters<Published.${holder}[${JSON.stringify(member)}]>`;
+    }),
+    ...answers
+      .filter((_, at) => (counted[MAIN_SURFACE.hooks.length + at]?.calls ?? 0) > 0)
+      .map((answer) => `Parameters<${answer}>`)
+  ];
+  expect(commandParameters, 'the premise: the commands whose parameters are read').toHaveLength(2);
+  // **Everything this library calls in what a consumer hands it** — each
+  // component's props, each hook's parameters and each command's — read for
+  // the arguments it is handed: a snippet's, a callback's, at any depth and in
+  // any variant. The signer is the one exemption, and both its edges are
+  // asserted: it is met, once, where the provider's props hold it.
+  const handedTo = handedArgumentsOf(
     PUBLISHED,
-    outletTypes.map((name) => `Outlets.${name}`)
+    [
+      ...outletTypes.map((name) => `Outlets.${name}`),
+      ...hookTypes.map((hook) => `Parameters<${hook}>`),
+      ...commandParameters
+    ],
+    HANDED_THEIRS
   );
+  expect(
+    handedTo.theirs.map((label) => label.replace(/^value_\d+/, '')),
+    'the exemption: the signer, where the provider’s props hold it'
+  ).toEqual(['.signer']);
+  const outlets = handedTo.handed;
   expect(outlets.length, 'the outlets’ arguments, each a type of its own').toBeGreaterThan(3);
   // **A class is two values a consumer holds**: its instances, walked here,
   // and the class itself, exported by name and reached as `error.constructor`.
@@ -1129,7 +1257,6 @@ function computePublishedTypes(): {
   // A function is a command only where the handle names one — `ReqHandle`'s
   // `refresh`, by the type that declares it — and at a root, `useSend()`'s
   // answer; anywhere else it is data's, and is reported.
-  const walk = { callables: 'api', commands: ['ReqHandle.refresh'], depth: 6 } as const;
   const { writes, lists } = walkEach(PUBLISHED, shapes, walk);
   const verdicts = judgeWritesEach(PUBLISHED, shapes, writes);
   const judged = shapes.flatMap((typeText, at) =>
@@ -1830,14 +1957,33 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       };
       // **What a command returns is the platform's `Promise` and nothing
       // more**: one with a member of its own would be a value this library
-      // hands out that no case here reads.
-      const bare = (returned: Promise<unknown>, name: string): void => {
+      // hands out that no case here reads. Asked of every `refresh()` below,
+      // each path's own, since a path may build its promise apart.
+      const bare = <T>(returned: Promise<T>, name: string): Promise<T> => {
         expect(Object.getPrototypeOf(returned), `${name}: a promise of the platform’s`).toBe(
           Promise.prototype
         );
         expect(Reflect.ownKeys(returned), `${name}: with nothing of its own`).toEqual([]);
+        return returned;
+      };
+      // An Error two readers share, written to through the first and read
+      // back through each: first shown to be one object, so an unchanged read
+      // is about this Error and not another.
+      const sharedAndKept = (
+        answer: string,
+        readers: Readonly<Record<string, () => unknown>>
+      ): void => {
+        const held = readers['the value written to']?.();
+        expect(held, `${answer}: the premise, an Error to write to`).toBeInstanceOf(Error);
+        for (const [reader, read] of Object.entries(readers))
+          expect(read(), `${answer}: the premise, ${reader} holds the same Error`).toBe(held);
+        expect(
+          writeAndReadBack(held as object, readers).reached,
+          `${answer}: a reader the consumer’s write reached`
+        ).toEqual([]);
       };
       const rejectionOf = async (pending: Promise<unknown>): Promise<unknown> => {
+        bare(pending, 'what a rejected refresh() returns');
         try {
           await pending;
         } catch (thrown) {
@@ -1927,8 +2073,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('its event outlet', outlet(held.value, true, 'event'), engine(held.value));
 
         // Two callers of one refresh hold one object (C15), so it is checked once.
-        const asked = held.value.refresh();
-        const askedAgain = held.value.refresh();
+        const asked = bare(held.value.refresh(), 'what refresh() returns');
+        const askedAgain = bare(held.value.refresh(), 'what refresh() returns');
         respondWithEose(server, await nextReqOf(server));
         const [complete, sameComplete] = await Promise.all([asked, askedAgain]);
         expect(complete.kind, 'the premise: complete').toBe('complete');
@@ -1936,13 +2082,13 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('a refresh, complete', complete);
 
         // Nobody answers, and the settle timeout closes it incomplete.
-        const timedOut = held.value.refresh();
+        const timedOut = bare(held.value.refresh(), 'what refresh() returns');
         await nextReqOf(server);
         const incomplete = await timedOut;
         expect(incomplete.kind, 'the premise: incomplete').toBe('incomplete');
         check('a refresh, incomplete', incomplete);
 
-        const released = held.value.refresh();
+        const released = bare(held.value.refresh(), 'what refresh() returns');
         await nextReqOf(server);
         held.destroy();
         const cancelled = await released;
@@ -1951,7 +2097,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           reason: 'consumer-released'
         });
         check('a refresh, cancelled because its consumer released it', cancelled);
-        const after = await held.value.refresh();
+        const after = await bare(held.value.refresh(), 'what refresh() returns');
         expect(after, 'the premise: a released handle').toEqual({
           kind: 'not-started',
           reason: 'released'
@@ -2010,7 +2156,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(first.value.state.status, 'the premise: a failed attempt').toBe('error');
         reached('unspecified', (first.value.state as { error?: unknown }).error);
         check('an attempt that failed', first.value, engine(first.value));
-        const outcome = await first.value.refresh();
+        const outcome = await bare(first.value.refresh(), 'what refresh() returns');
         expect(outcome.kind, 'the premise: error').toBe('error');
         check('a refresh, error', outcome);
         return { first, second };
@@ -2074,7 +2220,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           useStreamedReq(options('pb13-server', rxNostr, { environment: 'server' }))
         );
         await settle();
-        const outcome = await asked.value.refresh();
+        const outcome = await bare(asked.value.refresh(), 'what refresh() returns');
         expect(outcome, 'the premise: a server').toEqual({ kind: 'not-started', reason: 'server' });
         check('a refresh, not started on a server', outcome);
         refused.destroy();
@@ -2093,10 +2239,9 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         // **What a command returns is the platform's `Promise`, the caller's
         // own**: a fresh one each call, so a write to one reaches no other
         // caller. What it settles with is this library's, checked below.
-        const asked = held.value.refresh();
-        const askedAgain = held.value.refresh();
+        const asked = bare(held.value.refresh(), 'what the engine’s refresh() returns');
+        const askedAgain = bare(held.value.refresh(), 'what refresh() returns');
         expect(asked, 'the premise: a fresh promise each call').not.toBe(askedAgain);
-        bare(asked, 'what the engine’s refresh() returns');
         await askedAgain;
         const outcome = await asked;
         expect(outcome, 'the premise: deferred').toEqual({
@@ -2225,7 +2370,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           setNostrContext(built);
           return built;
         });
-        const held = mount(() =>
+        const ended = () =>
           useStreamedReq(() => ({
             namespace: 'pb13-ended',
             filters: [{ kinds: [1] }],
@@ -2233,8 +2378,9 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
             retain: 'unbounded',
             reqIdBase: 'pb13-ended',
             settleTimeoutMs: 300
-          }))
-        );
+          }));
+        const held = mount(ended);
+        const again = mount(ended);
         const req = String(((await nextOf(server, 'REQ')) as unknown[])[1]);
         respondWithEvent(server, req, fakeEvent({ id: 'pb13-c', created_at: 1 }));
         respondWithEose(server, req);
@@ -2244,6 +2390,14 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(held.value.diagnostics.legEnded?.kind, 'the premise: the leg ended').toBe('ended');
         reached('relay-failed', held.value.diagnostics.legEnded?.error);
         check('a live request whose leg ended', held.value, engine(held.value));
+        // **An Error two hooks share**, as the state's are below: the leg's,
+        // on one live key.
+        sharedAndKept('the leg’s end', {
+          'the value written to': () => held.value.diagnostics.legEnded?.error,
+          'a second hook': () => again.value.diagnostics.legEnded?.error,
+          'the same hook, read again': () => held.value.diagnostics.legEnded?.error
+        });
+        again.destroy();
         held.destroy();
         provider.destroy();
       }
@@ -2285,12 +2439,32 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('its events outlet, over useReq()’s handle', outlet(request.value, false, 'events'), [
           [request.value, REQ_HANDLE]
         ]);
-        const outcome = request.value.refresh();
-        bare(outcome, 'what useReq()’s refresh() returns');
+        const outcome = bare(request.value.refresh(), 'what useReq()’s refresh() returns');
         await nextOf(server, 'REQ');
         const refreshed = await outcome;
         expect(refreshed.kind, 'the premise: through useReq(), incomplete').toBe('incomplete');
         check('a refresh through useReq(), incomplete', refreshed);
+        // **And refused, through the entry's own hook**: the promise its
+        // `refresh()` returns on the error path is built apart from the
+        // engine's, and is asked the same.
+        const outOfScope = mount(() =>
+          useReq(() => ({
+            kind: 'request',
+            descriptor: {
+              filters: [{ kinds: [1] }],
+              namespace: 'pb13-useReq-refused',
+              relays: ['wss://not-in-scope.example'],
+              settleTimeoutMs: 300
+            }
+          }))
+        );
+        await settle(150);
+        reached('relay-not-in-scope', (outOfScope.value.state as { error?: unknown }).error);
+        check('useReq(), refused', outOfScope.value, [[outOfScope.value, REQ_HANDLE]]);
+        const refusedThrough = await rejectionOf(outOfScope.value.refresh());
+        rejectedWith('relay-not-in-scope', refusedThrough);
+        check('a refresh through useReq(), refused', refusedThrough);
+        outOfScope.destroy();
 
         const diagnostics = mount(() => useRelayDiagnostics());
         const row = Object.values(diagnostics.value.relays)[0];
@@ -2361,7 +2535,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
             settleTimeoutMs: 300
           }))
         );
-        const unasked = await nowhere.value.refresh();
+        const unasked = await bare(nowhere.value.refresh(), 'what refresh() returns');
         expect(unasked, 'the premise: nowhere to ask').toEqual({
           kind: 'not-started',
           reason: 'no-readable-relay'
@@ -2378,7 +2552,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         );
         respondWithEose(server, String(((await nextOf(server, 'REQ')) as unknown[])[1]));
         await settle();
-        const inFlight = outliving.value.refresh();
+        const inFlight = bare(outliving.value.refresh(), 'what refresh() returns');
         await nextOf(server, 'REQ');
         request.destroy();
         diagnostics.destroy();
@@ -2607,6 +2781,15 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check(`a provider refusal, ${code}`, diagnostics.value, [
           [diagnostics.value, RELAY_DIAGNOSTICS]
         ]);
+        // **Shared by every hook under the provider**, and written to as the
+        // state's Errors are below.
+        const second = mount(() => useRelayDiagnostics());
+        sharedAndKept(`a provider refusal, ${code}`, {
+          'the value written to': () => refusal,
+          'a second hook': () => second.value.configurationError,
+          'the same hook, read again': () => diagnostics.value.configurationError
+        });
+        second.destroy();
         diagnostics.destroy();
         provider.destroy();
       }
@@ -2739,13 +2922,29 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         ['`call`, `apply` and ', '`bind` stay'],
         ['callable ', 'with nothing'],
         ['Readonly', 'List<'],
-        ['write', 'Everything(']
+        ['write', 'Everything('],
+        ['admitted in ', 'three places'],
+        ['every list ', 'the walk meets'],
+        ['snippet', 'ArgumentsOf'],
+        ['lists', 'ThroughEach']
       ].map((parts) => parts.join(''));
-      const sources = ['lib/v1', 'tests/contracts'].flatMap((under) =>
-        (readdirSync(resolve(LIBRARY, '../..', under), { recursive: true }) as string[])
-          .filter((file) => /\.(ts|svelte)$/.test(file))
-          .map((file) => join(resolve(LIBRARY, '../..', under), file))
-      );
+      // **The tracked files only**: an untracked file in the tree — a ledger
+      // run's debris, another agent's scratch — failed this for a reason the
+      // repository does not hold. A file not yet added is read once it is,
+      // and in CI every file is.
+      const ROOT = resolve(LIBRARY, '../../..');
+      const sources = execFileSync(
+        'git',
+        ['ls-files', '-z', '--', 'src/lib/v1', 'src/tests/contracts'],
+        { cwd: ROOT, encoding: 'utf8' }
+      )
+        .split('\0')
+        .filter((file) => /\.(ts|svelte)$/.test(file))
+        .map((file) => join(ROOT, file));
+      expect(
+        sources.some((file) => file.endsWith('published.test.ts')),
+        'the premise: the sweep reads this file’s neighbours'
+      ).toBe(true);
       expect(
         sources.flatMap((file) =>
           retired
@@ -2873,28 +3072,128 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'void value.snapshot!.refresh!.call;'
       );
       expect(
-        snippetArgumentsOf("import type { Snippet } from 'svelte';", [
+        throwsOn('{ refresh(): Promise<number> | (Promise<number> & { progress: number[] }) }'),
+        'the probe’s control: a promise one alternative of which carries a member'
+      ).toMatch(/members of its own: progress/);
+      expect(
+        throwsOn('{ refresh(): Promise<number> | number }'),
+        'the probe’s control: a command that may answer without a promise'
+      ).toMatch(/does not return a promise/);
+      // **One function type, a command under the handle and data's in a
+      // snapshot**, in both orders: whichever is met first, the other is
+      // classified where it is met.
+      for (const [order, context] of [
+        ['after', '{ readonly request: Handle; readonly effect?: Refresh }'],
+        ['before', '{ readonly effect?: Refresh; readonly request: Handle }']
+      ] as const)
+        expect(
+          writesThrough(
+            'export {};\ntype Refresh = () => Promise<number>;\ninterface Handle { readonly refresh: Refresh }',
+            context,
+            { callables: 'api', commands: ['Handle.refresh'] }
+          ),
+          `the probe’s control: a command’s type on a snapshot, met ${order} the command`
+        ).toContain('void value.effect!.call;');
+      const handedBy = (imports: string, typeText: string): string[] | string => {
+        try {
+          return handedArgumentsOf(imports, [typeText]).handed;
+        } catch (thrown) {
+          return (thrown as Error).message;
+        }
+      };
+      const snippet = "import type { Snippet } from 'svelte';";
+      expect(
+        handedBy(
+          snippet,
           '{ onsettled?: (settled: { readonly n: number }, also: { readonly m: number }) => void; children: Snippet<[{ readonly s: string }, { readonly t: string }]> }'
-        ]),
+        ),
         'the probe’s control: a callback prop and a snippet, each handed two arguments'
       ).toHaveLength(4);
       expect(
-        snippetArgumentsOf("import type { Snippet } from 'svelte';", [
+        handedBy(
+          snippet,
           '({ kind: "a"; children: Snippet<[{ readonly a: number }]> } | { kind: "b"; only?: (handed: { readonly b: number }) => void }) & { on?: { settled?: (events: { readonly c: number }) => void }; as?: new (made: { readonly d: number }) => unknown }'
-        ]),
+        ),
         'the probe’s control: a prop one variant holds, one inside a prop, and a class'
       ).toHaveLength(4);
+      // Inside a prop, a callback is read through every shape that can hold
+      // one: a union, an intersection, a list, a tuple, and a hook's
+      // parameters.
+      for (const [shape, typeText] of [
+        [
+          'a union',
+          "{ observer?: { kind: 'callback'; done(value: { mutable: string }): void } | { kind: 'off' } }"
+        ],
+        [
+          'a union with a callback in it',
+          '{ on?: ((handed: { n: number[] }) => void) | { off: true } }'
+        ],
+        [
+          'an intersection',
+          '{ on?: { settled?: (handed: { events: string[] }) => void } & { readonly label?: string } }'
+        ],
+        ['a list', '{ handlers?: readonly ((handed: { list: string[] }) => void)[] }'],
+        ['a tuple', '{ pair: [string, (handed: { list: string[] }) => void] }'],
+        [
+          'a hook’s parameter',
+          'Parameters<(plan: (previous?: { events: string[] }) => number) => void>'
+        ]
+      ] as const)
+        expect(
+          handedBy('export {};', typeText),
+          `the probe’s control: a callback inside ${shape}`
+        ).toHaveLength(1);
       expect(
-        (() => {
-          try {
-            snippetArgumentsOf('export {};', ['{ loose: any }']);
-          } catch (thrown) {
-            return (thrown as Error).message;
-          }
-          return 'read';
-        })(),
+        handedBy(
+          'export {};',
+          '{ fn: ((x: { n: number[] }) => void) & { inner: (y: { m: number[] }) => void } }'
+        ),
+        'the probe’s control: a callback and one it holds'
+      ).toHaveLength(2);
+      expect(
+        handedBy('export {};', '{ a: { b: { c: { d: (x: { n: number }) => void } } } }'),
+        'the probe’s control: a callback at the depth the probe reads'
+      ).toHaveLength(1);
+      expect(
+        handedBy('export {};', '{ a: { b: { c: { d: { e: (x: { n: number }) => void } } } } }'),
+        'the probe’s control: a callback past it is reported'
+      ).toMatch(/deeper than the probe reads/);
+      expect(
+        handedBy('export {};', '{ loose: any }'),
         'the probe’s control: a prop it cannot read is reported'
       ).toMatch(/a prop the probe cannot read/);
+      // The exemption's other edge: a type under the signer's name that this
+      // library does not declare is read like any other.
+      const stranger = handedArgumentsOf(
+        'export {};\ninterface NostrSigner { signEvent(template: { tags: string[][] }): void }',
+        ['{ signer: NostrSigner }'],
+        HANDED_THEIRS
+      );
+      expect(
+        [stranger.handed.length, stranger.theirs],
+        'the probe’s control: a signer this library does not declare'
+      ).toEqual([1, []]);
+      expect(
+        signaturesOf(
+          'export {};\ndeclare function useThing(a: string): number;\ndeclare function useThing(a: number, b: true): string;',
+          ['typeof useThing']
+        ),
+        'the probe’s control: an overloaded hook'
+      ).toEqual([{ calls: 2, constructs: 0 }]);
+      // And the premise's: a component's props under an outlet type's name
+      // that it declares itself, inline, or not imported, is not read as one.
+      const imported =
+        '<script lang="ts">\n  import type { EventListProps } from \'./outlets.js\';\n';
+      expect(
+        [
+          `${imported}  let { ids }: EventListProps = $props();\n</script>`,
+          `${imported}  type Shadow = EventListProps;\n  type EventListProps = Shadow & { onsettled?: () => void };\n  let { ids }: EventListProps = $props();\n</script>`,
+          `${imported}  let { ids }: EventListProps & { extra?: () => void } = $props();\n</script>`,
+          `<script lang="ts">\n  let { ids }: EventListProps = $props();\n</script>`,
+          `${imported}  let { ids }: EventListProps = $props();\n  let rest = $props();\n</script>`
+        ].map(propsTypeOf),
+        'the premise’s control: a shadowed, an inline, an unimported and a second annotation'
+      ).toEqual(['EventListProps', undefined, undefined, undefined, undefined]);
       // A method this repository declares, with a member of its own; and two
       // lists of different types, since a type is walked where it is first met.
       const withMethod = 'export {};\ninterface Refresh { (): Promise<number>; cell: string[] }';
@@ -2924,7 +3223,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // Distinct by type, as the compiler interns them: a named type handed by
       // two outlets is one argument, and a member that is not a snippet is
       // the consumer's to write, not an outlet.
-      const handed = snippetArgumentsOf(
+      const { handed } = handedArgumentsOf(
         "import type { Snippet } from 'svelte';\ntype N = { readonly n: number };\ntype S = { readonly s: string };",
         [
           '{ children: Snippet<[N]>; again?: Snippet<[N]>; other: Snippet<[S]>; written: string }',
@@ -2937,12 +3236,21 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // consumer's `$state.snapshot`, a non-empty tuple, and an `instanceof`
       // narrowing, compiled against the published types.
       const entry = "import type * as Published from '$lib/v1/index.js';";
-      // **Every list the entry publishes, each where it is published** — read
-      // off the walk rather than written down: a list of sites somebody wrote
+      // **Every list site the walk meets** — where a consumer's line reaches
+      // a list, read off the walk rather than written down: a list of sites somebody wrote
       // held those sites, and a list type changed at another left it green.
       // Each is snapshotted and mapped; each tuple the walk meets is taken as
       // a non-empty one; and each, narrowed by `instanceof`, is still refused
       // as a writable list — the one diagnostic expected, once a site.
+      // Its control: one list type at two sites is two sites.
+      expect(
+        walkEach(
+          'export {};',
+          ['{ a: readonly string[]; b: readonly string[] }'],
+          {}
+        ).lists[0]?.map((site) => site.expression),
+        'the list sites’ control: one type, met twice'
+      ).toEqual(['value.a!', 'value.b!']);
       const sites = typed.lists.flatMap((each, at) => each.map((site) => ({ ...site, root: at })));
       expect(sites.length, 'the premise: the lists the walk met').toBeGreaterThan(20);
       expect(

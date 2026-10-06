@@ -439,7 +439,7 @@ export function outcomeOf(
 // that permits a write over a frozen value is legal-looking code that fails at
 // run time, which this record calls worse than the defect it would be hiding —
 // and the union's discriminants were the half that got missed when the rule was
-// applied to the containers. `LK16` counts them now.
+// applied to the containers. `LE16` counts them now.
 export type RefreshOutcome =
   | { readonly kind: 'complete' }
   | { readonly kind: 'incomplete'; readonly causes: IncompleteCauses }
@@ -631,7 +631,7 @@ export function deriveState(
   // request publishes is the consumer's to hold and nobody else's — the events,
   // the causes, the refusals, and the object carrying them — and the rule was
   // repaired value by value until a walk over what a hook publishes counted the
-  // ones nobody had thought about (`PO1`). A container is frozen where it is
+  // ones nobody had thought about (`PB1`). A container is frozen where it is
   // built; this is where the state object is.
   const derived = deriveStateOf(observed, now);
   return { ...derived, state: Object.freeze(derived.state) };

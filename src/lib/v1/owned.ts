@@ -143,7 +143,7 @@ function closeStack(value: object): void {
       enumerable: false
     });
   } catch {
-    // A host that will not let us. `PO1` reads the effect rather than this call.
+    // A host that will not let us. `PB1` reads the effect rather than this call.
   }
 }
 

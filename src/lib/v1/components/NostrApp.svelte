@@ -8,19 +8,10 @@
    * component goes. `relays` is applied on every change; `signer` is read once,
    * when the provider is created (0004, the send section).
    */
-  import type { Snippet } from 'svelte';
-
   import { createNostrContext, setNostrContext } from '../context.svelte.js';
-  import type { RelayInput } from '../scope.svelte.js';
-  import type { NostrSigner } from '../send.svelte.js';
+  import type { NostrAppProps } from './outlets.js';
 
-  interface Props {
-    relays?: readonly RelayInput[];
-    signer?: NostrSigner;
-    children: Snippet;
-  }
-
-  let { relays = [], signer, children }: Props = $props();
+  let { relays = [], signer, children }: NostrAppProps = $props();
 
   // svelte-ignore state_referenced_locally
   const context = createNostrContext({ relays, ...(signer === undefined ? {} : { signer }) });

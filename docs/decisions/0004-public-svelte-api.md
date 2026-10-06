@@ -769,7 +769,7 @@ interface ReqHandle {
   // attempt's outcome — `cancelled` when a lifetime ends under it — and
   // rejecting only for a refused descriptor, a missing provider or a provider
   // already gone.
-  refresh(): Promise<RefreshOutcome>;
+  readonly refresh: () => Promise<RefreshOutcome>;
 }
 
 // Context-bound and argument-free: taking an `RxNostr` would publish the

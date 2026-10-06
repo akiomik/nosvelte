@@ -234,9 +234,9 @@ export interface NostrContextCommon {
    * the relay list and is not something a consumer fixes by editing one, so it
    * goes to the boundary as it would have.
    *
-   * The construction path deliberately keeps the throw: there is no previous
-   * generation to hold on to, so a provider whose first list is refused has no
-   * transport at all and nothing it could serve.
+   * The construction path does not throw either, for the reason it gives
+   * below: a provider whose first list is refused stands with an empty accepted
+   * scope, and the refusal is published here.
    */
   setRelays(relays: readonly RelayInput[]): void;
 }

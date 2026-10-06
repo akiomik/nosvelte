@@ -189,11 +189,11 @@ export type { RefusalReason } from './refusal.js';
 // reaches the library as `NostrApp`'s `relays` prop, which is data.
 //
 // **`RelayConfigurationError` is here and its five subclasses are not**, which
-// is C16 and not an omission. A refused relay list is thrown at the provider's
-// first construction, so a consumer needs a type to catch it by; what they need
-// to *tell apart* is why, and `code` is that — five exported classes would
-// publish this file's internal division of the checks and make moving a check
-// between them a breaking change.
+// is C16 and not an omission. A refused relay list arrives on
+// `useRelayDiagnostics()`'s `configurationError`, so a consumer needs a type to
+// read it by; what they need to *tell apart* is why, and `code` is that — five
+// exported classes would publish this file's internal division of the checks
+// and make moving a check between them a breaking change.
 export type { RelayConfig, RelayConfigurationErrorCode, RelayInput } from './scope.svelte.js';
 export { RelayConfigurationError } from './scope.svelte.js';
 // **Posting, without the connection** (ruling 17). The provider owns the
