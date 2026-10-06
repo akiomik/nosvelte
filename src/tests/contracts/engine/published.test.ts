@@ -61,6 +61,7 @@ import { InvalidDescriptorError } from '$lib/v1/normalize.js';
 import { capture, providerDisposed, ReqFailure } from '$lib/v1/own.js';
 import { useReq } from '$lib/v1/req.svelte.js';
 import {
+  isRelayNotInScope,
   type RefreshRejection,
   RelayNotInScopeError,
   REQ_ERROR_CODES,
@@ -69,6 +70,8 @@ import {
 import {
   InvalidRelayInputError,
   InvalidRelayScopeError,
+  isRelayConfigurationError,
+  isTransportIncompatible,
   NonIdempotentRelayUrlError,
   RelayConfigurationError,
   type RelayConfigurationErrorCode,
@@ -2457,6 +2460,26 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(refusal, 'the premise: a published refusal to reach from').toBeInstanceOf(
           RelayNotInScopeError
         );
+        // **And a brand answers for what this library made, not for its
+        // class**: the constructors are published, so an instance a consumer
+        // builds is one of the class and none of this library's — a refusal
+        // it threw from a relay read was published as the provider's own,
+        // open. Each decision's brand is asked of both.
+        expect(isRelayNotInScope(refusal), 'the premise: this library’s refusal is its own').toBe(
+          true
+        );
+        expect(
+          [
+            isRelayNotInScope(new RelayNotInScopeError('wss://elsewhere.example', false, [])),
+            isRelayConfigurationError(
+              new RelayConfigurationError('invalid-relay-input', [], 'built by a consumer')
+            ),
+            isTransportIncompatible(
+              new TransportIncompatibleError(['wss://a.example'], ['wss://a.example'], 'built')
+            )
+          ],
+          'an instance a consumer built answers for none of them'
+        ).toEqual([false, false, false]);
         const platform = Object.getPrototypeOf(refusal?.constructor) as object;
         expect(platform, 'the premise: past the class, the platform’s Error').toBe(Error);
         expect(
