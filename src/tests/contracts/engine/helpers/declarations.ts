@@ -240,7 +240,8 @@ export function listsThroughEach(
   return walkEach(imports, typeTexts, options).lists;
 }
 
-function walkEach(
+/** {@link writesThroughEach} and {@link listsThroughEach} from one walk. */
+export function walkEach(
   imports: string,
   typeTexts: readonly string[],
   options: WalkOptions

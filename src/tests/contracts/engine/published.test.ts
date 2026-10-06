@@ -90,11 +90,10 @@ import {
   judgeWrites,
   judgeWritesEach,
   type ListSite,
-  listsThroughEach,
   memberNamesOf,
   snippetArgumentsOf,
-  writesThrough,
-  writesThroughEach
+  walkEach,
+  writesThrough
 } from './helpers/declarations.js';
 import { breachesOf, type Discipline, type LiveInterface } from './helpers/publication.js';
 import {
@@ -1031,7 +1030,18 @@ const NOT_GIVEN_OUT: Readonly<Record<string, string>> = {
  * component the surface record names — and each component's props are read off
  * its source as one of the outlet types.
  */
-function publishedTypeBreaches(): {
+/**
+ * Asked once a file: `LE16` and `PB13` both read it, and it is the costliest
+ * thing either does. A run of one arm alone — as the mutation ledger runs
+ * `PB13` — computes it, and so asserts everything inside it, itself.
+ */
+let publishedOnce: ReturnType<typeof computePublishedTypes> | undefined;
+function publishedTypeBreaches(): ReturnType<typeof computePublishedTypes> {
+  publishedOnce ??= computePublishedTypes();
+  return publishedOnce;
+}
+
+function computePublishedTypes(): {
   shapes: string[];
   breaches: string[];
   exceptions: string[];
@@ -1120,8 +1130,7 @@ function publishedTypeBreaches(): {
   // `refresh`, by the type that declares it — and at a root, `useSend()`'s
   // answer; anywhere else it is data's, and is reported.
   const walk = { callables: 'api', commands: ['ReqHandle.refresh'], depth: 6 } as const;
-  const writes = writesThroughEach(PUBLISHED, shapes, walk);
-  const lists = listsThroughEach(PUBLISHED, shapes, walk);
+  const { writes, lists } = walkEach(PUBLISHED, shapes, walk);
   const verdicts = judgeWritesEach(PUBLISHED, shapes, writes);
   const judged = shapes.flatMap((typeText, at) =>
     // ` :: ` between the shape and the line, since a shape's own text can
@@ -1749,7 +1758,9 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
   it(
     'LE16: every member of every published type is readonly, to the depth a consumer can reach',
     {
-      timeout: 60_000
+      // A compile of every published shape, asked of the compiler line by
+      // line: well under a minute here, and past one on a shared CI runner.
+      timeout: 300_000
     },
     () => {
       // **The type half of the rule, counted rather than checked value by value.**
@@ -1770,7 +1781,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
   // @contracts B5-C8
   it(
     'PB13: what a hook publishes keeps the publication discipline, a write to its Errors reaches no reader, and no published type lets a write through',
-    { timeout: 120_000 },
+    { timeout: 300_000 },
     async () => {
       // **Every clause of the row in one arm.** At run time, every value a hook
       // hands out — on each path that builds one — keeps the publication
