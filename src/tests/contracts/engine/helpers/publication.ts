@@ -269,6 +269,10 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
     chain(value, path);
 
     const keys = Reflect.ownKeys(value);
+    // **A library prototype holds its class**, and one without it would leave
+    // the class unreached — and unread — by every instance that inherits it.
+    if (role === 'prototype' && !isFunction && !keys.includes('constructor'))
+      found.push(`${path}: a prototype without its class`);
     if (isInterface) {
       for (const member of [...named.getters, ...named.commands])
         if (!keys.includes(member)) found.push(`${path}.${member}: named and absent`);

@@ -230,13 +230,15 @@ export function writesThroughEach(
 /**
  * {@link writesThroughEach}'s writes, and every list site the walk meets —
  * where a consumer's line reaches it — so an arm can ask a question of every
- * published list rather than of the ones somebody wrote down.
+ * published list rather than of the ones somebody wrote down; and the type the
+ * compiler gives each root, so an arm can ask a type text for the type it was
+ * meant to name.
  */
 export function walkEach(
   imports: string,
   typeTexts: readonly string[],
   options: WalkOptions
-): { writes: string[][]; lists: ListSite[][] } {
+): { writes: string[][]; lists: ListSite[][]; types: string[] } {
   const depth = options.depth ?? 4;
   const callables = options.callables ?? 'data';
   const commands = options.commands ?? [];
@@ -613,9 +615,21 @@ export function walkEach(
       // **Each alternative it may return**, since a union's members are the
       // ones every alternative shares, and one alternative's own would hide.
       for (const alternative of returned.isUnion() ? returned.types : [returned]) {
-        if (checker.getAwaitedType(alternative) === alternative)
+        // The platform's `Promise` — a thenable is awaitable and is not one.
+        const platform = (alternative.isIntersection() ? alternative.types : [alternative]).some(
+          (each) => {
+            const symbol = each.getSymbol();
+            return (
+              symbol?.getName() === 'Promise' &&
+              (symbol.getDeclarations() ?? []).every((one) =>
+                program.isSourceFileDefaultLibrary(one.getSourceFile())
+              )
+            );
+          }
+        );
+        if (!platform)
           throw new Error(
-            `writesThrough: ${expression} is a command that does not return a promise`
+            `writesThrough: ${expression} is a command that does not return a promise of the platform's`
           );
         if (checker.getIndexInfosOfType(alternative).length > 0)
           throw new Error(
@@ -665,12 +679,18 @@ export function walkEach(
     lists = [];
     walked = new Set<ts.Type>();
     results = 0;
-    visit(root, checker.getTypeAtLocation(declaration.name), 0, '');
-    return { writes, lists };
+    const type = checker.getTypeAtLocation(declaration.name);
+    visit(root, type, 0, '');
+    return {
+      writes,
+      lists,
+      type: checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation)
+    };
   });
   return {
     writes: walkedEach.map((one) => one.writes),
-    lists: walkedEach.map((one) => one.lists)
+    lists: walkedEach.map((one) => one.lists),
+    types: walkedEach.map((one) => one.type)
   };
 }
 
@@ -1005,7 +1025,7 @@ export function handedArgumentsOf(
   imports: string,
   typeTexts: readonly string[],
   theirs: ReadonlySet<string> = new Set()
-): { handed: string[]; theirs: string[] } {
+): { handed: string[]; types: string[]; theirs: string[] } {
   const roots = typeTexts.map((_, at) => rootOf(at, typeTexts.length));
   const { program, consumer } = programOver(
     `${imports}\n${typeTexts.map((typeText, at) => `declare const ${roots[at]}: ${typeText};`).join('\n')}\n`
@@ -1016,13 +1036,18 @@ export function handedArgumentsOf(
     .flatMap((statement) => statement.declarationList.declarations);
   const seen = new Set<ts.Type>();
   const found: string[] = [];
+  const types: string[] = [];
   const exempted: string[] = [];
   // A member of `text` by name, from whichever variant of it has one — a prop
-  // only one variant of a union declares is a prop all the same.
+  // only one variant of a union declares is a prop all the same. Asked by the
+  // name's text, so a member keyed by a number (`0`) is found under `"0"`.
   const memberText = (text: string, name: string): string => {
     const key = JSON.stringify(name);
-    return `NonNullable<(${text}) extends infer V ? (V extends unknown ? (${key} extends keyof V ? V[${key}] : never) : never) : never>`;
+    return `NonNullable<(${text}) extends infer V ? (V extends unknown ? (${key} extends \`\${Exclude<keyof V, symbol>}\` ? (V extends { readonly [K in ${key}]?: infer E } ? E : never) : never) : never) : never>`;
   };
+  // What `text`'s index signature of `key` holds, from whichever variant has one.
+  const indexText = (text: string, key: 'string' | 'number'): string =>
+    `NonNullable<(${text}) extends infer V ? (V extends unknown ? (V extends { readonly [key: ${key}]: infer E } ? E : never) : never) : never>`;
   const ours = (property: ts.Symbol): boolean =>
     (property.getDeclarations() ?? []).some(
       (one) => !program.isSourceFileDefaultLibrary(one.getSourceFile())
@@ -1038,7 +1063,10 @@ export function handedArgumentsOf(
     ts.TypeFlags.Undefined |
     ts.TypeFlags.Void |
     ts.TypeFlags.Never;
-  // What one prop or callback that can be called or constructed is handed.
+  // What one prop or callback that can be called or constructed is handed:
+  // every argument position, a rest list's included — a snippet takes its
+  // arguments as one rest tuple, and a callback may take some one by one and
+  // the rest as a tuple or a list after them.
   const handedBy = (held: ts.Type, text: string, label: string): void => {
     const calls = held.getCallSignatures();
     const constructs = held.getConstructSignatures();
@@ -1046,30 +1074,27 @@ export function handedArgumentsOf(
       throw new Error(`handedArgumentsOf: ${label} is a prop the probe cannot read`);
     const signature = (calls[0] ?? constructs[0]) as ts.Signature;
     const listOf = calls.length > 0 ? 'Parameters' : 'ConstructorParameters';
-    const parameters = signature.getParameters();
-    const [only] = parameters;
-    const declared = only?.valueDeclaration;
-    // A snippet takes its arguments as one rest list; a callback, one by one.
-    const rest =
-      parameters.length === 1 &&
-      declared !== undefined &&
-      ts.isParameter(declared) &&
-      declared.dotDotDotToken !== undefined;
-    let handed: readonly ts.Type[];
-    if (rest && only !== undefined) {
-      const list = checker.getTypeOfSymbol(only);
-      // A rest list that is not a tuple is one the probe cannot read, and is
-      // reported rather than passed over as a snippet handed nothing.
-      if (!checker.isTupleType(list))
+    const handed: ts.Type[] = [];
+    for (const parameter of signature.getParameters()) {
+      const declared = parameter.valueDeclaration;
+      if (declared === undefined || !ts.isParameter(declared))
+        throw new Error(`handedArgumentsOf: ${label} has a parameter the probe cannot place`);
+      const type = checker.getTypeOfSymbol(parameter);
+      if (declared.dotDotDotToken === undefined) handed.push(type);
+      // A rest list that is neither a tuple nor a list is one the probe cannot
+      // read, and is reported rather than passed over as handing nothing.
+      else if (checker.isTupleType(type) || checker.isArrayType(type))
+        handed.push(...checker.getTypeArguments(type as ts.TypeReference));
+      else
         throw new Error(
           `handedArgumentsOf: ${label} is handed something that is not a list of arguments`
         );
-      handed = checker.getTypeArguments(list as ts.TypeReference);
-    } else handed = parameters.map((parameter) => checker.getTypeOfSymbol(parameter));
+    }
     for (const [position, argument] of handed.entries()) {
       if (seen.has(argument)) continue;
       seen.add(argument);
       found.push(`${listOf}<${text}>[${position}]`);
+      types.push(checker.typeToString(argument, undefined, ts.TypeFormatFlags.NoTruncation));
     }
   };
   // **Every value a prop holds, read for what this library calls in it**:
@@ -1128,16 +1153,38 @@ export function handedArgumentsOf(
     read(held, text, label, depth);
   };
   // The members of `type`, from whichever variant has each — a member only one
-  // variant of a union declares is a member all the same.
+  // variant of a union declares is a member all the same — and what each of
+  // its index signatures holds. A member keyed by a symbol is one the probe
+  // cannot name in a type, and is reported.
   const read = (type: ts.Type, text: string, label: string, depth: number): void => {
     const variants = type.isUnion() ? type.types : [type];
-    const names = new Set(
-      variants
-        .filter((variant) => (variant.getFlags() & plain) === 0)
-        .flatMap((variant) => checker.getPropertiesOfType(variant))
-        .filter(ours)
-        .map((one) => one.getName())
-    );
+    const held = variants.filter((variant) => (variant.getFlags() & plain) === 0);
+    const properties = held.flatMap((variant) => checker.getPropertiesOfType(variant)).filter(ours);
+    for (const property of properties)
+      if ((property.getEscapedName() as string).startsWith('__@'))
+        throw new Error(
+          `handedArgumentsOf: ${label} has a member keyed by a symbol, which the probe cannot name`
+        );
+    for (const variant of held)
+      for (const index of checker.getIndexInfosOfType(variant)) {
+        const key =
+          index.keyType.getFlags() & ts.TypeFlags.String
+            ? 'string'
+            : index.keyType.getFlags() & ts.TypeFlags.Number
+              ? 'number'
+              : undefined;
+        if (key === undefined)
+          throw new Error(
+            `handedArgumentsOf: ${label} has an index signature the probe cannot name`
+          );
+        readHeld(
+          checker.getNonNullableType(index.type),
+          indexText(text, key),
+          `${label}[${key}]`,
+          depth + 1
+        );
+      }
+    const names = new Set(properties.map((one) => one.getName()));
     for (const name of names)
       for (const variant of variants) {
         if (variant.getFlags() & plain) continue;
@@ -1158,7 +1205,7 @@ export function handedArgumentsOf(
     if (declaration === undefined) throw new Error(`the probe declared no ${root}`);
     readHeld(checker.getTypeAtLocation(declaration.name), typeTexts[at] as string, root, 0);
   }
-  return { handed: found, theirs: exempted };
+  return { handed: found, types, theirs: exempted };
 }
 
 /**

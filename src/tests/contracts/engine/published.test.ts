@@ -37,6 +37,7 @@ import { fileURLToPath } from 'node:url';
 
 import { render } from '@testing-library/svelte';
 import type { RxNostr } from 'rx-nostr';
+import { parse } from 'svelte/compiler';
 import { QueryClient } from 'tanstack-svelte-query-v6';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
@@ -531,6 +532,9 @@ function disciplineControls(): void {
     value: { prototype: RecordedClass.prototype }
   });
   Object.freeze(RecordedClass.prototype);
+  class ClasslessClass extends Error {}
+  Reflect.deleteProperty(ClasslessClass.prototype, 'constructor');
+  Object.freeze(ClasslessClass.prototype);
   // Closed the way this library closes its own Errors: `stack` made data, then frozen.
   const owned = <T extends Error>(error: T): T => {
     Object.defineProperty(error, 'stack', { value: 'as it was', writable: false });
@@ -551,6 +555,7 @@ function disciplineControls(): void {
         Open,
         HalfOpen,
         RecordedClass,
+        ClasslessClass,
         Marked,
         Impostor
       ].map((one) => one.prototype as object)
@@ -616,6 +621,11 @@ function disciplineControls(): void {
       'a class left open behind its closed prototype',
       owned(new HalfOpen('x')),
       'held (inherited from HalfOpen).constructor: extensible'
+    ],
+    [
+      'a prototype without its class',
+      owned(new ClasslessClass('x')),
+      'held (inherited from a prototype): a prototype without its class'
     ],
     [
       'a record in the class’s place',
@@ -1103,22 +1113,152 @@ function publishedTypeBreaches(): ReturnType<typeof computePublishedTypes> {
  */
 const HANDED_THEIRS: ReadonlySet<string> = new Set(['NostrSigner']);
 
+/** A node of a component's script, as Svelte's parser hands it over: ESTree, with TypeScript's nodes. */
+interface ScriptNode {
+  readonly type: string;
+  readonly name?: string;
+  readonly body?: readonly ScriptNode[];
+  readonly declaration?: unknown;
+  readonly declarations?: readonly ScriptNode[];
+  readonly specifiers?: readonly ScriptNode[];
+  readonly local?: ScriptNode;
+  readonly imported?: ScriptNode;
+  readonly id?: unknown;
+  readonly callee?: unknown;
+  readonly typeAnnotation?: unknown;
+  readonly typeArguments?: unknown;
+  readonly typeName?: unknown;
+  readonly source?: ScriptNode;
+  readonly value?: unknown;
+  readonly properties?: readonly ScriptNode[];
+  readonly elements?: readonly (ScriptNode | null)[];
+  readonly argument?: ScriptNode;
+  readonly left?: ScriptNode;
+}
+const isNode = (value: unknown): value is ScriptNode =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as { type?: unknown }).type === 'string';
+
+/** Every node under `node`, each with the node that holds it. */
+function* nodesOf(
+  node: ScriptNode,
+  holder?: ScriptNode
+): Generator<[ScriptNode, ScriptNode | undefined]> {
+  yield [node, holder];
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'loc' || key === 'range') continue;
+    for (const each of Array.isArray(value) ? value : [value])
+      if (isNode(each)) yield* nodesOf(each, node);
+  }
+}
+
+/** The names a binding pattern binds — not its type annotation, not its defaults. */
+const patternNames = (pattern: ScriptNode | null | undefined): string[] => {
+  if (pattern === null || pattern === undefined) return [];
+  switch (pattern.type) {
+    case 'Identifier':
+      return pattern.name === undefined ? [] : [pattern.name];
+    case 'ObjectPattern':
+      return (pattern.properties ?? []).flatMap((one) =>
+        one.type === 'RestElement'
+          ? patternNames(one.argument)
+          : patternNames(isNode(one.value) ? one.value : undefined)
+      );
+    case 'ArrayPattern':
+      return (pattern.elements ?? []).flatMap((one) => patternNames(one));
+    case 'RestElement':
+      return patternNames(pattern.argument);
+    case 'AssignmentPattern':
+      return patternNames(pattern.left);
+    default:
+      throw new Error(`propsTypeOf: a binding pattern it cannot read, ${pattern.type}`);
+  }
+};
+
+/** The names a script's top level binds, each with the node that binds it. */
+function bindingsOf(program: ScriptNode): [string, ScriptNode][] {
+  const named = (node: unknown): string[] =>
+    isNode(node) && node.type === 'Identifier' && node.name !== undefined ? [node.name] : [];
+  return (program.body ?? []).flatMap((statement) => {
+    const declared =
+      statement.type === 'ExportNamedDeclaration' && isNode(statement.declaration)
+        ? statement.declaration
+        : statement;
+    if (declared.type === 'ImportDeclaration')
+      return (declared.specifiers ?? []).map(
+        (one) => [one.local?.name ?? '', one] as [string, ScriptNode]
+      );
+    if (declared.type === 'VariableDeclaration')
+      return (declared.declarations ?? []).flatMap((one) =>
+        patternNames(isNode(one.id) ? one.id : undefined).map(
+          (name) => [name, one] as [string, ScriptNode]
+        )
+      );
+    return named(declared.id).map((name) => [name, declared] as [string, ScriptNode]);
+  });
+}
+
 /**
- * The type a component's `$props()` is annotated with — one name, imported
- * from the outlets and declared nowhere in the component — or `undefined`, so
- * a local type under an outlet type's name, an inline annotation or a second
- * `$props()` fails the premise rather than passing on the name it shares.
+ * The type a component's `$props()` is annotated with — one name, bound once
+ * across the component's scripts, by an unaliased import from the outlets in
+ * its instance script — or `undefined`. Read off Svelte's own parse of the
+ * component rather than its text, so a local type under an outlet type's
+ * name, an alias in one script beside the import in another, an inline
+ * annotation or a second `$props()` fails the premise rather than passing on
+ * the name it shares.
  */
 function propsTypeOf(source: string): string | undefined {
-  const named = /:\s*(\w+)\s*=\s*\$props\(\)/.exec(source)?.[1];
-  if (named === undefined || source.split('$props(').length !== 2) return undefined;
-  const imported = [...source.matchAll(/import type \{([^}]*)\} from '\.\/outlets\.js'/g)].flatMap(
-    (one) => (one[1] ?? '').split(',').map((name) => name.trim())
+  const parsed = parse(source, { modern: true });
+  const instance = parsed.instance?.content as unknown as ScriptNode | undefined;
+  const module = parsed.module?.content as unknown as ScriptNode | undefined;
+  if (instance === undefined) return undefined;
+  const scripts = module === undefined ? [instance] : [instance, module];
+  const calls = scripts.flatMap((script) =>
+    [...nodesOf(script)].filter(
+      ([node]) =>
+        node.type === 'CallExpression' &&
+        isNode(node.callee) &&
+        node.callee.type === 'Identifier' &&
+        node.callee.name === '$props'
+    )
   );
-  const declared = new RegExp(
-    `\\b(?:type|interface|class|enum|const|let|var|function)\\s+${named}\\b`
+  const [only] = calls;
+  if (calls.length !== 1 || only === undefined) return undefined;
+  const declarator = only[1];
+  const annotation = isNode(declarator?.id) ? declarator.id.typeAnnotation : undefined;
+  const reference = isNode(annotation) ? annotation.typeAnnotation : undefined;
+  if (
+    declarator?.type !== 'VariableDeclarator' ||
+    !(instance.body ?? []).some((statement) =>
+      (statement.declarations ?? []).includes(declarator)
+    ) ||
+    !isNode(reference) ||
+    reference.type !== 'TSTypeReference' ||
+    reference.typeArguments !== undefined ||
+    !isNode(reference.typeName) ||
+    reference.typeName.type !== 'Identifier'
+  )
+    return undefined;
+  const name = reference.typeName.name ?? '';
+  const bound = scripts.flatMap((script) =>
+    bindingsOf(script)
+      .filter(([each]) => each === name)
+      .map(([, node]) => [script, node] as const)
   );
-  return imported.includes(named) && !declared.test(source) ? named : undefined;
+  const [binding] = bound;
+  if (bound.length !== 1 || binding === undefined) return undefined;
+  const [script, specifier] = binding;
+  const declaration = (instance.body ?? []).find(
+    (statement) =>
+      statement.type === 'ImportDeclaration' && (statement.specifiers ?? []).includes(specifier)
+  );
+  return script === instance &&
+    specifier.type === 'ImportSpecifier' &&
+    specifier.imported?.name === name &&
+    declaration?.source?.value === './outlets.js'
+    ? name
+    : undefined;
 }
 
 /**
@@ -1258,7 +1398,14 @@ function computePublishedTypes(): {
   // A function is a command only where the handle names one — `ReqHandle`'s
   // `refresh`, by the type that declares it — and at a root, `useSend()`'s
   // answer; anywhere else it is data's, and is reported.
-  const { writes, lists } = walkEach(PUBLISHED, shapes, walk);
+  const { writes, lists, types } = walkEach(PUBLISHED, shapes, walk);
+  // **Each argument's text names the argument**: a text that resolved to
+  // another type — `never`, under a key the text spelled differently from the
+  // type — would be walked, find nothing to write, and read as refused.
+  expect(
+    types.slice(shapes.length - outlets.length),
+    'each argument, as its text names it'
+  ).toEqual(handedTo.types);
   const verdicts = judgeWritesEach(PUBLISHED, shapes, writes);
   const judged = shapes.flatMap((typeText, at) =>
     // ` :: ` between the shape and the line, since a shape's own text can
@@ -1983,14 +2130,37 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           `${answer}: a reader the consumer’s write reached`
         ).toEqual([]);
       };
-      const rejectionOf = async (pending: Promise<unknown>): Promise<unknown> => {
-        bare(pending, 'what a rejected refresh() returns');
-        try {
-          await pending;
-        } catch (thrown) {
-          return thrown;
-        }
-        throw new Error('the premise: refresh() rejects');
+      // **A fresh one each call, the caller's own**: every path below is
+      // asked twice, and the two answers are two promises. The second is
+      // settled before the population is counted, so neither is left behind.
+      const seconds: Promise<unknown>[] = [];
+      const twice = <T>(call: () => Promise<T>, name: string): [Promise<T>, Promise<T>] => {
+        const pair: [Promise<T>, Promise<T>] = [bare(call(), name), bare(call(), name)];
+        expect(pair[0], `${name}: a fresh promise each call`).not.toBe(pair[1]);
+        return pair;
+      };
+      const fresh = <T>(call: () => Promise<T>, name: string): Promise<T> => {
+        const [first, second] = twice(call, name);
+        seconds.push(second);
+        return first;
+      };
+      const rejectionOf = async (call: () => Promise<unknown>): Promise<unknown> => {
+        const settled = async (
+          pending: Promise<unknown>
+        ): Promise<{ thrown: unknown } | undefined> => {
+          try {
+            await pending;
+          } catch (thrown) {
+            return { thrown };
+          }
+          return undefined;
+        };
+        const [first, second] = await Promise.all(
+          twice(call, 'what a rejected refresh() returns').map(settled)
+        );
+        if (first === undefined || second === undefined)
+          throw new Error('the premise: refresh() rejects, each call');
+        return first.thrown;
       };
       // What one outlet was handed, rendered once over `request` — and the
       // premise that it was rendered at all.
@@ -2074,8 +2244,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('its event outlet', outlet(held.value, true, 'event'), engine(held.value));
 
         // Two callers of one refresh hold one object (C15), so it is checked once.
-        const asked = bare(held.value.refresh(), 'what refresh() returns');
-        const askedAgain = bare(held.value.refresh(), 'what refresh() returns');
+        const [asked, askedAgain] = twice(() => held.value.refresh(), 'what refresh() returns');
         respondWithEose(server, await nextReqOf(server));
         const [complete, sameComplete] = await Promise.all([asked, askedAgain]);
         expect(complete.kind, 'the premise: complete').toBe('complete');
@@ -2083,13 +2252,13 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('a refresh, complete', complete);
 
         // Nobody answers, and the settle timeout closes it incomplete.
-        const timedOut = bare(held.value.refresh(), 'what refresh() returns');
+        const timedOut = fresh(() => held.value.refresh(), 'what refresh() returns');
         await nextReqOf(server);
         const incomplete = await timedOut;
         expect(incomplete.kind, 'the premise: incomplete').toBe('incomplete');
         check('a refresh, incomplete', incomplete);
 
-        const released = bare(held.value.refresh(), 'what refresh() returns');
+        const released = fresh(() => held.value.refresh(), 'what refresh() returns');
         await nextReqOf(server);
         held.destroy();
         const cancelled = await released;
@@ -2098,7 +2267,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           reason: 'consumer-released'
         });
         check('a refresh, cancelled because its consumer released it', cancelled);
-        const after = await bare(held.value.refresh(), 'what refresh() returns');
+        const after = await fresh(() => held.value.refresh(), 'what refresh() returns');
         expect(after, 'the premise: a released handle').toEqual({
           kind: 'not-started',
           reason: 'released'
@@ -2157,7 +2326,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(first.value.state.status, 'the premise: a failed attempt').toBe('error');
         reached('unspecified', (first.value.state as { error?: unknown }).error);
         check('an attempt that failed', first.value, engine(first.value));
-        const outcome = await bare(first.value.refresh(), 'what refresh() returns');
+        const outcome = await fresh(() => first.value.refresh(), 'what refresh() returns');
         expect(outcome.kind, 'the premise: error').toBe('error');
         check('a refresh, error', outcome);
         return { first, second };
@@ -2178,7 +2347,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('a refused descriptor', first.value, engine(first.value));
         check('its error outlet', outlet(first.value, false, 'error'), engine(first.value));
         reached('unsupported-filter', (first.value.state as { error?: unknown }).error);
-        const rejected = await rejectionOf(first.value.refresh());
+        const rejected = await rejectionOf(() => first.value.refresh());
         // **Not the object the state carries**: `refresh()` resolves the
         // descriptor again, and the refusal it throws is built on that call —
         // the same class and words, and a published value of its own, so it is
@@ -2221,7 +2390,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           useStreamedReq(options('pb13-server', rxNostr, { environment: 'server' }))
         );
         await settle();
-        const outcome = await bare(asked.value.refresh(), 'what refresh() returns');
+        const outcome = await fresh(() => asked.value.refresh(), 'what refresh() returns');
         expect(outcome, 'the premise: a server').toEqual({ kind: 'not-started', reason: 'server' });
         check('a refresh, not started on a server', outcome);
         refused.destroy();
@@ -2240,9 +2409,10 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         // **What a command returns is the platform's `Promise`, the caller's
         // own**: a fresh one each call, so a write to one reaches no other
         // caller. What it settles with is this library's, checked below.
-        const asked = bare(held.value.refresh(), 'what the engine’s refresh() returns');
-        const askedAgain = bare(held.value.refresh(), 'what refresh() returns');
-        expect(asked, 'the premise: a fresh promise each call').not.toBe(askedAgain);
+        const [asked, askedAgain] = twice(
+          () => held.value.refresh(),
+          'what the engine’s refresh() returns'
+        );
         await askedAgain;
         const outcome = await asked;
         expect(outcome, 'the premise: deferred').toEqual({
@@ -2299,7 +2469,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           reached(code, (hook.value.state as { error?: unknown }).error);
           check(`an Error, ${code}${door}`, hook.value, engine(hook.value));
           if (code !== 'accumulator-contract') {
-            const rejected = await rejectionOf(hook.value.refresh());
+            const rejected = await rejectionOf(() => hook.value.refresh());
             rejectedWith(code, rejected);
             check(`a refresh, rejected with ${code}${door}`, rejected);
           }
@@ -2440,7 +2610,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         check('its events outlet, over useReq()’s handle', outlet(request.value, false, 'events'), [
           [request.value, REQ_HANDLE]
         ]);
-        const outcome = bare(request.value.refresh(), 'what useReq()’s refresh() returns');
+        const outcome = fresh(() => request.value.refresh(), 'what useReq()’s refresh() returns');
         await nextOf(server, 'REQ');
         const refreshed = await outcome;
         expect(refreshed.kind, 'the premise: through useReq(), incomplete').toBe('incomplete');
@@ -2462,7 +2632,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         await settle(150);
         reached('relay-not-in-scope', (outOfScope.value.state as { error?: unknown }).error);
         check('useReq(), refused', outOfScope.value, [[outOfScope.value, REQ_HANDLE]]);
-        const refusedThrough = await rejectionOf(outOfScope.value.refresh());
+        const refusedThrough = await rejectionOf(() => outOfScope.value.refresh());
         rejectedWith('relay-not-in-scope', refusedThrough);
         check('a refresh through useReq(), refused', refusedThrough);
         outOfScope.destroy();
@@ -2536,7 +2706,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
             settleTimeoutMs: 300
           }))
         );
-        const unasked = await bare(nowhere.value.refresh(), 'what refresh() returns');
+        const unasked = await fresh(() => nowhere.value.refresh(), 'what refresh() returns');
         expect(unasked, 'the premise: nowhere to ask').toEqual({
           kind: 'not-started',
           reason: 'no-readable-relay'
@@ -2553,7 +2723,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         );
         respondWithEose(server, String(((await nextOf(server, 'REQ')) as unknown[])[1]));
         await settle();
-        const inFlight = bare(outliving.value.refresh(), 'what refresh() returns');
+        const inFlight = fresh(() => outliving.value.refresh(), 'what refresh() returns');
         await nextOf(server, 'REQ');
         request.destroy();
         diagnostics.destroy();
@@ -2566,7 +2736,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           reason: 'provider-disposed'
         });
         check('a refresh, cancelled because the provider was disposed', disposed);
-        const rejected = await rejectionOf(outliving.value.refresh());
+        const rejected = await rejectionOf(() => outliving.value.refresh());
         rejectedWith('provider-disposed', rejected);
         check('a refresh, rejected because the provider was disposed', rejected);
         outliving.destroy();
@@ -2626,7 +2796,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         for (const [code, hook] of held) {
           reached(code, (hook.value.state as { error?: unknown }).error);
           check(`an Error, ${code}`, hook.value, engine(hook.value));
-          const rejected = await rejectionOf(hook.value.refresh());
+          const rejected = await rejectionOf(() => hook.value.refresh());
           rejectedWith(code, rejected);
           check(`a refresh, rejected with ${code}`, rejected);
           hook.destroy();
@@ -2795,6 +2965,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         provider.destroy();
       }
 
+      await Promise.all(seconds);
       expect([...roster].sort(), 'the population, case by case').toEqual([...POPULATION].sort());
       expect([...codes].sort(), 'an Error under every code a hook publishes one with').toEqual(
         [...new Set([...REQ_ERROR_CODES, ...RELAY_REFUSAL_CODES, 'missing-randomness'])].sort()
@@ -2971,6 +3142,37 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           .map(([name]) => name),
         'the entry’s hooks and components are open, as the row prices'
       ).toEqual([]);
+      // **And its classes are closed, read directly** rather than through an
+      // instance's chain, which reaches a class only where its prototype holds
+      // it: each class and its prototype frozen, and the static write the row
+      // prices refused.
+      const classes = Object.entries(Entry).filter(
+        ([name]) => !entryValues.some(([value]) => value === name)
+      );
+      expect(
+        classes.map(([name, value]) => `${name}: ${typeof value}`).sort(),
+        'the premise: the entry’s other values are its classes'
+      ).toEqual(
+        [
+          'IncompleteResultError',
+          'MissingProviderError',
+          'MissingRandomnessError',
+          'RelayConfigurationError'
+        ].map((name) => `${name}: function`)
+      );
+      expect(
+        classes.flatMap(([name, value]) => {
+          const held = value as { prototype: object };
+          return [
+            ...(Object.isFrozen(held) ? [] : [`${name}: open`]),
+            ...(Object.isFrozen(held.prototype) ? [] : [`${name}.prototype: open`]),
+            ...(Reflect.set(held, 'stackTraceLimit', 0) || Object.hasOwn(held, 'stackTraceLimit')
+              ? [`${name}.stackTraceLimit: written`]
+              : [])
+          ];
+        }),
+        'every class the entry exports is closed, and refuses the static write the row prices'
+      ).toEqual([]);
 
       // **The interfaces the discipline is told about, against the types**:
       // `useReq()`'s handle is `ReqHandle` member for member, the engine's is
@@ -3094,6 +3296,10 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'the probe’s control: a promise one alternative of which carries a member'
       ).toMatch(/members of its own: progress/);
       expect(
+        throwsOn('{ refresh(): Promise<number> | PromiseLike<number> }'),
+        'the probe’s control: a command that may answer with a thenable'
+      ).toMatch(/does not return a promise/);
+      expect(
         throwsOn('{ refresh(): Promise<number> | number }'),
         'the probe’s control: a command that may answer without a promise'
       ).toMatch(/does not return a promise/);
@@ -3153,6 +3359,16 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           '{ on?: { settled?: (handed: { events: string[] }) => void } & { readonly label?: string } }'
         ],
         ['a list', '{ handlers?: readonly ((handed: { list: string[] }) => void)[] }'],
+        [
+          'a list in an intersection',
+          '{ handlers: readonly ((value: { mutable: number[] }) => void)[] & { readonly label: string } }'
+        ],
+        [
+          'an index signature',
+          '{ callbacks: Record<string, (value: { mutable: number[] }) => void> }'
+        ],
+        ['a member keyed by a number', '{ 0: (value: { mutable: number[] }) => void }'],
+        ['a rest list', '{ on: (...values: { mutable: number[] }[]) => void }'],
         ['a tuple', '{ pair: [string, (handed: { list: string[] }) => void] }'],
         [
           'a hook’s parameter',
@@ -3170,6 +3386,35 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         ),
         'the probe’s control: a callback and one it holds'
       ).toBe('2 handed');
+      expect(
+        handedBy(
+          'export {};',
+          '{ onready: (prefix: string, ...rest: [{ readonly n: number }, { mutable: number[] }]) => void }'
+        ),
+        'the probe’s control: a rest tuple after an argument handed one by one'
+      ).toBe('3 handed');
+      expect(
+        handedBy('export {};', '{ [Symbol.iterator](): Iterator<{ mutable: number[] }> }'),
+        'the probe’s control: a member keyed by a symbol is reported'
+      ).toMatch(/keyed by a symbol/);
+      // **Each argument's text names the argument**, which the population's
+      // own comparison asks of every outlet; and its control, the spelling of
+      // a numeric key this replaced, which names `never`.
+      const keyed = handedArgumentsOf('export {};', [
+        '{ 0: (value: { mutable: number[] }) => void; on: Record<string, (seen: { n: string[] }) => void>; ready: (a: string, ...b: [{ c: number[] }]) => void }'
+      ]);
+      expect(
+        walkEach('export {};', keyed.handed, {}).types,
+        'the probe’s control: each argument’s text names the argument'
+      ).toEqual(keyed.types);
+      expect(
+        walkEach(
+          'export {};',
+          ['{ 0: number } extends infer V ? ("0" extends keyof V ? V["0"] : never) : never'],
+          {}
+        ).types,
+        'the identity check’s control: a text that names `never`'
+      ).toEqual(['never']);
       expect(
         handedBy('export {};', '{ a: { b: { c: { d: (x: { n: number }) => void } } } }'),
         'the probe’s control: a callback at the depth the probe reads'
@@ -3201,19 +3446,53 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'the probe’s control: an overloaded hook'
       ).toEqual([{ calls: 2, constructs: 0 }]);
       // And the premise's: a component's props under an outlet type's name
-      // that it declares itself, inline, or not imported, is not read as one.
+      // that it declares itself, inline, not imported, imported under an
+      // alias, or bound in the other script too, is not read as one.
       const imported =
         '<script lang="ts">\n  import type { EventListProps } from \'./outlets.js\';\n';
       expect(
         [
-          `${imported}  let { ids }: EventListProps = $props();\n</script>`,
-          `${imported}  type Shadow = EventListProps;\n  type EventListProps = Shadow & { onsettled?: () => void };\n  let { ids }: EventListProps = $props();\n</script>`,
-          `${imported}  let { ids }: EventListProps & { extra?: () => void } = $props();\n</script>`,
-          `<script lang="ts">\n  let { ids }: EventListProps = $props();\n</script>`,
-          `${imported}  let { ids }: EventListProps = $props();\n  let rest = $props();\n</script>`
-        ].map(propsTypeOf),
-        'the premise’s control: a shadowed, an inline, an unimported and a second annotation'
-      ).toEqual(['EventListProps', undefined, undefined, undefined, undefined]);
+          ['read', `${imported}  let { ids }: EventListProps = $props();\n</script>`],
+          [
+            'declared beside the import',
+            `${imported}  type Shadow = EventListProps;\n  type EventListProps = Shadow & { onsettled?: () => void };\n  let { ids }: EventListProps = $props();\n</script>`
+          ],
+          [
+            'inline',
+            `${imported}  let { ids }: EventListProps & { extra?: () => void } = $props();\n</script>`
+          ],
+          [
+            'not imported',
+            `<script lang="ts">\n  let { ids }: EventListProps = $props();\n</script>`
+          ],
+          [
+            'read twice',
+            `${imported}  let { ids }: EventListProps = $props();\n  let rest = $props();\n</script>`
+          ],
+          [
+            'an alias of another outlet type',
+            `<script lang="ts">\n  import type { EventProps as EventListProps } from './outlets.js';\n  let { ids }: EventListProps = $props();\n</script>`
+          ],
+          [
+            'imported in the module script, aliased in the instance',
+            `<script module lang="ts">\n  import type { EventListProps } from './outlets.js';\n</script>\n<script lang="ts">\n  import type { Unsafe as EventListProps } from './elsewhere.js';\n  let { ids }: EventListProps = $props();\n</script>`
+          ],
+          [
+            'imported in the module script alone',
+            `<script module lang="ts">\n  import type { EventListProps } from './outlets.js';\n</script>\n<script lang="ts">\n  let { ids }: EventListProps = $props();\n</script>`
+          ]
+        ].map(([shape, source]) => `${shape}: ${propsTypeOf(source as string) ?? 'refused'}`),
+        'the premise’s control: each way a component can name its props otherwise'
+      ).toEqual([
+        'read: EventListProps',
+        'declared beside the import: refused',
+        'inline: refused',
+        'not imported: refused',
+        'read twice: refused',
+        'an alias of another outlet type: refused',
+        'imported in the module script, aliased in the instance: refused',
+        'imported in the module script alone: refused'
+      ]);
       // A method this repository declares, with a member of its own; and two
       // lists of different types, since a type is walked where it is first met.
       const withMethod = 'export {};\ninterface Refresh { (): Promise<number>; cell: string[] }';
