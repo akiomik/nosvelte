@@ -360,8 +360,12 @@ sealClass(ReqFailure);
  * note ("nothing — you are not meant to see this") are four answers. They are
  * separated now, and this is the one that is genuinely its own: not retryable on
  * the handle a consumer is holding, and not a relay's fault.
+ *
+ * Exported for the arms, which name each class this library makes; the entry
+ * does not publish it, and {@link providerDisposed} is how this library builds
+ * one.
  */
-class ProviderDisposedError extends Error {
+export class ProviderDisposedError extends Error {
   /**
    * The four members `Error` gives this class, re-declared. See any sibling for
    * why: inherited members are where the deep-`readonly` promise was false.

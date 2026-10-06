@@ -27,10 +27,12 @@
  * own contract (`refresh()` is meant to change shared state). So a function is
  * admitted in four places only — a command a live interface names, a getter's
  * own function object, a live interface that is itself a function
- * (`useSend()`'s), and a library class reached as its prototype's
- * `constructor`, the one function a consumer may construct — and what a
- * command resolves with is checked by calling it, in the arrangement, as a
- * value.
+ * (`useSend()`'s), and one of this library's classes, reached as its
+ * prototype's `constructor` or as a link of a chain, the one function a
+ * consumer may construct — and what a command resolves with is checked by
+ * calling it, in the arrangement, as a value. Which classes are this
+ * library's is the arrangement's to say, from the classes it imports: a
+ * prototype is not asked which class it holds.
  *
  * **Two roles, and what they carry.** A *snapshot* — a state, a diagnostics
  * value, an outcome, an Error, a refusal, an outlet's argument — is a closed
@@ -83,8 +85,13 @@ export interface LiveInterface {
 export interface Discipline {
   /** The live interfaces in this arrangement, by identity; every other object is a snapshot. */
   readonly interfaces: ReadonlyMap<object, LiveInterface>;
-  /** The prototypes a published Error may have: this library's own classes, and no other. */
-  readonly errors: ReadonlySet<object>;
+  /**
+   * This library's own classes, by their prototypes: the prototypes a published
+   * Error may have, and the one class each must hold — taken from the classes
+   * themselves where the arrangement imports them, not read off the prototype
+   * it is a question about.
+   */
+  readonly classes: ReadonlyMap<object, object>;
 }
 
 /**
@@ -195,6 +202,7 @@ type Role = 'value' | 'function' | 'prototype';
  */
 export function breachesOf(root: unknown, at: string, discipline: Discipline): string[] {
   const found: string[] = [];
+  const classes = new Set(discipline.classes.values());
   const seen = new Map<object, Set<Role>>();
   const first = (value: object, role: Role): boolean => {
     let roles = seen.get(value);
@@ -254,7 +262,7 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
         : proto === Object.prototype ||
           proto === null ||
           proto === Array.prototype ||
-          (proto !== null && discipline.errors.has(proto));
+          (proto !== null && discipline.classes.has(proto));
       if (!admitted) {
         found.push(`${path}: a kind this discipline does not admit`);
         return;
@@ -269,10 +277,18 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
     chain(value, path);
 
     const keys = Reflect.ownKeys(value);
-    // **A library prototype holds its class**, and one without it would leave
-    // the class unreached — and unread — by every instance that inherits it.
-    if (role === 'prototype' && !isFunction && !keys.includes('constructor'))
-      found.push(`${path}: a prototype without its class`);
+    // **A link of a chain is one of this library's classes, or its
+    // prototype**: a prototype holds its class — one without it would leave the
+    // class unreached, and unread, by every instance that inherits it — and a
+    // function on a chain is a class this library made, the one function a
+    // consumer may construct.
+    const library = role === 'prototype' ? discipline.classes.get(value) : undefined;
+    if (role === 'prototype' && !isFunction) {
+      if (library === undefined) found.push(`${path}: a prototype that is not this library's`);
+      else if (!keys.includes('constructor')) found.push(`${path}: a prototype without its class`);
+    }
+    if (role === 'prototype' && isFunction && !classes.has(value))
+      found.push(`${path}: a function on a chain that is not this library's class`);
     if (isInterface) {
       for (const member of [...named.getters, ...named.commands])
         if (!keys.includes(member)) found.push(`${path}.${member}: named and absent`);
@@ -305,14 +321,9 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
           // inherits that no rule names. And its `constructor` is the class
           // whose `prototype` it is, not some other function wearing the name.
           if (key !== 'constructor') found.push(`${where}: a member every instance inherits`);
-          else if (
-            typeof held !== 'function' ||
-            Reflect.getOwnPropertyDescriptor(held, 'prototype')?.value !== value
-          )
+          else if (library !== undefined && held !== library)
             found.push(`${where}: a constructor that is not this prototype's class`);
-          // Walked either way: a class as a function, and anything else in its
-          // place as the value every instance reaches it as.
-          visit(held, where, typeof held === 'function' ? 'function' : 'value');
+          if (typeof held === 'function') visit(held, where, 'function');
         } else {
           visit(held, where, 'value');
         }

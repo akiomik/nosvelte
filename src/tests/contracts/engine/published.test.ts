@@ -61,7 +61,7 @@ import { beginAttempt, emptyEventSet, noteFailure } from '$lib/v1/eventset.js';
 import * as Entry from '$lib/v1/index.js';
 import { UnsupportedFilterError } from '$lib/v1/key.js';
 import { InvalidDescriptorError } from '$lib/v1/normalize.js';
-import { capture, providerDisposed, ReqFailure } from '$lib/v1/own.js';
+import { capture, ProviderDisposedError, ReqFailure } from '$lib/v1/own.js';
 import { useReq } from '$lib/v1/req.svelte.js';
 import {
   isRelayNotInScope,
@@ -294,31 +294,33 @@ const LIBRARY = resolve(dirname(fileURLToPath(import.meta.url)), '../../../lib/v
  * is one this library did not make. `ProviderDisposedError` is not exported, so
  * its prototype is read off the one factory that makes it.
  */
-const LIBRARY_ERRORS: readonly object[] = [
-  AccumulatorContractError,
-  AttemptAbandonedError,
-  IncompleteResultError,
-  InvalidDescriptorError,
-  InvalidRelayInputError,
-  InvalidRelayScopeError,
-  MissingProviderError,
-  MissingRandomnessError,
-  MissingVerifierError,
-  NonIdempotentRelayUrlError,
-  RelayConfigurationError,
-  RelayNotInScopeError,
-  ReqFailure,
-  RequestTransportIncompatibleError,
-  TransportIncompatibleError,
-  TransportKeyMismatchError,
-  UnsupportedFilterError
-].map((one) => one.prototype as object);
-const PROVIDER_DISPOSED = Object.getPrototypeOf(providerDisposed('the class behind the factory'));
+const LIBRARY_CLASSES: ReadonlyMap<object, object> = new Map(
+  [
+    AccumulatorContractError,
+    AttemptAbandonedError,
+    IncompleteResultError,
+    InvalidDescriptorError,
+    InvalidRelayInputError,
+    InvalidRelayScopeError,
+    MissingProviderError,
+    MissingRandomnessError,
+    MissingVerifierError,
+    NonIdempotentRelayUrlError,
+    RelayConfigurationError,
+    RelayNotInScopeError,
+    ReqFailure,
+    RequestTransportIncompatibleError,
+    TransportIncompatibleError,
+    TransportKeyMismatchError,
+    UnsupportedFilterError,
+    ProviderDisposedError
+  ].map((one) => [one.prototype as object, one])
+);
 
 /** The discipline over one arrangement's live interfaces. */
 const disciplineOver = (interfaces: readonly (readonly [object, LiveInterface])[]): Discipline => ({
   interfaces: new Map(interfaces),
-  errors: new Set([...LIBRARY_ERRORS, PROVIDER_DISPOSED as object])
+  classes: LIBRARY_CLASSES
 });
 
 /**
@@ -532,6 +534,15 @@ function disciplineControls(): void {
     value: { prototype: RecordedClass.prototype }
   });
   Object.freeze(RecordedClass.prototype);
+  // A function whose own `prototype` is the class's, standing in its place:
+  // it names the prototype, and is not the class the arrangement imported.
+  class PretendedClass extends Error {}
+  const pretender = function pretender(): void {};
+  pretender.prototype = PretendedClass.prototype;
+  Object.defineProperty(PretendedClass.prototype, 'constructor', {
+    value: Object.freeze(pretender)
+  });
+  Object.freeze(PretendedClass.prototype);
   class ClasslessClass extends Error {}
   Reflect.deleteProperty(ClasslessClass.prototype, 'constructor');
   Object.freeze(ClasslessClass.prototype);
@@ -543,7 +554,7 @@ function disciplineControls(): void {
   const ours = owned(new Ours('as it was'));
   const control: Discipline = {
     interfaces: new Map(),
-    errors: new Set(
+    classes: new Map(
       [
         Ours,
         Setting,
@@ -556,9 +567,10 @@ function disciplineControls(): void {
         HalfOpen,
         RecordedClass,
         ClasslessClass,
+        PretendedClass,
         Marked,
         Impostor
-      ].map((one) => one.prototype as object)
+      ].map((one) => [one.prototype as object, one])
     )
   };
   const breaches = (value: unknown, discipline = control): string[] =>
@@ -633,9 +645,9 @@ function disciplineControls(): void {
       "held (inherited from a prototype).constructor: a constructor that is not this prototype's class"
     ],
     [
-      'a record in the class’s place, left open',
-      owned(new RecordedClass('x')),
-      'held (inherited from a prototype).constructor: extensible'
+      'a function that names the prototype and is not its class',
+      owned(new PretendedClass('x')),
+      "held (inherited from pretender).constructor: a constructor that is not this prototype's class"
     ],
     [
       'a primitive every instance inherits',
@@ -739,7 +751,7 @@ function disciplineControls(): void {
     unwalked: ['raw']
   };
   const over = (value: object, interfaceSpec = spec): string[] =>
-    breaches(value, { interfaces: new Map([[value, interfaceSpec]]), errors: control.errors });
+    breaches(value, { interfaces: new Map([[value, interfaceSpec]]), classes: control.classes });
   const kept = handle({
     state: getter(closed({ status: 'settled' })),
     raw: getter({ open: 'and not walked' }),
@@ -748,7 +760,18 @@ function disciplineControls(): void {
     refresh: { value: closed(async () => undefined) }
   });
   expect(over(kept), 'a live interface that keeps every rule').toEqual([]);
+  // A constructible function no class of this library's is, on a command's
+  // chain: closed, and still a second function a consumer can construct.
+  const Stranger = function Stranger(): void {};
+  Object.freeze(Stranger.prototype);
+  Object.freeze(Stranger);
+  const strayed = closed(Object.setPrototypeOf(async () => undefined, Stranger) as object);
   const interfaceRules: [string, object, string, LiveInterface?][] = [
+    [
+      'a function on a command’s chain that is not this library’s class',
+      handle({ state: getter(1), raw: getter(1), refresh: { value: strayed } }),
+      "held.refresh (inherited from a prototype): a function on a chain that is not this library's class"
+    ],
     [
       'a getter’s output',
       handle({ state: getter({ open: true }), raw: getter(1), refresh: { value: command } }),
@@ -1000,7 +1023,7 @@ function disciplineControls(): void {
         closed(() => undefined),
         {
           interfaces: new Map(),
-          errors: control.errors
+          classes: control.classes
         }
       ),
       'the discipline’s control: a setter on every function’s chain, not a restricted one'
@@ -1015,7 +1038,7 @@ function disciplineControls(): void {
   expect(
     breaches(sendLike, {
       interfaces: new Map([[sendLike, { getters: [], commands: [] }]]),
-      errors: control.errors
+      classes: control.classes
     }),
     'the discipline’s control: a function interface that can be constructed'
   ).toContain('held: a constructible function');
@@ -1026,7 +1049,7 @@ function disciplineControls(): void {
   expect(
     breaches(closed({ first: linked, then: slottedLink }), {
       interfaces: new Map(),
-      errors: new Set([slottedLink])
+      classes: new Map([[slottedLink, class Holder {}]])
     }),
     'the discipline’s control: one object, two roles'
   ).toEqual(
