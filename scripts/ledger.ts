@@ -319,7 +319,9 @@ interface Snapshot {
  * these bytes, so it is the snapshot whatever the tree does meanwhile. Its
  * dependencies are cloned after, and refused unless the clone's installation
  * record and the tree's are still the one read; this assumes no install runs
- * while a copy is made, since one still running may show in neither.
+ * while a copy is made, since one still running may show in neither. Links
+ * are followed in the tree when the copy is made, not when it was read, so
+ * this also assumes no link in the tree is changed meanwhile.
  */
 function snapshotOf(excluded: string | undefined): Snapshot {
   const revision = git(ROOT, 'rev-parse', 'HEAD').trim();
