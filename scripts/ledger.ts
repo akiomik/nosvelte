@@ -112,16 +112,31 @@ const WRITTEN = ['.vite', '.vite-temp', '.cache'];
 /** Seconds a stopped run's group is given to end before it is killed. */
 const GRACE = 5;
 /**
- * `cp`'s arguments for a clone of a directory's contents: copy-on-write on
- * macOS (`-c`, which falls back to copying) and with GNU's `--reflink=auto`
- * on Linux (which does too); a plain recursive copy elsewhere.
+ * `cp`'s arguments for a clone of a directory's contents, links kept as
+ * links: copy-on-write where this `cp` takes it — `-c` on macOS, which falls
+ * back to copying, `--reflink=auto` with GNU's, which does too — tried on a
+ * small directory first, and a plain recursive copy where it is refused.
  */
-const CLONE =
-  process.platform === 'darwin'
-    ? ['-cR']
-    : process.platform === 'linux'
-      ? ['-R', '--reflink=auto']
-      : ['-R'];
+function cloneFlags(): string[] {
+  const preferred =
+    process.platform === 'darwin'
+      ? ['-cRP']
+      : process.platform === 'linux'
+        ? ['-RP', '--reflink=auto']
+        : undefined;
+  if (preferred === undefined) return ['-RP'];
+  const trial = mkdtempSync(join(tmpdir(), 'nosvelte-ledger-cp-'));
+  try {
+    mkdirSync(join(trial, 'from'));
+    writeFileSync(join(trial, 'from', 'file'), 'cloned');
+    const tried = spawnSync('cp', [...preferred, `${join(trial, 'from')}/`, join(trial, 'to')], {
+      stdio: 'ignore'
+    });
+    return tried.status === 0 && existsSync(join(trial, 'to', 'file')) ? preferred : ['-RP'];
+  } finally {
+    rmSync(trial, { recursive: true, force: true });
+  }
+}
 
 /** One edit of a source file: `from` must occur exactly once, and `to` is inserted as written. */
 export interface Edit {
@@ -292,7 +307,7 @@ interface Snapshot {
   /** Untracked paths not carried: nested repositories, such as other worktrees. */
   readonly nested: readonly string[];
   /** `node_modules/.package-lock.json` as read: the installation the copy must be a clone of. */
-  readonly installed: Buffer | undefined;
+  readonly installed: Buffer;
   readonly fingerprint: string;
 }
 
@@ -300,9 +315,11 @@ interface Snapshot {
  * The user's tree, read once: its revision, its uncommitted changes, and its
  * untracked files that are not ignored — less `excluded`, the result file a
  * run writes — with a fingerprint of all of them and of the dependency tree
- * npm recorded installing. A copy's source is made from these bytes, so it is
- * the snapshot whatever the tree does meanwhile; its dependencies are cloned
- * after, and refused unless their installation record is the one read.
+ * npm recorded installing, which a run requires. A copy's source is made from
+ * these bytes, so it is the snapshot whatever the tree does meanwhile. Its
+ * dependencies are cloned after, and refused unless the clone's installation
+ * record and the tree's are still the one read; this assumes no install runs
+ * while a copy is made, since one still running may show in neither.
  */
 function snapshotOf(excluded: string | undefined): Snapshot {
   const revision = git(ROOT, 'rev-parse', 'HEAD').trim();
@@ -325,9 +342,15 @@ function snapshotOf(excluded: string | undefined): Snapshot {
     hash.update(`\0${file.path}\0${file.mode}\0`);
     hash.update(file.link ?? (file.content as Buffer));
   }
+  // The installation, as npm recorded it: without that record there is
+  // nothing to tell one installation from another, so no run.
   const record = join(ROOT, 'node_modules/.package-lock.json');
-  const installed = existsSync(record) ? readFileSync(record) : undefined;
-  hash.update('\0').update(installed ?? 'no installed tree');
+  if (!existsSync(record))
+    fail(
+      `${record} is missing; this runner fingerprints the dependencies by the record npm writes`
+    );
+  const installed = readFileSync(record);
+  hash.update('\0').update(installed);
   return {
     revision,
     patch,
@@ -363,7 +386,7 @@ async function copyOf(snapshot: Snapshot, limit: number): Promise<Copy> {
   // Under the temporary directory's real path: a copy reached through a link
   // (`/var` on macOS is `/private/var`) names its files twice, to Vite and to
   // the reports alike.
-  const directory = mkdtempSync(join(realpathSync(tmpdir()), COPIES));
+  const directory = mkdtempSync(join(realpathSync.native(tmpdir()), COPIES));
   const tree = join(directory, 'tree');
   const owner: Owner = { pid: process.pid, root: ROOT, tree, started: new Date().toISOString() };
   writeFileSync(join(directory, 'owner.json'), JSON.stringify(owner));
@@ -385,26 +408,36 @@ async function copyOf(snapshot: Snapshot, limit: number): Promise<Copy> {
   // `node_modules` is a link would otherwise copy the link, and what follows
   // would remove the user's caches — copy-on-write where the filesystem can.
   // A package that writes into its own directory writes the copy's.
-  const dependencies = realpathSync(join(ROOT, 'node_modules'));
+  const dependencies = realpathSync.native(join(ROOT, 'node_modules'));
   const modules = join(tree, 'node_modules');
-  must('cp', [...CLONE, `${dependencies}/`, modules], ROOT);
+  must('cp', [...cloneFlags(), `${dependencies}/`, modules], ROOT);
   if (!lstatSync(modules).isDirectory() || lstatSync(modules).isSymbolicLink())
     fail(`${modules} is not a directory of the copy's own`);
   for (const name of WRITTEN) rmSync(join(modules, name), { recursive: true, force: true });
   // The installation copied is the one fingerprinted: an install that ran
   // while the copy was made would make the record describe another.
+  // An install that ran meanwhile shows in either record; one still running
+  // may show in neither, which is why no install may run while a copy is
+  // made.
   const record = join(modules, '.package-lock.json');
   const cloned = existsSync(record) ? readFileSync(record) : undefined;
+  const source = join(ROOT, 'node_modules/.package-lock.json');
+  const now = existsSync(source) ? readFileSync(source) : undefined;
+  const installed = snapshot.installed as Buffer;
   if (
-    (cloned === undefined) !== (snapshot.installed === undefined) ||
-    (cloned !== undefined && !cloned.equals(snapshot.installed as Buffer))
+    cloned === undefined ||
+    now === undefined ||
+    !cloned.equals(installed) ||
+    !now.equals(installed)
   )
     fail('the dependencies changed while they were copied; run again');
-  const outside = relink(tree, dependencies);
+  const { outside, dangling } = relink(tree, dependencies);
   if (outside.length > 0)
     process.stdout.write(
       `  links that leave the tree, shared with the copy: ${outside.join(', ')}\n`
     );
+  if (dangling.length > 0)
+    process.stdout.write(`  links that lead nowhere, left as written: ${dangling.join(', ')}\n`);
   const synced = await supervised(
     [join(tree, 'node_modules/.bin/svelte-kit'), 'sync'],
     copy,
@@ -425,55 +458,53 @@ function within(root: string, path: string): string | undefined {
     : inside;
 }
 
-/** A path's real spelling, as far as its existing ancestors have one. */
-function realOf(path: string): string {
-  let at = path;
-  const rest: string[] = [];
-  while (!existsSync(at)) {
-    rest.unshift(basename(at));
-    const up = dirname(at);
-    if (up === at) return path;
-    at = up;
-  }
-  return join(realpathSync(at), ...rest);
-}
-
-/** Where `path`, in the user's tree, is in the copy at `tree`; or `undefined` if it is outside the tree. */
-function intoCopy(path: string, tree: string): string | undefined {
-  const inside = within(realpathSync(ROOT), realOf(path)) ?? within(ROOT, path);
-  return inside === undefined ? undefined : join(tree, inside);
-}
-
 /**
- * Every link in the copy, read as the user's tree reads it: its target
- * resolved from the link's own place there — in the tree, or, under
- * `node_modules`, in the directory the dependencies really are, which a
- * checkout may share by a link. One that lands in the dependencies or the
- * tree is pointed at the same place in the copy: one such link,
- * `node_modules/node_modules`, had a dependency's imports resolve to the
- * user's packages beside the copy's, and an arm wait out its timeout on an
- * answer the second copy of Svelte never gave. One that lands outside both is
- * pointed where it pointed, and reported: reads and writes through it are
- * shared with the user's.
+ * Every link in the copy, read as the user's tree reads it. Each is followed
+ * where it stands in the user's tree — in the tree or, under `node_modules`,
+ * in the directory the dependencies really are — by the operating system's
+ * `realpath`, so a link met on the way is followed before a `..` after it, as
+ * a read would follow it. Node's own `realpathSync` folds the `..` first: a
+ * link to `portal/../target`, where `portal` leaves the tree, read as the
+ * tree's `target`. One that arrives in the dependencies or the tree points at the same
+ * place in the copy: one such link, `node_modules/node_modules`, had a
+ * dependency's imports resolve to the user's packages beside the copy's, and
+ * an arm wait out its timeout on an answer the second copy of Svelte never
+ * gave. One that arrives outside both points there, and is reported, since
+ * reads and writes through it are shared. One that arrives nowhere is left as
+ * written, and reported.
  */
-function relink(tree: string, dependencies: string): string[] {
+function relink(tree: string, dependencies: string): { outside: string[]; dangling: string[] } {
   const outside: string[] = [];
+  const dangling: string[] = [];
   const modules = join(tree, 'node_modules');
+  const root = realpathSync.native(ROOT);
   for (const link of linksUnder(tree)) {
     const at = relative(tree, link);
     const inModules = within(modules, link);
     const original = inModules === undefined ? join(ROOT, at) : join(dependencies, inModules);
     const target = readlinkSync(link);
-    const resolved = resolve(dirname(original), target);
-    const intoModules = within(dependencies, realOf(resolved));
-    const moved = intoModules === undefined ? intoCopy(resolved, tree) : join(modules, intoModules);
-    const wanted = moved === undefined ? resolved : relative(dirname(link), moved) || '.';
-    if (moved === undefined) outside.push(`${at} -> ${target}`);
+    let destination: string;
+    try {
+      destination = realpathSync.native(original);
+    } catch {
+      dangling.push(`${at} -> ${target}`);
+      continue;
+    }
+    const intoModules = within(dependencies, destination);
+    const intoTree = intoModules === undefined ? within(root, destination) : undefined;
+    const moved =
+      intoModules !== undefined
+        ? join(modules, intoModules)
+        : intoTree !== undefined
+          ? join(tree, intoTree)
+          : undefined;
+    const wanted = moved === undefined ? destination : relative(dirname(link), moved) || '.';
+    if (moved === undefined) outside.push(`${at} -> ${destination}`);
     if (wanted === target) continue;
     rmSync(link);
     symlinkSync(wanted, link);
   }
-  return outside;
+  return { outside, dangling };
 }
 
 /** Every symbolic link under `directory`, not following any. */
@@ -528,7 +559,7 @@ const registered = (): Set<string> =>
  * costs only disk.
  */
 function cleanCommand(): void {
-  const parent = realpathSync(tmpdir());
+  const parent = realpathSync.native(tmpdir());
   const worktrees = registered();
   let removed = 0;
   for (const name of readdirSync(parent).filter((one) => one.startsWith(COPIES))) {
@@ -910,13 +941,13 @@ const readResults = (file: string): Record<string, unknown>[] =>
 function resultFileOf(out: string): { path: string; excluded: string | undefined } {
   const path = resolve(out);
   mkdirSync(dirname(path), { recursive: true });
-  const real = join(realpathSync(dirname(path)), basename(path));
+  const real = join(realpathSync.native(dirname(path)), basename(path));
   if (existsSync(real)) {
     const stat = lstatSync(real);
     if (!stat.isFile() || stat.nlink !== 1)
       fail(`${out} is a link or has another name; write results elsewhere`);
   }
-  const inside = within(realpathSync(ROOT), real);
+  const inside = within(realpathSync.native(ROOT), real);
   if (inside === undefined) return { path: real, excluded: undefined };
   if (git(ROOT, 'ls-files', '--', inside).trim() !== '')
     fail(`${out} is a tracked file; write results elsewhere`);
@@ -932,8 +963,8 @@ function writeNew(path: string, text: string): void {
 
 /** Each file an edit touches, refused unless it resolves inside the copy. */
 function inside(copy: Copy, file: string): string {
-  const real = realpathSync(join(copy.tree, file));
-  const root = realpathSync(copy.tree);
+  const real = realpathSync.native(join(copy.tree, file));
+  const root = realpathSync.native(copy.tree);
   if (!real.startsWith(`${root}${sep}`))
     fail(`${file} resolves outside the copy (${real}); a mutation is not applied there`);
   return real;
