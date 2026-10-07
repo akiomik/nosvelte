@@ -21,8 +21,9 @@ export default {
     'src/tests/contracts/engine/bounded.test.ts'
   ],
   calibration: {
-    measured: 'at 807ea1e, one worker, on a shared 10-core machine',
-    seconds: { ES1b: 4, ES28: 4.5, ES3: 12.5, ES5: 7, ES6d: 19, ES6f: 18 }
+    measured:
+      'the median of each run in a full run at 1bcb5a9, one worker, on a shared 10-core machine; ES6d and ES6f, always run together, share their run',
+    seconds: { ES1b: 3, ES28: 4.4, ES3: 3, ES5: 6.6, ES6d: 16.3, ES6f: 16.3 }
   },
   entries: [
     {

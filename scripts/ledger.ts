@@ -169,10 +169,10 @@ export interface Ledger {
   /** The test files the arms are declared in. */
   readonly files: readonly string[];
   /**
-   * Seconds one run of each arm alone took, process start included, and where
-   * it was measured: the plan's estimate, never a check. Arms differ by an
-   * order of magnitude, so the estimate is per arm. A run reports how far it
-   * drifted from it.
+   * Seconds a run of each arm takes, process start included, and how that was
+   * measured: the plan's estimate, never a check. Arms differ by an order of
+   * magnitude, so the estimate is per arm, summed over a run's arms — an upper
+   * bound where arms share a run. A run reports how far it drifted from it.
    */
   readonly calibration: {
     readonly measured: string;
@@ -911,7 +911,7 @@ function planText(ledger: Ledger, chosen: readonly Entry[], options: Options): s
     `  runs ${groups.length + 1}: ${groups.length} mutations and one baseline, each one Vitest process over ${ledger.files.join(', ')}, in a disposable copy of this tree`,
     `  arms ${[...new Set(chosen.flatMap(armsOf))].sort().join(', ')}`,
     `  load: ${options.workers} worker${options.workers === 1 ? '' : 's'}${options.nice === undefined ? '' : `, nice ${options.nice}`}, at most ${options.limit} s a run`,
-    `  estimate about ${(estimate(ledger, chosen) / 60).toFixed(0)} min at one worker, from each arm's time alone (${ledger.calibration.measured})`
+    `  estimate about ${(estimate(ledger, chosen) / 60).toFixed(0)} min at one worker, from each arm's measured time (${ledger.calibration.measured})`
   ].join('\n');
 }
 
