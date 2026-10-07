@@ -15,19 +15,22 @@
  *     node scripts/ledger.ts table <ledger> <results>  — the markdown table a PR quotes
  *     node scripts/ledger.ts clean                     — remove the copies runs that died left behind
  *
- * **A run never writes the tree it is started in.** It copies that tree
- * into a disposable git worktree:
+ * **A run writes nothing of the tree it is started in but its result file.**
+ * It reads the tree once and builds a disposable git worktree from what it
+ * read:
  * - `HEAD`, with the uncommitted changes applied;
- * - the untracked files that are not ignored;
- * - `node_modules` linked package by package, with Vite's writable
- *   directories of its own;
- * - `.svelte-kit` generated afresh.
+ * - the untracked files that are not ignored, from the bytes captured;
+ * - `node_modules` cloned, copy-on-write where the filesystem can, without
+ *   what Vite, Vitest and this runner write there;
+ * - `.svelte-kit` generated afresh, under the supervisor and the limit.
  *
- * Every mutation is applied, run and restored there, and the copy is removed
- * when the run ends. A run that dies leaves only that copy behind, which
- * `clean` removes once nothing runs in it. Two runs are two copies. A file the
- * copy cannot restore ends the run: the copy is discarded, and the user's tree
- * was never touched.
+ * Git runs with no hooks while it does so. Every mutation is applied, run and
+ * restored inside the copy. An edit that resolves outside it is refused, and a
+ * restore that does not read back ends the run. The copy is removed when the
+ * run ends. A run that dies leaves only its copy, which `clean` removes once
+ * the copy proves to be one of this repository's and nothing runs in it. Two
+ * runs are two copies. The result file must be a plain file of its own, and
+ * not a tracked one; its header is written whole or not at all.
  *
  * **What a result is.** Each verdict is read from Vitest's JSON report, not
  * from its console, and from the one test each arm is:
@@ -52,7 +55,8 @@
  * **Cost, chosen rather than defaulted.** One run is one Vitest process,
  * given only its arms by `-t`, under a supervisor that leads its process
  * group and stops it whole: at `--limit`, and when the runner dies, however it
- * dies (`ledger-supervisor.ts`). Entries whose edits are identical, one
+ * dies (`ledger-supervisor.ts`). If the supervisor itself is stopped or killed,
+ * the runner kills the group a grace period past the limit. Entries whose edits are identical, one
  * mutation held against several arms, run once. `--workers` (default 1) and
  * `--nice` trade load against time. A ledger's `calibration` turns a plan into
  * an estimate, and a run reports how far it drifted from it.
@@ -73,7 +77,6 @@ import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -81,12 +84,14 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 
@@ -95,8 +100,10 @@ const SUPERVISOR = join(ROOT, 'scripts/ledger-supervisor.ts');
 /** The prefix of every copy this repository's runs make, and nothing else's. */
 const COPIES = `nosvelte-ledger-${createHash('sha256').update(ROOT).digest('hex').slice(0, 12)}-run-`;
 const RESULTS = join(ROOT, 'node_modules/.cache/nosvelte-ledger');
-/** What Vite and Vitest write under `node_modules`: the copy's own, not linked. */
-const WRITTEN = new Set(['.vite', '.vite-temp', '.cache']);
+/** What Vite, Vitest and this runner write under `node_modules`: not carried into a copy. */
+const WRITTEN = ['.vite', '.vite-temp', '.cache'];
+/** Seconds a stopped run's group is given to end before it is killed. */
+const GRACE = 5;
 
 /** One edit of a source file: `from` must occur exactly once, and `to` is inserted as written. */
 export interface Edit {
@@ -188,7 +195,7 @@ function must(command: string, args: readonly string[], cwd: string, input?: Buf
 }
 /** Git with no hooks: making and removing a copy runs nothing of the repository's. */
 const gitBytes = (cwd: string, ...args: string[]): Buffer =>
-  must('git', ['-c', `core.hooksPath=${tmpdir()}/nosvelte-ledger-no-hooks`, ...args], cwd);
+  must('git', ['-c', 'core.hooksPath=/dev/null', ...args], cwd);
 const git = (cwd: string, ...args: string[]): string => gitBytes(cwd, ...args).toString('utf8');
 
 const occurrences = (text: string, part: string): number => text.split(part).length - 1;
@@ -250,133 +257,251 @@ function groupsOf(entries: readonly Entry[]): Group[] {
   }));
 }
 
-/** The tree a run is about, as it was when the run began. */
+/** One untracked file, as read when the run began. */
+interface Captured {
+  readonly path: string;
+  readonly mode: number;
+  /** A symbolic link's target, as spelled; or the file's bytes. */
+  readonly link?: string;
+  readonly content?: Buffer;
+}
+
+/** The tree a run is about, as it was read when the run began. */
 interface Snapshot {
   readonly revision: string;
   readonly patch: Buffer;
-  readonly untracked: readonly string[];
+  readonly files: readonly Captured[];
+  /** Untracked paths not carried: nested repositories, such as other worktrees. */
+  readonly nested: readonly string[];
   readonly fingerprint: string;
 }
 
 /**
- * The user's tree: its revision, its uncommitted changes, and its untracked
- * files that are not ignored — less `excluded`, the result file a run writes
- * — with a fingerprint of all of them and of the dependency tree npm
- * recorded installing.
+ * The user's tree, read once: its revision, its uncommitted changes, and its
+ * untracked files that are not ignored — less `excluded`, the result file a
+ * run writes — with a fingerprint of all of them and of the dependency tree
+ * npm recorded installing. A copy is made from these bytes, so it is the
+ * snapshot whatever the tree does meanwhile.
  */
 function snapshotOf(excluded: string | undefined): Snapshot {
   const revision = git(ROOT, 'rev-parse', 'HEAD').trim();
   const patch = gitBytes(ROOT, 'diff', 'HEAD', '--binary');
-  const untracked = git(ROOT, 'ls-files', '--others', '--exclude-standard', '-z')
+  const listed = git(ROOT, 'ls-files', '--others', '--exclude-standard', '-z')
     .split('\0')
     .filter((file) => file !== '' && file !== excluded)
     .sort();
+  const nested = listed.filter((file) => file.endsWith('/'));
+  const files: Captured[] = listed
+    .filter((file) => !file.endsWith('/'))
+    .map((file) => {
+      const stat = lstatSync(join(ROOT, file));
+      return stat.isSymbolicLink()
+        ? { path: file, mode: stat.mode, link: readlinkSync(join(ROOT, file)) }
+        : { path: file, mode: stat.mode, content: readFileSync(join(ROOT, file)) };
+    });
   const hash = createHash('sha256').update(revision).update('\0').update(patch);
-  for (const file of untracked) {
-    if (file.endsWith('/')) continue;
-    const stat = lstatSync(join(ROOT, file));
-    hash.update(`\0${file}\0${stat.mode}\0`);
-    hash.update(
-      stat.isSymbolicLink() ? readlinkSync(join(ROOT, file)) : readFileSync(join(ROOT, file))
-    );
+  for (const file of files) {
+    hash.update(`\0${file.path}\0${file.mode}\0`);
+    hash.update(file.link ?? (file.content as Buffer));
   }
   const installed = join(ROOT, 'node_modules/.package-lock.json');
   hash.update('\0').update(existsSync(installed) ? readFileSync(installed) : 'no installed tree');
-  return { revision, patch, untracked, fingerprint: hash.digest('hex').slice(0, 16) };
+  return { revision, patch, files, nested, fingerprint: hash.digest('hex').slice(0, 16) };
 }
 
-/** A disposable copy of `snapshot`: its directory, and the tree inside it. */
+/** A disposable copy of a snapshot: its directory, and the tree inside it. */
 interface Copy {
   readonly directory: string;
   readonly tree: string;
 }
 
+/** What a copy's directory says of itself, which `clean` checks before removing anything. */
+interface Owner {
+  readonly pid: number;
+  readonly root: string;
+  readonly tree: string;
+  readonly started: string;
+}
+
 /**
  * The copy a run works in, made from `snapshot` and discarded when this process
- * ends. Refused if the user's tree moved while it was being copied.
+ * ends: the worktree at its revision, its patch, its untracked files from the
+ * bytes captured, `node_modules` cloned (copy-on-write where the filesystem
+ * can) without what Vite and Vitest write there, and `.svelte-kit` generated
+ * under the supervisor, bounded by `limit`.
  */
-function copyOf(snapshot: Snapshot, excluded: string | undefined): Copy {
-  const directory = mkdtempSync(join(tmpdir(), COPIES));
-  writeFileSync(
-    join(directory, 'owner.json'),
-    JSON.stringify({ pid: process.pid, started: new Date().toISOString() })
-  );
+async function copyOf(snapshot: Snapshot, limit: number): Promise<Copy> {
+  // Under the temporary directory's real path: a copy reached through a link
+  // (`/var` on macOS is `/private/var`) names its files twice, to Vite and to
+  // the reports alike.
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), COPIES));
   const tree = join(directory, 'tree');
+  const owner: Owner = { pid: process.pid, root: ROOT, tree, started: new Date().toISOString() };
+  writeFileSync(join(directory, 'owner.json'), JSON.stringify(owner));
   const copy = { directory, tree };
   cleanups.push(() => discard(copy));
-  mkdirSync(`${tmpdir()}/nosvelte-ledger-no-hooks`, { recursive: true });
   git(ROOT, 'worktree', 'add', '--detach', tree, snapshot.revision);
   if (snapshot.patch.length > 0)
     must('git', ['apply', '--binary', '--whitespace=nowarn'], tree, snapshot.patch);
-  const nested: string[] = [];
-  for (const file of snapshot.untracked) {
-    // A nested repository, such as another worktree: not the tree's to copy.
-    if (file.endsWith('/')) {
-      nested.push(file);
-      continue;
-    }
-    const from = join(ROOT, file);
-    const to = join(tree, file);
+  for (const file of snapshot.files) {
+    const to = join(tree, file.path);
     mkdirSync(dirname(to), { recursive: true });
-    const stat = lstatSync(from);
-    if (stat.isSymbolicLink()) symlinkSync(readlinkSync(from), to);
+    if (file.link !== undefined) symlinkSync(retargeted(file.link, tree), to);
     else {
-      copyFileSync(from, to);
-      chmodSync(to, stat.mode);
+      writeFileSync(to, file.content as Buffer);
+      chmodSync(to, file.mode);
     }
   }
-  // The dependencies, linked one package at a time, so what Vite and Vitest
-  // write under `node_modules` is the copy's own.
-  mkdirSync(join(tree, 'node_modules'));
-  for (const name of readdirSync(join(ROOT, 'node_modules')))
-    if (!WRITTEN.has(name))
-      symlinkSync(join(ROOT, 'node_modules', name), join(tree, 'node_modules', name));
-  must(join(tree, 'node_modules/.bin/svelte-kit'), ['sync'], tree);
-  // Copied once; if the tree moved meanwhile, the copy is not of one tree.
-  if (snapshotOf(excluded).fingerprint !== snapshot.fingerprint)
-    fail('the tree changed while it was being copied; run again');
-  if (nested.length > 0)
-    process.stdout.write(`  not copied, nested repositories: ${nested.join(', ')}\n`);
+  // The dependencies, cloned: a package that writes into its own directory
+  // writes the copy's, and nothing the copy resolves is the user's to change.
+  must(
+    'cp',
+    [
+      process.platform === 'darwin' ? '-cR' : '-R',
+      ...(process.platform === 'darwin' ? [] : ['--reflink=auto']),
+      join(ROOT, 'node_modules'),
+      join(tree, 'node_modules')
+    ],
+    ROOT
+  );
+  for (const name of WRITTEN)
+    rmSync(join(tree, 'node_modules', name), { recursive: true, force: true });
+  // A link that names a path in this tree outright still names this tree in
+  // the copy: one such link, `node_modules/node_modules`, had a dependency's
+  // imports resolve to the user's packages beside the copy's, and an arm wait
+  // for an answer the second copy of Svelte never gave. Each is pointed at
+  // the copy's own; one that leaves the tree is reported, as the copy's reads
+  // and writes through it are the user's.
+  const outside: string[] = [];
+  for (const link of linksUnder(join(tree, 'node_modules'))) {
+    const target = readlinkSync(link);
+    if (!isAbsolute(target)) continue;
+    const moved = retargeted(target, tree);
+    if (moved === target) outside.push(`${relative(tree, link)} -> ${target}`);
+    else {
+      rmSync(link);
+      symlinkSync(moved, link);
+    }
+  }
+  if (outside.length > 0)
+    process.stdout.write(
+      `  links that leave the tree, shared with the copy: ${outside.join(', ')}\n`
+    );
+  const synced = await supervised(
+    [join(tree, 'node_modules/.bin/svelte-kit'), 'sync'],
+    tree,
+    limit
+  );
+  if (synced.stopped || synced.code !== 0)
+    fail(`svelte-kit sync did not finish in the copy${synced.stopped ? ` within ${limit} s` : ''}`);
+  if (snapshot.nested.length > 0)
+    process.stdout.write(`  not copied, nested repositories: ${snapshot.nested.join(', ')}\n`);
   return copy;
 }
 
-/** Remove a copy: its worktree's registration, then its directory. */
-function discard(copy: Copy): void {
-  spawnSync('git', ['worktree', 'remove', '--force', copy.tree], { cwd: ROOT, stdio: 'ignore' });
-  rmSync(copy.directory, { recursive: true, force: true });
+/** `target`, if it names a path in the user's tree outright, as the same path in `tree`. */
+function retargeted(target: string, tree: string): string {
+  if (!isAbsolute(target)) return target;
+  for (const root of new Set([ROOT, realpathSync(ROOT)])) {
+    const inside = relative(root, target);
+    if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside)))
+      return join(tree, inside);
+  }
+  return target;
 }
 
+/** Every symbolic link under `directory`, not following any. */
+function linksUnder(directory: string): string[] {
+  const found: string[] = [];
+  const walk = (at: string): void => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name);
+      if (entry.isSymbolicLink()) found.push(path);
+      else if (entry.isDirectory()) walk(path);
+    }
+  };
+  walk(directory);
+  return found;
+}
+
+/** Remove a copy: its worktree's registration, then its directory. */
+function discard(copy: Copy): boolean {
+  const removed = spawnSync(
+    'git',
+    ['-c', 'core.hooksPath=/dev/null', 'worktree', 'remove', '--force', copy.tree],
+    {
+      cwd: ROOT,
+      stdio: 'ignore'
+    }
+  );
+  rmSync(copy.directory, { recursive: true, force: true });
+  return removed.status === 0 && !existsSync(copy.directory);
+}
+
+/** The worktrees Git has registered for this repository, by path. */
+const registered = (): Set<string> =>
+  new Set(
+    git(ROOT, 'worktree', 'list', '--porcelain')
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => line.slice('worktree '.length))
+  );
+
 /**
- * Remove the copies runs left behind: each whose owner no longer runs. A copy
- * whose owner's number is alive is left, even if that process is another that
- * took the number since; it is reported, and costs only disk.
+ * Remove the copies runs left behind, and nothing else. A directory is
+ * removed only when every one of these holds:
+ * - its name carries this repository's prefix, and it is a real directory,
+ *   not a link;
+ * - its `owner.json` names this repository and its own `tree`, which is a
+ *   real directory that Git has registered as a worktree;
+ * - its owner no longer runs.
+ *
+ * Anything else is left and reported. A copy whose owner's number is alive is
+ * left too, even if that process is another that took the number since; it
+ * costs only disk.
  */
 function cleanCommand(): void {
-  const parent = tmpdir();
+  const parent = realpathSync(tmpdir());
+  const worktrees = registered();
   let removed = 0;
   for (const name of readdirSync(parent).filter((one) => one.startsWith(COPIES))) {
     const directory = join(parent, name);
-    let pid = Number.NaN;
+    const tree = join(directory, 'tree');
+    const leave = (why: string): void => {
+      process.stdout.write(`left ${directory}: ${why}\n`);
+    };
+    if (!lstatSync(directory).isDirectory()) {
+      leave('not a directory');
+      continue;
+    }
+    let owner: Partial<Owner>;
     try {
-      pid = Number(
-        (JSON.parse(readFileSync(join(directory, 'owner.json'), 'utf8')) as { pid?: unknown }).pid
-      );
+      owner = JSON.parse(readFileSync(join(directory, 'owner.json'), 'utf8')) as Partial<Owner>;
     } catch {
-      // A copy whose owner was never written.
+      leave('no owner it can read');
+      continue;
+    }
+    if (owner.root !== ROOT || owner.tree !== tree) {
+      leave('its owner names another repository or tree');
+      continue;
+    }
+    if (existsSync(tree) && (!lstatSync(tree).isDirectory() || !worktrees.has(tree))) {
+      leave('its tree is not a worktree of this repository');
+      continue;
     }
     let alive = false;
     try {
-      process.kill(pid, 0);
+      process.kill(Number(owner.pid), 0);
       alive = true;
     } catch {
       // Not running.
     }
     if (alive) {
-      process.stdout.write(`left ${directory}: process ${pid} is running\n`);
+      leave(`process ${owner.pid} is running`);
       continue;
     }
-    discard({ directory, tree: join(directory, 'tree') });
-    removed += 1;
+    if (discard({ directory, tree })) removed += 1;
+    else leave('Git or the filesystem refused to remove it');
   }
   process.stdout.write(
     `removed ${removed} cop${removed === 1 ? 'y' : 'ies'}; \`git worktree prune\` forgets the registration of any whose directory was deleted by hand\n`
@@ -408,15 +533,75 @@ interface Report {
   }[];
 }
 
-/** The supervisor of the run in progress: its pipe closed, its group stops. */
+/** The supervisor of the command in progress: its pipe closed, its group stops. */
 let running: ChildProcess | undefined;
+
+/** SIGKILL to a group this process started and has not yet seen end. */
+const killGroup = (pid: number | undefined): void => {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    // Already gone.
+  }
+};
+
+/**
+ * `command` in `cwd` under a supervisor that leads its process group, bounded
+ * by `limit`. At the limit the pipe is closed, and the supervisor stops the
+ * group; one that does not end within `GRACE` seconds, because its supervisor
+ * was stopped or killed, is killed from here. The group is still this
+ * process's child's, so its number has not been taken. When the supervisor
+ * ends, whatever of its group remains is killed too.
+ */
+function supervised(
+  command: readonly string[],
+  cwd: string,
+  limit: number
+): Promise<{ stopped: boolean; code: number | null }> {
+  const status = join(mkdtempSync(join(tmpdir(), 'nosvelte-ledger-status-')), 'status.json');
+  return new Promise((done) => {
+    let stopped = false;
+    const supervisor = spawn(process.execPath, [SUPERVISOR, status, ...command], {
+      cwd,
+      detached: true,
+      stdio: ['pipe', 'ignore', 'ignore']
+    });
+    running = supervisor;
+    const group = supervisor.pid;
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      stopped = true;
+      supervisor.stdin?.end();
+      grace = setTimeout(() => killGroup(group), GRACE * 1000);
+    }, limit * 1000);
+    const finish = (): void => {
+      clearTimeout(timer);
+      if (grace !== undefined) clearTimeout(grace);
+      killGroup(group);
+      running = undefined;
+      // The command's own exit, which the supervisor wrote before stopping
+      // its group; none, if the command never ran to an end.
+      let code: number | null = null;
+      try {
+        code = (JSON.parse(readFileSync(status, 'utf8')) as { code: number | null }).code;
+      } catch {
+        // No status written.
+      }
+      rmSync(dirname(status), { recursive: true, force: true });
+      done({ stopped, code });
+    };
+    supervisor.on('error', finish);
+    supervisor.on('close', finish);
+  });
+}
 
 /**
  * One Vitest process over the ledger's files in `tree`, given only `arms`,
- * under a supervisor that leads its process group — and its JSON report, or
- * why there is none.
+ * supervised and bounded by `--limit` — and its JSON report, or why there is
+ * none.
  */
-function runVitest(
+async function runVitest(
   tree: string,
   ledger: Ledger,
   arms: readonly string[],
@@ -437,41 +622,21 @@ function runVitest(
   ];
   const command =
     options.nice === undefined ? vitest : ['nice', '-n', String(options.nice), ...vitest];
-  return new Promise((done) => {
-    let stopped = false;
-    let finished = false;
-    const finish = (outcome: { report: Report } | { error: string }): void => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      running = undefined;
-      rmSync(directory, { recursive: true, force: true });
-      done(outcome);
-    };
-    // **A run that never ends is stopped, not waited on**: a mutation can put
-    // an arm in a loop no test timeout interrupts, since a synchronous loop
-    // never yields to one. It is an error, not a kill — what the arm would
-    // have said is unknown.
-    const timer = setTimeout(() => {
-      stopped = true;
-      running?.stdin?.end();
-    }, options.limit * 1000);
-    const supervisor = spawn(process.execPath, [SUPERVISOR, ...command], {
-      cwd: tree,
-      detached: true,
-      stdio: ['pipe', 'ignore', 'ignore']
-    });
-    running = supervisor;
-    supervisor.on('error', (error) => finish({ error: `the run did not start: ${error.message}` }));
-    supervisor.on('close', () => {
-      if (stopped) return finish({ error: `the run was stopped after ${options.limit} s` });
-      try {
-        finish({ report: JSON.parse(readFileSync(report, 'utf8')) as Report });
-      } catch {
-        finish({ error: 'Vitest wrote no report' });
-      }
-    });
-  });
+  // **A run that never ends is stopped, not waited on**: a mutation can put an
+  // arm in a loop no test timeout interrupts, since a synchronous loop never
+  // yields to one. It is an error, not a kill — what the arm would have said
+  // is unknown.
+  const ran = await supervised(command, tree, options.limit);
+  try {
+    if (ran.stopped) return { error: `the run was stopped after ${options.limit} s` };
+    try {
+      return { report: JSON.parse(readFileSync(report, 'utf8')) as Report };
+    } catch {
+      return { error: 'Vitest wrote no report' };
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 /** The tests in `report` named `arm`, each with where it is. */
@@ -663,13 +828,43 @@ const readResults = (file: string): Record<string, unknown>[] =>
     .split('\n')
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 
-/** The result file's path inside the user's tree, if it is one a copy would carry. */
-function excludedOf(out: string): string | undefined {
-  const inside = relative(ROOT, resolve(out));
-  if (inside.startsWith('..') || isAbsolute(inside)) return undefined;
+/**
+ * The result file: the one path a run writes outside its copy. It must be a
+ * plain file of its own — not a link, not a second name for another file —
+ * and not a tracked one, resolved through any link in its directories. Its
+ * path inside the user's tree, if it is in it, is returned, so the snapshot
+ * leaves it out.
+ */
+function resultFileOf(out: string): { path: string; excluded: string | undefined } {
+  const path = resolve(out);
+  mkdirSync(dirname(path), { recursive: true });
+  const real = join(realpathSync(dirname(path)), basename(path));
+  if (existsSync(real)) {
+    const stat = lstatSync(real);
+    if (!stat.isFile() || stat.nlink !== 1)
+      fail(`${out} is a link or has another name; write results elsewhere`);
+  }
+  const inside = relative(realpathSync(ROOT), real);
+  if (inside.startsWith('..') || isAbsolute(inside)) return { path: real, excluded: undefined };
   if (git(ROOT, 'ls-files', '--', inside).trim() !== '')
     fail(`${out} is a tracked file; write results elsewhere`);
-  return inside;
+  return { path: real, excluded: inside };
+}
+
+/** A file's first contents, written whole or not at all. */
+function writeNew(path: string, text: string): void {
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, text, { flag: 'wx' });
+  renameSync(temporary, path);
+}
+
+/** Each file an edit touches, refused unless it resolves inside the copy. */
+function inside(copy: Copy, file: string): string {
+  const real = realpathSync(join(copy.tree, file));
+  const root = realpathSync(copy.tree);
+  if (!real.startsWith(`${root}${sep}`))
+    fail(`${file} resolves outside the copy (${real}); a mutation is not applied there`);
+  return real;
 }
 
 async function runCommand(
@@ -678,9 +873,24 @@ async function runCommand(
   ids: readonly string[],
   flags: ReadonlyMap<string, string>
 ): Promise<void> {
+  // Before anything is made: an interruption from here on stops what runs and
+  // discards what was made, with this process's exit.
+  const interrupted = (signal: NodeJS.Signals): void => {
+    running?.stdin?.end();
+    killGroup(running?.pid);
+    process.stderr.write(
+      `ledger: stopped by ${signal}; the copy is discarded, and this tree was not written\n`
+    );
+    process.exit(130);
+  };
+  process.on('SIGINT', interrupted);
+  process.on('SIGTERM', interrupted);
+  process.on('SIGHUP', interrupted);
+
   const resume = flags.get('resume');
-  const out = resume ?? flags.get('out') ?? join(RESULTS, `${ledger.name}-${Date.now()}.jsonl`);
-  const excluded = excludedOf(out);
+  const { path: out, excluded } = resultFileOf(
+    resume ?? flags.get('out') ?? join(RESULTS, `${ledger.name}-${Date.now()}.jsonl`)
+  );
   const snapshot = snapshotOf(excluded);
   const chosen = select(ledger, ids, ROOT);
   let options = optionsOf(flags);
@@ -702,19 +912,18 @@ async function runCommand(
     };
     for (const line of lines) if (line['kind'] === 'entry') done.add(line['id'] as string);
   } else {
-    mkdirSync(dirname(out), { recursive: true });
     const header: Header = {
       kind: 'header',
       ledger: ledger.name,
       ledgerHash: hash,
       revision: snapshot.revision,
       fingerprint: snapshot.fingerprint,
-      untracked: snapshot.untracked,
+      untracked: snapshot.files.map((file) => file.path),
       workers: options.workers,
       nice: options.nice ?? null,
       limit: options.limit
     };
-    writeFileSync(
+    writeNew(
       out,
       `${JSON.stringify({ ...header, started: new Date().toISOString(), node: process.version })}\n`
     );
@@ -726,18 +935,7 @@ async function runCommand(
     return;
   }
 
-  const copy = copyOf(snapshot, excluded);
-  const interrupted = (signal: NodeJS.Signals): void => {
-    // The pipe closed, the supervisor stops its group; the copy goes with
-    // this process's exit.
-    running?.stdin?.end();
-    process.stderr.write(
-      `ledger: stopped by ${signal}; the copy is discarded, and this tree was never written\n`
-    );
-    process.exit(130);
-  };
-  process.on('SIGINT', interrupted);
-  process.on('SIGTERM', interrupted);
+  const copy = await copyOf(snapshot, options.limit);
 
   const arms = [...new Set(pending.flatMap(armsOf))];
   const started = Date.now();
@@ -752,18 +950,18 @@ async function runCommand(
     const originals = new Map<string, string>();
     for (const edit of group.edits)
       if (!originals.has(edit.file))
-        originals.set(edit.file, readFileSync(join(copy.tree, edit.file), 'utf8'));
+        originals.set(edit.file, readFileSync(inside(copy, edit.file), 'utf8'));
     let outcome: Awaited<ReturnType<typeof runVitest>>;
     try {
       const contents = new Map(originals);
       for (const edit of group.edits)
         contents.set(edit.file, replaced(contents.get(edit.file) as string, edit));
-      for (const [file, text] of contents) writeFileSync(join(copy.tree, file), text);
+      for (const [file, text] of contents) writeFileSync(inside(copy, file), text);
       outcome = await runVitest(copy.tree, ledger, groupArms, options);
     } finally {
       for (const [file, text] of originals) {
-        writeFileSync(join(copy.tree, file), text);
-        if (readFileSync(join(copy.tree, file), 'utf8') !== text)
+        writeFileSync(inside(copy, file), text);
+        if (readFileSync(inside(copy, file), 'utf8') !== text)
           fail(
             `${file} did not read back as restored in the copy; the run ends, and the copy is discarded`
           );
@@ -819,14 +1017,22 @@ function tableCommand(ledger: Ledger, hash: string, results: string): void {
     const result = recorded.get(entry.id);
     let outcome: string;
     if (result === undefined) outcome = 'not run';
-    else if (result['verdict'] !== 'killed') outcome = String(result['verdict']);
-    else
-      outcome = ((result['arms'] as ArmResult[] | undefined) ?? [])
-        .map(
-          (one) =>
-            `${armsOf(entry).length > 1 ? `${one.arm}: ` : ''}${quoted(one.message)}${one.timedOut ? ' (timed out)' : ''}`
-        )
-        .join('; ');
+    else {
+      const arms = (result['arms'] as ArmResult[] | undefined) ?? [];
+      const each = arms.map((one) => {
+        const said =
+          one.verdict === 'killed'
+            ? quoted(one.message)
+            : one.verdict === 'survived'
+              ? 'passed'
+              : `error: ${one.message}`;
+        return `${arms.length > 1 ? `${one.arm}: ` : ''}${said}${one.timedOut ? ' (timed out)' : ''}`;
+      });
+      outcome =
+        result['verdict'] === 'killed'
+          ? each.join('; ')
+          : `${String(result['verdict'])} (${each.join('; ')})`;
+    }
     return `| ${cell(entry.describe ?? entry.id)} | \`${armsOf(entry).join('` and `')}\` | ${cell(outcome)} |`;
   });
   process.stdout.write(
