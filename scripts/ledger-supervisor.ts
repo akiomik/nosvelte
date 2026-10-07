@@ -19,10 +19,12 @@
  * by a number recorded earlier, which another process may have taken since.
  *
  * **What it cannot cover is itself being killed outright, or stopped.** The
- * runner covers that while it lives: past its limit and a grace period, it
- * kills the group itself, which is still its child's. If the runner and this
- * supervisor are both killed outright, the group runs on until it ends; only
- * the operating system could contain that.
+ * runner covers that while it lives: it kills the group itself, a grace
+ * period past its limit or as soon as this process ends. A group keeps its
+ * number while any member of it remains, so that number names this group
+ * still. If the runner dies while this supervisor cannot act — killed
+ * outright, or stopped — the group runs on until it ends; only the operating
+ * system could contain that.
  *
  * The command gets no standard input of its own, so the pipe stays the
  * runner's alone. Its exit is written to the status file before the group is
