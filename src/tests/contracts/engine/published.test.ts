@@ -31,7 +31,7 @@
  * Port band 9600-9649.
  */
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -767,11 +767,24 @@ function disciplineControls(): void {
   Object.freeze(Stranger.prototype);
   Object.freeze(Stranger);
   const strayed = closed(Object.setPrototypeOf(async () => undefined, Stranger) as object);
+  // And an object no class of this library's has as its prototype, on a
+  // command's chain before the platform's own: closed, holding nothing.
+  const astray = closed(
+    Object.setPrototypeOf(
+      async () => undefined,
+      closed(Object.create(Object.getPrototypeOf(async () => undefined) as object) as object)
+    ) as object
+  );
   const interfaceRules: [string, object, string, LiveInterface?][] = [
     [
       'a function on a command’s chain that is not this library’s class',
       handle({ state: getter(1), raw: getter(1), refresh: { value: strayed } }),
       "held.refresh (inherited from a prototype): a function on a chain that is not this library's class"
+    ],
+    [
+      'a prototype on a command’s chain that is not this library’s',
+      handle({ state: getter(1), raw: getter(1), refresh: { value: astray } }),
+      "held.refresh (inherited from a prototype): a prototype that is not this library's"
     ],
     [
       'a getter’s output',
@@ -3207,7 +3220,9 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // **The tracked files only**: an untracked file in the tree — a ledger
       // run's debris, another agent's scratch — failed this for a reason the
       // repository does not hold. A file not yet added is read once it is,
-      // and in CI every file is.
+      // and in CI every file is. A tracked file deleted from the tree holds no
+      // phrase, and reading it would fail this on a state the next commit
+      // records.
       const ROOT = resolve(LIBRARY, '../../..');
       const sources = execFileSync(
         'git',
@@ -3216,7 +3231,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       )
         .split('\0')
         .filter((file) => /\.(ts|svelte)$/.test(file))
-        .map((file) => join(ROOT, file));
+        .map((file) => join(ROOT, file))
+        .filter((file) => existsSync(file));
       expect(
         sources.some((file) => file.endsWith('published.test.ts')),
         'the premise: the sweep reads this file’s neighbours'
