@@ -1306,6 +1306,13 @@ So a row carries two fields of its own, in the roster below, and neither is infe
   hands out is a published container. `B5-C6` keeps the published event's type, and says where the
   ownership brand sits and what "the event alone" rules out, which review measured.
 
+  **The mutations a landing fails under are kept in the tree, as data.** Each is an edit of the
+  source and the arm it must make fail, in a ledger under `scripts/ledgers/` that
+  `scripts/ledger.ts` runs. The PR that lands a row adds its ledger there, or its entries to a
+  ledger it shares, and quotes the table that runner prints from a run. A ledger kept anywhere else
+  cannot be rerun by the next PR, and a figure quoted from it cannot be re-derived. Like the arms on
+  the roster, a ledger is this implementation's: a port answers the row with its own.
+
   **Where a landing test lives, said once.** `src/tests/contracts/` is the production contract root,
   and every `test:<id>` resolves under it, including a `sentinel` row's: the route table's "beside
   the production build" says which repository the sentinel runs in, not which directory, and a port
