@@ -2164,12 +2164,19 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
       // hands out that no case here reads. Asked of every `refresh()` below,
       // each path's own, since a path may build its promise apart.
       // Its prototype and its own keys are a proxy's to answer, so the
-      // promise's own slot is asked too.
+      // promise's own slot is asked too. **And no promise is answered twice**,
+      // anywhere in the matrix: one handed to an earlier call, settled or not,
+      // is a value two callers hold.
+      const issued = new WeakSet<object>();
       const bare = <T>(returned: Promise<T>, name: string): Promise<T> => {
         expect(
           types.isPromise(returned) && !types.isProxy(returned),
           `${name}: the platformâ€™s own promise, not a stand-in`
         ).toBe(true);
+        expect(issued.has(returned), `${name}: a promise no earlier call was answered with`).toBe(
+          false
+        );
+        issued.add(returned);
         expect(Object.getPrototypeOf(returned), `${name}: a promise of the platformâ€™s`).toBe(
           Promise.prototype
         );
@@ -2824,10 +2831,13 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         const refusedSend = await sender.value({} as never);
         expect(refusedSend.status, 'the premise: a send refused').toBe('refused');
         check('a send, refused', refusedSend);
+        // One input, sent twice at once and again once both have settled.
         const refusedInput = {} as never;
+        for (const sent of twice(() => sender.value(refusedInput), 'what a send returns'))
+          againOf('a send, refused', await sent);
         againOf(
           'a send, refused',
-          await fresh(() => sender.value(refusedInput), 'what a send returns')
+          await bare(sender.value(refusedInput), 'what a send returns, once the first two settled')
         );
         const signed = {
           id: 'a'.repeat(64),
@@ -2933,7 +2943,7 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         const url = nextUrl();
         const server = new WS(url, { jsonProtocol: true });
         const LEVELS = ['the content', 'a tag added', 'a tag rewritten'] as const;
-        const handed: object[] = [];
+        const handed: { content: string; tags: string[][] }[] = [];
         // A template's content, its count of tags and its first tag's value.
         const shapeOf = (template: { content: string; tags: string[][] }): unknown[] => [
           template.content,
@@ -3016,7 +3026,20 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         check('a send, refused by its signer', first);
         for (const one of again) againOf('a send, refused by its signer', one);
         expect(handed, 'the premise: the signer was asked six times').toHaveLength(6);
-        expect(new Set(handed).size, 'six calls, six templates').toBe(6);
+        expect(
+          [
+            new Set(handed).size,
+            new Set(handed.map((one) => one.tags)).size,
+            new Set(handed.map((one) => one.tags[0])).size
+          ],
+          'six calls, six templates: each with a list of tags, and a tag, of its own'
+        ).toEqual([6, 6, 6]);
+        // And each still holds what its own call left in it, once every later
+        // call has written to its own.
+        expect(
+          handed.map(shapeOf),
+          'each template as its own rewrite left it, after the later ones'
+        ).toEqual(asRewritten);
         expect(
           asHanded,
           'each handed as written: no rewrite reached a later template or the comparison'
@@ -3333,6 +3356,34 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
           .reached,
         'the write-backâ€™s control: a live setter'
       ).toEqual(READERS.map((reader) => `${reader}: stack`));
+      // And each reader asked once before the write and once after it: a
+      // setter that records the write orders it among the readers' calls.
+      const order: string[] = [];
+      const phased = Object.freeze(
+        Object.defineProperty({}, 'note', {
+          get: () => 'as it was',
+          set: () => {
+            order.push('the write');
+          },
+          enumerable: true
+        })
+      );
+      writeAndReadBack(
+        phased,
+        Object.fromEntries(
+          READERS.map((reader) => [
+            reader,
+            () => {
+              order.push(reader);
+              return phased;
+            }
+          ])
+        )
+      );
+      expect(
+        order,
+        'the write-backâ€™s control: each reader read before the write and after it'
+      ).toEqual([...READERS, 'the write', ...READERS]);
       const marker = Symbol('member');
       const nested = Object.freeze({
         cause: Object.defineProperty({}, 'note', { value: 'as it was', configurable: true }),
