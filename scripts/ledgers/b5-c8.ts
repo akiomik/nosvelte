@@ -2565,6 +2565,71 @@ export default {
           to: "  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    typeof input === 'object' && input !== null && 'kind' in input && !('sig' in input)\n      ? Object.assign(sendThrough(port, input, options), { progress: [] as string[] })\n      : sendThrough(port, input, options)\n  );"
         }
       ]
+    },
+    {
+      id: 'C8-second-send-result-open',
+      arm: 'PB13',
+      describe:
+        'a send asked again with the same input resolves with an open copy carrying a member of its own',
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
+          to: "  const seen = new WeakSet<object>();\n  return Object.freeze((input: SendInput, options?: SendOptions) => {\n    const sent = sendThrough(port, input, options);\n    if (typeof input !== 'object' || input === null) return sent;\n    if (!seen.has(input)) {\n      seen.add(input);\n      return sent;\n    }\n    return sent.then((result) => ({ ...result, progress: [] as string[] }));\n  });"
+        }
+      ]
+    },
+    {
+      id: 'C8-template-send-promise-reused',
+      arm: 'PB13',
+      describe:
+        "a send of a template answers every later template's call with the first template's promise",
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
+          to: "  let firstTemplate: Promise<SendResult> | undefined;\n  return Object.freeze((input: SendInput, options?: SendOptions) => {\n    const sent = sendThrough(port, input, options);\n    if (typeof input !== 'object' || input === null || 'sig' in input || !('kind' in input)) return sent;\n    firstTemplate ??= sent;\n    return firstTemplate;\n  });"
+        }
+      ]
+    },
+    {
+      id: 'C8-signer-template-tags-frozen',
+      arm: 'PB13',
+      describe:
+        "the template the signer is handed has its list of tags frozen, so it is not the signer's to write",
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '    const signed: unknown = await signer.signEvent(handed);',
+          to: '    Object.freeze(handed.tags);\n    const signed: unknown = await signer.signEvent(handed);'
+        }
+      ]
+    },
+    {
+      id: 'C8-signer-template-sealed',
+      arm: 'PB13',
+      describe:
+        "the template the signer is handed is frozen itself, so it is not the signer's to write",
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '    const signed: unknown = await signer.signEvent(handed);',
+          to: '    Object.freeze(handed);\n    const signed: unknown = await signer.signEvent(handed);'
+        }
+      ]
+    },
+    {
+      id: 'I-writeback-cache-unsampled',
+      arm: 'PB13',
+      describe:
+        'the write-back for the Errors two readers share leaves the cache out of what it reads back, while the cache is still shown to hold the Error',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: '        const { before, reached } = writeAndReadBack(held as object, readers);\n        // Each reader sampled',
+          to: "        const { before, reached } = writeAndReadBack(\n          held as object,\n          Object.fromEntries(Object.entries(readers).filter(([reader]) => reader !== 'the cache'))\n        );\n        // Each reader sampled"
+        }
+      ]
     }
   ],
   retired: [
