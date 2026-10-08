@@ -2626,8 +2626,86 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/published.test.ts',
-          from: '        const { before, reached } = writeAndReadBack(held as object, readers);\n        // Each reader sampled',
-          to: "        const { before, reached } = writeAndReadBack(\n          held as object,\n          Object.fromEntries(Object.entries(readers).filter(([reader]) => reader !== 'the cache'))\n        );\n        // Each reader sampled"
+          from: '            Object.entries(readers).map(([reader, read]) => [',
+          to: "            Object.entries(readers).filter(([reader]) => reader !== 'the cache').map(([reader, read]) => ["
+        }
+      ]
+    },
+    {
+      id: 'C8-signer-content-trusted',
+      arm: 'PB13',
+      describe:
+        "a send compares the signer's event with its own copy, but takes the content from the template the signer was handed",
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  if (!isTheTemplate(copy, expected)) {',
+          to: '  if (!isTheTemplate(copy, { ...expected, content: handed.content })) {'
+        }
+      ]
+    },
+    {
+      id: 'C8-signer-added-tag-trusted',
+      arm: 'PB13',
+      describe:
+        "a send compares the signer's event with its own copy, but takes the tags from the template the signer was handed when the signer added one",
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  if (!isTheTemplate(copy, expected)) {',
+          to: '  if (!isTheTemplate(copy, { ...expected, tags: handed.tags.length > expected.tags.length ? handed.tags : expected.tags })) {'
+        }
+      ]
+    },
+    {
+      id: 'C8-signer-tag-value-trusted',
+      arm: 'PB13',
+      describe:
+        "a send compares the signer's event with its own copy, but takes the tags from the template the signer was handed when it has as many",
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  if (!isTheTemplate(copy, expected)) {',
+          to: '  if (!isTheTemplate(copy, { ...expected, tags: handed.tags.length === expected.tags.length ? handed.tags : expected.tags })) {'
+        }
+      ]
+    },
+    {
+      id: 'C8-refused-send-promise-reused',
+      arm: 'PB13',
+      describe:
+        'a send of an input that is not an event answers a second call on the same input with the first promise',
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
+          to: "  const pending = new WeakMap<object, Promise<SendResult>>();\n  return Object.freeze((input: SendInput, options?: SendOptions) => {\n    if (typeof input !== 'object' || input === null || 'kind' in input) return sendThrough(port, input, options);\n    const previous = pending.get(input);\n    if (previous !== undefined) return previous;\n    const sent = sendThrough(port, input, options);\n    pending.set(input, sent);\n    return sent;\n  });"
+        }
+      ]
+    },
+    {
+      id: 'I-writeback-cache-stale',
+      arm: 'PB13',
+      describe:
+        "the write-back reads the cache after the write and compares the cache's earlier answer with itself",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: '  const after = answers();',
+          to: "  const after = { ...answers(), 'the cache': before['the cache'] };"
+        }
+      ]
+    },
+    {
+      id: 'I-writeback-cache-read-once',
+      arm: 'PB13',
+      describe:
+        'the write-back does not read the cache after the write, and takes its earlier answer for the later one',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: '  const after = answers();',
+          to: "  const after = Object.fromEntries(\n    Object.entries(readers).map(([reader, read]) => {\n      if (reader === 'the cache') return [reader, before[reader]];\n      const root = read();\n      return [reader, paths.map((path) => readAt(root, path))];\n    })\n  ) as Record<string, unknown[]>;"
         }
       ]
     }
