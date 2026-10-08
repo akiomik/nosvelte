@@ -3547,6 +3547,16 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         handedBy('export {};', '{ loose: any }'),
         'the probe’s control: a prop it cannot read is reported'
       ).toMatch(/a prop the probe cannot read/);
+      // A tuple is read position by position, each callback in it handed its
+      // own arguments. Read as one union through its `number` index, as a
+      // list is, two callbacks would be one signature the probe cannot place.
+      expect(
+        handedBy(
+          'export {};',
+          '{ on: readonly [(a: { x: string[] }) => void, (b: { y: number[] }) => void] }'
+        ),
+        'the probe’s control: a tuple, read position by position'
+      ).toBe('2 handed');
       // The exemption's other edge: a type under the signer's name that this
       // library does not declare is read like any other.
       const stranger = handedArgumentsOf(
