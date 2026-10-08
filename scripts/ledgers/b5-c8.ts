@@ -29,10 +29,8 @@ export default {
   files: ['src/tests/contracts/engine/published.test.ts'],
   calibration: {
     measured:
-      'one run of PB13 alone where this ledger was added, one worker, on a shared 10-core machine',
-    seconds: {
-      PB13: 37
-    }
+      'the mean of each run in a full run at 7e33945, two runs at a time, on a shared 10-core machine; a kill ends PB13 at its first failing assertion, so runs took from 3 s to 67 s, and the mean predicts a full run where the median (7 s) does not',
+    seconds: { PB13: 16.1 }
   },
   entries: [
     {
