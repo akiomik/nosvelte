@@ -73,7 +73,11 @@
  * - a fingerprint of the uncommitted changes, the untracked files copied
  *   (also listed), and the dependency tree npm recorded installing
  *   (`node_modules/.package-lock.json`);
- * - the ledger's hash, and the load chosen.
+ * - the ledger's hash, and the load chosen. The hash is of the data a verdict
+ *   is decided from, in its order: the ledger's name, its files, and each
+ *   entry's id, arms and edits. A ledger recalibrated or reworded after a run
+ *   still quotes that run. Any change to that data refuses it, even one that
+ *   cannot change a verdict, such as an entry's independent edits reordered.
  *
  * `--resume` continues one only for the same tree and ledger. An edit made by
  * hand inside `node_modules` is not seen. `table` quotes a result file only
@@ -242,8 +246,18 @@ async function load(name: string): Promise<{ ledger: Ledger; hash: string }> {
   const path = join(ROOT, 'scripts/ledgers', `${name}.ts`);
   if (!existsSync(path)) fail(`no ledger at ${path}`);
   const module = (await import(pathToFileURL(path).href)) as { default: Ledger };
-  const hash = createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 16);
-  return { ledger: module.default, hash };
+  const ledger = module.default;
+  const decides = {
+    name: ledger.name,
+    files: ledger.files,
+    entries: ledger.entries.map((entry) => ({
+      id: entry.id,
+      arms: armsOf(entry),
+      edits: entry.edits.map(({ file, from, to }) => ({ file, from, to }))
+    }))
+  };
+  const hash = createHash('sha256').update(JSON.stringify(decides)).digest('hex').slice(0, 16);
+  return { ledger, hash };
 }
 
 /**

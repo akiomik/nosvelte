@@ -746,9 +746,9 @@ function useReq(plan: () => ReqPlan): ReqHandle;
 // value and flips another hook on the same key to `settled` with no events,
 // which `deriveOutlet` renders as `nodata`: the library asserting that nothing
 // exists because a consumer cleared a Map. So while `raw` is on the handle,
-// `B5-C6` holds for every value this API *publishes* and is unenforceable
-// through this member; `PO1` excludes it from the walk for that reason and says
-// so. That is the price of the seam, and it is why a port drops it rather than
+// `B5-C8` holds for every value this API *publishes* and is unenforceable
+// through this member; `PB13` leaves that one edge unwalked for that reason and
+// says so. That is the price of the seam, and it is why a port drops it rather than
 // deciding later.
 //
 // **The shipped object carries two members this interface does not**, and the
@@ -759,7 +759,8 @@ function useReq(plan: () => ReqPlan): ReqHandle;
 // no consumer reaches them today. **A port that publishes the handle drops
 // them** — publishing `raw` would put the query library's representation on this
 // API, which is the mistake the export list closes for that dependency
-// elsewhere. `PO2` keeps the list at two.
+// elsewhere. `PB13` names exactly these two beside the published members, so a
+// third is a finding.
 interface ReqHandle {
   readonly state: ReqState;
   readonly activity: QueryActivity;
@@ -768,7 +769,7 @@ interface ReqHandle {
   // attempt's outcome — `cancelled` when a lifetime ends under it — and
   // rejecting only for a refused descriptor, a missing provider or a provider
   // already gone.
-  refresh(): Promise<RefreshOutcome>;
+  readonly refresh: () => Promise<RefreshOutcome>;
 }
 
 // Context-bound and argument-free: taking an `RxNostr` would publish the

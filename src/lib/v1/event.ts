@@ -37,18 +37,6 @@ import type * as Nostr from 'nostr-typedef';
 import type { EventPacket } from 'rx-nostr';
 
 /**
- * A list a consumer can read and cannot write to — not even a method's slot.
- *
- * `readonly T[]` takes the mutating methods away, but TypeScript declares the
- * read-only ones as methods, and a method is an assignable slot:
- * `event.tags.map = () => []` compiled against it and threw against the frozen
- * array, which is legal-looking code failing where nothing warned. Mapping
- * every member of `ReadonlyArray<T>` with `readonly` keeps each read and refuses
- * each slot, and the type stays assignable to and from `readonly T[]`.
- */
-export type ReadonlyList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };
-
-/**
  * An event as this library publishes it: immutable to the depth a consumer can
  * reach, and **written out rather than derived from the dependency's type**.
  *
@@ -66,7 +54,7 @@ export interface ReqEvent {
   readonly pubkey: string;
   readonly content: string;
   readonly created_at: number;
-  readonly tags: ReadonlyList<ReadonlyList<string>>;
+  readonly tags: readonly (readonly string[])[];
   /** @deprecated by NIP-03; carried when the wire had one. */
   readonly ots?: string;
 }

@@ -41,7 +41,7 @@ import { getNostrContext } from './context.svelte.js';
 import type { ReqEvent } from './event.js';
 import type { RelayMessage } from './normalize.js';
 import { relayMessage } from './normalize.js';
-import { resolveRelayName, TransportIncompatibleError, unnameableRelay } from './scope.svelte.js';
+import { isTransportIncompatible, resolveRelayName, unnameableRelay } from './scope.svelte.js';
 
 /**
  * What the provider signs with. Structurally the `signEvent` half of NIP-07, so
@@ -159,7 +159,11 @@ export function useSend(): Send {
     },
     verifyEvent: (event) => context.verifyEvent(event)
   };
-  return (input, options) => sendThrough(port, input, options);
+  // Frozen: the function is what a consumer holds, and one it could hang a
+  // member on would be one every other holder of it read (`B5-C8`).
+  return Object.freeze((input: SendInput, options?: SendOptions) =>
+    sendThrough(port, input, options)
+  );
 }
 
 /** What a send reads off its provider. A provider's context is one. */
@@ -354,7 +358,7 @@ function targetsOf(
       const resolution = typeof each === 'string' ? resolveRelayName(port.scope, each) : undefined;
       url = resolution?.relay?.write === true ? resolution.name : undefined;
     } catch (thrown) {
-      if (thrown instanceof TransportIncompatibleError) {
+      if (isTransportIncompatible(thrown)) {
         return refused(
           'transport-incompatible',
           `this send names ${unnameableRelay(each as string, thrown)}`

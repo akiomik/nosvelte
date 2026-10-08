@@ -688,8 +688,9 @@ describe('the event a consumer holds is this library’s own', () => {
 
       // The compile half, answered by the compiler. Every write a consumer
       // could attempt through the published event — each property the type
-      // checker gives it, the tag list and each tag — is refused, for being
-      // read-only, judged on the type the compiler gives each line's receiver;
+      // checker gives it, the tag list and each tag, and the members every
+      // value has — is refused for being read-only, but the one exception the
+      // row states, judged on the type the compiler gives each line's receiver;
       // and the fold refuses the wire's packet, directly and rebuilt around an
       // owned one.
       // The event is asked about as the named type and as the handle hands it
@@ -704,17 +705,41 @@ describe('the event a consumer holds is this library’s own', () => {
             `Extract<Published.ReqHandle['state'], { status: '${status}' }>['events'][number]`
         )
       ];
+      // **One exception, stated rather than hidden**: a member TypeScript's
+      // default library declares on every value of its kind — `Object`'s
+      // `constructor` and `toString` on the event, `ReadonlyArray`'s methods on
+      // the tag list — is an assignable slot in those declarations, and the
+      // lists stay arrays (`$state.snapshot`, tuple inference and narrowing read
+      // them as arrays) rather than refuse that write by type. Every other
+      // write is refused, and the exception is asked for by name, so it is a
+      // measured concession and not a gap the probe stopped reading.
       for (const eventType of eventTypes) {
         const writes = writesThrough(PUBLISHED, eventType);
         expect(writes.length, `${eventType}: the probe enumerated the event`).toBeGreaterThan(9);
+        const verdicts = judgeWrites(PUBLISHED, eventType, writes);
         expect(
-          judgeWrites(PUBLISHED, eventType, writes).filter((one) => one.verdict !== 'refused'),
+          verdicts.filter(
+            (one) => one.verdict !== 'refused' && one.verdict !== 'a standard member slot'
+          ),
           `${eventType}: a write through the published event the types do not refuse`
         ).toEqual([]);
+        expect(
+          verdicts
+            .filter((one) => one.verdict === 'a standard member slot')
+            .map((one) => one.write),
+          `${eventType}: the stated exception, on the event, the tag list and a tag`
+        ).toEqual(
+          expect.arrayContaining([
+            'value.constructor = value.constructor!;',
+            'value.tags!.map = value.tags!.map!;',
+            'value.tags![0]!.map = value.tags![0]!.map!;'
+          ])
+        );
       }
 
-      // **And the surface stays readable.** The list type refuses every slot,
-      // and what a consumer does with a list of tags still compiles: iterate,
+      // **And the surface stays readable.** Every slot but the stated
+      // exception is refused, and what a consumer does with a list of tags
+      // still compiles: iterate,
       // spread, map, find, count, serialise, and hand the list or a tag to
       // something that takes `readonly string[]`.
       const reads = [
@@ -753,13 +778,19 @@ describe('the event a consumer holds is this library’s own', () => {
           'void value.m!.add!.call;'
         ])
       );
-      // The one slot refused there is the standard library's own: it
-      // declares `[Symbol.unscopables]` read-only on every array.
+      // The slots refused there are the standard library's own read-only ones
+      // — `[Symbol.unscopables]` on every array, `length` and `name` on every
+      // function — and the members every value has are judged as the
+      // exception the row states rather than as compiling.
       expect(
         judgeWrites('', mutable, open).filter(
           (one) =>
             one.verdict !== 'compiles' &&
-            !(one.verdict === 'refused' && one.write.endsWith('[Symbol.unscopables]!;'))
+            one.verdict !== 'a standard member slot' &&
+            !(
+              one.verdict === 'refused' &&
+              /(\[Symbol\.unscopables\]|\.add!\.length|\.add!\.name)!;$/.test(one.write)
+            )
         ),
         'a write through a mutable type was refused'
       ).toEqual([]);

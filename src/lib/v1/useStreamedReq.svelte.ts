@@ -41,9 +41,9 @@ import { callerTransport } from './lease.js';
 import type { NormalizedDescriptor, Retention } from './normalize.js';
 import { InvalidDescriptorError, normalizeDescriptor, relayMessage } from './normalize.js';
 import { capture, providerDisposed, safely, terminalFailure } from './own.js';
-import { ownedByLibrary } from './owned.js';
+import { ownedByLibrary, sealInterface } from './owned.js';
 import type { ReqStateError } from './reqerror.js';
-import { RelayNotInScopeError } from './reqerror.js';
+import { isRelayNotInScope } from './reqerror.js';
 import type { ResumeHints } from './resume.svelte.js';
 import type { RelayScope } from './scope.svelte.js';
 import { resolveTargets, scopeGenerationOf } from './scope.svelte.js';
@@ -796,7 +796,7 @@ const RECOVERY_BACKOFF_SECONDS = [2, 5, 15, 60, 300] as const;
 
 /** The relay a refusal names, if it is one of this library's that names one. */
 const relayOf = (rejection: unknown): string | undefined => {
-  if (!(rejection instanceof RelayNotInScopeError)) return undefined;
+  if (!isRelayNotInScope(rejection)) return undefined;
   return rejection.url;
 };
 
@@ -2900,12 +2900,13 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
   // **Not typed `ReqHandle`**, deliberately: what this returns carries `raw`
   // and `projected` beside the published members — the spike's inspection
   // seams, on no published list — and annotating the literal would refuse them.
-  // The contract is `ReqHandle` and `SUR10`/`PO2` are what hold the extras off
-  // the surface; this variable exists so the recovery can reach `refresh()`.
+  // The contract is `ReqHandle`: `SUR10` holds the extras off the surface, and
+  // `PB13` names them as the only two; this variable exists so the recovery can
+  // reach `refresh()`.
   const handle = {
     /**
      * The query library's own object — this repository's inspection seam, on no
-     * interface and on no published list (0002, 0004, `PO2`).
+     * interface and on no published list (0002, 0004, `PB13`).
      *
      * **Reading it is not free, and an arm that reads it before asserting on a
      * published member has changed what it is measuring.** Every property read
@@ -2987,7 +2988,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // the same `error` shape the browser arm reaches through the query rather
       // than a second spelling of it.
       if (refusedOnServer !== undefined && query.status !== 'error') {
-        return deriveState({ data: undefined, error: refusedOnServer }, now);
+        return Object.freeze(deriveState({ data: undefined, error: refusedOnServer }, now));
       }
       const result = deriveState(
         {
@@ -2997,7 +2998,9 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
         now
       );
       if (result.nextExpiryAt !== undefined) clock?.wakeAt(result.nextExpiryAt);
-      return result;
+      // Frozen, as everything a hook hands out is (`B5-C8`): this wrapper is
+      // new on every read, and the value written to refuses the write too.
+      return Object.freeze(result);
     },
     get diagnostics(): ReqDiagnostics {
       // Three arguments because `lastError` has three sources, in order:
@@ -3035,7 +3038,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // of *when*: nothing was started by this call. `released` is the one
       // reason with no remedy, which is exactly right — the thing that would
       // act on the answer is gone.
-      if (released) return { kind: 'not-started', reason: 'released' };
+      if (released) return Object.freeze({ kind: 'not-started', reason: 'released' } as const);
       // Same wiring as the verifier, and the same defect before it: the
       // provider detects the environment and put it on the context, and this
       // read never looked there — so `detectEnvironment()` decided nothing that
@@ -3118,7 +3121,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // not been made yet is an ordinary thing to write. The reason says which
       // "nothing was asked" this is — `no-readable-relay` is the provider's
       // list, `server` is the side, this is the caller's own plan.
-      if (deferred) return { kind: 'not-started', reason: 'deferred' };
+      if (deferred) return Object.freeze({ kind: 'not-started', reason: 'deferred' } as const);
 
       // A descriptor this library will not send is a failure of the call, not
       // an attempt that came back partial: nothing was tried, and a caller who
@@ -3159,7 +3162,8 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // nothing. It is also what the request path already does — a server
       // descriptor plans as `defer`, the query function never runs, and no
       // disposal is consulted there either.
-      if (environment === 'server') return { kind: 'not-started', reason: 'server' };
+      if (environment === 'server')
+        return Object.freeze({ kind: 'not-started', reason: 'server' } as const);
 
       // **The owner going away is a failure of the call, and this is the only
       // place it is published.** A provider that is destroyed revokes its
@@ -3242,7 +3246,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // write and the call owes a reason of its own.
       const asked = requestTargets(transport, request.scope);
       if (planned === 'defer' || asked.length === 0) {
-        return { kind: 'not-started', reason: 'no-readable-relay' };
+        return Object.freeze({ kind: 'not-started', reason: 'no-readable-relay' } as const);
       }
 
       // Single-flight, per cache entry rather than per hook — everything below
@@ -3385,6 +3389,12 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       });
     }
   };
+  // **The handle is a published value too, and so is every function on it** —
+  // `refresh`, and each getter's (`B5-C8`): a consumer who replaced
+  // `handle.refresh`, redefined `state`, or hung a member on the function
+  // behind it changed what this hook's every later reader got. The type refuses
+  // the first; the seal refuses all three, however they are spelled.
+  sealInterface(handle);
   let recoveryFrom: unknown;
   let recoveryDue: number | undefined;
   let recoveryFor = 0;

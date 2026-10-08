@@ -46,7 +46,7 @@
 import type { IncompleteCauses } from './eventset.js';
 import { boundedMessage } from './normalize.js';
 import type { FailureSource } from './own.js';
-import { hardenOwned } from './owned.js';
+import { hardenOwned, isOwnedByLibrary, sealClass } from './owned.js';
 
 /**
  * Everything this channel can hand a consumer, anywhere.
@@ -404,6 +404,32 @@ export const DOOR_OF: Readonly<Record<ReqErrorCode, FailureSource>> = Object.fre
 export type { FailureSource };
 
 /**
+ * **The library's own decisions ask a brand, not `instanceof`.** `instanceof`
+ * answers what the class's `Symbol.hasInstance` says, and every class here
+ * inherits that from the platform's `Error` — which a consumer reaches from any
+ * published Error as `Object.getPrototypeOf(error.constructor)`. One
+ * `Object.defineProperty(Error, Symbol.hasInstance, …)` from a published value
+ * made `relayOf` miss a `RelayNotInScopeError`, and two unrelated requests then
+ * shared one refused entry, the second reading the first's `url` — measured
+ * after `sealClass` had closed this library's own classes. Membership of a
+ * module-private `WeakSet`, filled by the constructor, is a question the
+ * value's own prototype chain and `Symbol.hasInstance` do not answer — and it
+ * is asked together with the ownership registry, because the constructor is
+ * published: an instance a consumer built satisfies the class and was not
+ * made here. Like everything this library computes, it takes the platform's
+ * built-ins (`WeakSet.prototype.has` among them) to be as the language defines
+ * them; a consumer who rewrites one is outside `B5-C8`.
+ */
+const RELAY_NOT_IN_SCOPE = new WeakSet<object>();
+
+/** Whether `value` was made by {@link RelayNotInScopeError}'s constructor. */
+export const isRelayNotInScope = (value: unknown): value is RelayNotInScopeError =>
+  typeof value === 'object' &&
+  value !== null &&
+  RELAY_NOT_IN_SCOPE.has(value) &&
+  isOwnedByLibrary(value);
+
+/**
  * A request asked of a relay the provider cannot read from.
  *
  * **Refused before the wire, and that is the whole reason it is a refusal
@@ -470,9 +496,11 @@ export class RelayNotInScopeError extends Error {
     hardenOwned(this);
     this.url = url;
     this.configured = configured;
+    RELAY_NOT_IN_SCOPE.add(this);
     Object.freeze(this);
   }
 }
+sealClass(RelayNotInScopeError);
 
 /**
  * The request values of code `transport-incompatible`, by provenance.
@@ -508,3 +536,4 @@ export class RequestTransportIncompatibleError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(RequestTransportIncompatibleError);

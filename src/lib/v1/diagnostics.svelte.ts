@@ -58,6 +58,7 @@ import type { UnixSeconds } from './clock.svelte.js';
 import { getNostrContext } from './context.svelte.js';
 import type { RelayMessage } from './normalize.js';
 import { relayMessage } from './normalize.js';
+import { sealInterface } from './owned.js';
 import type { RefusalReason } from './refusal.js';
 import { classifyRefusal } from './refusal.js';
 import type { RelayConfigurationError, RelayScope } from './scope.svelte.js';
@@ -386,14 +387,17 @@ export function useRelayDiagnostics(): {
   // `getContext` is legal in, and the getters below never read the context
   // again — the rule `LC8` holds for this hook and `LC9` holds for its members.
   const context = getNostrContext();
-  return {
+  // Sealed, as everything a hook hands out is (`B5-C8`): the getters read the
+  // provider's current answer, and nothing a consumer writes can replace them
+  // or reach another reader through their functions.
+  return sealInterface({
     get relays() {
       return context.diagnostics.relays;
     },
     get configurationError() {
       return context.configurationError;
     }
-  };
+  });
 }
 
 /**

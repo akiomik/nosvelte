@@ -40,11 +40,15 @@ import type { TransportCapability } from './lease.js';
 import { ownTransport } from './lease.js';
 import { LIBRARY_EOSE_TIMEOUT_MS, LIBRARY_OK_TIMEOUT_MS } from './normalize.js';
 import { providerDisposed } from './own.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type { ResumeHints } from './resume.svelte.js';
 import { createResumeHints } from './resume.svelte.js';
 import type { RelayInput, RelayScope, TransportKeys } from './scope.svelte.js';
-import { createRelayScope, RelayConfigurationError } from './scope.svelte.js';
+import {
+  createRelayScope,
+  isRelayConfigurationError,
+  type RelayConfigurationError
+} from './scope.svelte.js';
 import type { NostrSigner } from './send.svelte.js';
 
 const KEY = Symbol('nosvelte');
@@ -230,9 +234,9 @@ export interface NostrContextCommon {
    * the relay list and is not something a consumer fixes by editing one, so it
    * goes to the boundary as it would have.
    *
-   * The construction path deliberately keeps the throw: there is no previous
-   * generation to hold on to, so a provider whose first list is refused has no
-   * transport at all and nothing it could serve.
+   * The construction path does not throw either, for the reason it gives
+   * below: a provider whose first list is refused stands with an empty accepted
+   * scope, and the refusal is published here.
    */
   setRelays(relays: readonly RelayInput[]): void;
 }
@@ -437,12 +441,13 @@ export class MissingVerifierError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(MissingVerifierError);
 
 export class MissingProviderError extends Error {
   /**
    * The three members `Error` gives this class, re-declared as `readonly`.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and inherited members are where that was
    * false**: `message`, `name` and `stack` arrive from `Error`, where they are
    * mutable, so `err.message = '[redacted]'` compiled against the emitted
@@ -497,6 +502,7 @@ export class MissingProviderError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(MissingProviderError);
 
 /**
  * The seams a test harness needs, enumerated — not the dependency's config.
@@ -806,7 +812,7 @@ export function createNostrContext(options: {
   try {
     scope = createRelayScope(runtime.transport, options.relays ?? [], options.transportKeys);
   } catch (error) {
-    if (!(error instanceof RelayConfigurationError)) {
+    if (!isRelayConfigurationError(error)) {
       if (runtime.environment === 'browser') runtime.transport.dispose();
       throw error;
     }
@@ -954,7 +960,7 @@ export function createNostrContext(options: {
         // swallowed that would be shown a live provider that cannot ask
         // anything. It is rethrown before anything is recorded, so the last
         // refusal a consumer can act on is not overwritten by one they cannot.
-        if (!(error instanceof RelayConfigurationError)) throw error;
+        if (!isRelayConfigurationError(error)) throw error;
         diagnostics.refuse(error);
         return;
       }

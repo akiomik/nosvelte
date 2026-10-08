@@ -25,7 +25,7 @@ import { untrack } from 'svelte';
 
 import { describeValue, InvalidDescriptorError } from './normalize.js';
 import { saidBy } from './own.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, isOwnedByLibrary, ownedByLibrary, sealClass } from './owned.js';
 import { RelayNotInScopeError, RequestTransportIncompatibleError } from './reqerror.js';
 
 /**
@@ -210,11 +210,46 @@ export type RelayConfigurationErrorCode =
  * value. What that costs is stated rather than hidden: the most common
  * misconfiguration is the one whose `urls` is empty.
  */
+/**
+ * **The library's own decisions ask a brand, not `instanceof`.** `instanceof`
+ * answers what the class's `Symbol.hasInstance` says, and every class here
+ * inherits that from the platform's `Error` — which a consumer reaches from any
+ * published Error as `Object.getPrototypeOf(error.constructor)`. One
+ * `Object.defineProperty(Error, Symbol.hasInstance, …)` from a published value
+ * made `relayOf` miss a `RelayNotInScopeError`, and two unrelated requests then
+ * shared one refused entry, the second reading the first's `url` — measured
+ * after `sealClass` had closed this library's own classes; the provider asks
+ * the same question of its own refusals here. Membership of a
+ * module-private `WeakSet`, filled by the constructor, is a question the
+ * value's own prototype chain and `Symbol.hasInstance` do not answer — and it
+ * is asked together with the ownership registry, because the constructor is
+ * published: an instance a consumer built satisfies the class and was not
+ * made here. Like everything this library computes, it takes the platform's
+ * built-ins (`WeakSet.prototype.has` among them) to be as the language defines
+ * them; a consumer who rewrites one is outside `B5-C8`.
+ */
+const RELAY_CONFIGURATION_REFUSALS = new WeakSet<object>();
+const TRANSPORT_INCOMPATIBLE = new WeakSet<object>();
+
+/** Whether `value` was made by {@link RelayConfigurationError}'s constructor, or a subclass's. */
+export const isRelayConfigurationError = (value: unknown): value is RelayConfigurationError =>
+  typeof value === 'object' &&
+  value !== null &&
+  RELAY_CONFIGURATION_REFUSALS.has(value) &&
+  isOwnedByLibrary(value);
+
+/** Whether `value` was made by {@link TransportIncompatibleError}'s constructor. */
+export const isTransportIncompatible = (value: unknown): value is TransportIncompatibleError =>
+  typeof value === 'object' &&
+  value !== null &&
+  TRANSPORT_INCOMPATIBLE.has(value) &&
+  isOwnedByLibrary(value);
+
 export class RelayConfigurationError extends Error {
   /**
    * The three members `Error` gives this class, re-declared as `readonly`.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and inherited members are where that was
    * false**: `message`, `name` and `stack` arrive from `Error`, where they are
    * mutable, so `err.message = '[redacted]'` compiled against the emitted
@@ -242,6 +277,7 @@ export class RelayConfigurationError extends Error {
     super(message);
     (this as { name: string }).name = 'RelayConfigurationError';
     hardenOwned(this);
+    RELAY_CONFIGURATION_REFUSALS.add(this);
     this.code = code;
     // **Copied and frozen, and the copy is not decoration.** The array handed
     // in is the scope's own list at several `throw` sites, and this Error is
@@ -267,6 +303,7 @@ export class RelayConfigurationError extends Error {
     // a write to one reaches.
   }
 }
+sealClass(RelayConfigurationError);
 
 /**
  * Constructed from a named object rather than from an ordered pair.
@@ -318,6 +355,7 @@ export class InvalidRelayScopeError extends RelayConfigurationError {
     if (new.target === InvalidRelayScopeError) Object.freeze(this);
   }
 }
+sealClass(InvalidRelayScopeError);
 
 /**
  * A relay input this library refuses to ask anybody about.
@@ -378,6 +416,7 @@ export class InvalidRelayInputError extends RelayConfigurationError {
     if (new.target === InvalidRelayInputError) Object.freeze(this);
   }
 }
+sealClass(InvalidRelayInputError);
 
 /**
  * The two names one relay would have, and the reason it is refused.
@@ -455,6 +494,7 @@ export class NonIdempotentRelayUrlError extends RelayConfigurationError {
     if (new.target === NonIdempotentRelayUrlError) Object.freeze(this);
   }
 }
+sealClass(NonIdempotentRelayUrlError);
 
 /**
  * What the transport would actually call these relays. **Where every name in a
@@ -717,9 +757,11 @@ export class TransportIncompatibleError extends RelayConfigurationError {
     this.asked = Object.freeze([...asked]);
     this.how = how;
     this.earlier = earlier === undefined ? undefined : describeValue(earlier);
+    TRANSPORT_INCOMPATIBLE.add(this);
     if (new.target === TransportIncompatibleError) Object.freeze(this);
   }
 }
+sealClass(TransportIncompatibleError);
 
 /**
  * How the transport was questioned, in the message's own voice.
@@ -782,6 +824,7 @@ export class TransportKeyMismatchError extends RelayConfigurationError {
     if (new.target === TransportKeyMismatchError) Object.freeze(this);
   }
 }
+sealClass(TransportKeyMismatchError);
 
 /**
  * Two name lists for one relay set, compared as sets.
@@ -1627,7 +1670,7 @@ export function resolveTargets(
       try {
         resolution = resolveRelayName(scope, raw);
       } catch (thrown) {
-        if (thrown instanceof TransportIncompatibleError) {
+        if (isTransportIncompatible(thrown)) {
           throw ownedByLibrary(new RequestTransportIncompatibleError(unnameableRelay(raw, thrown)));
         }
         throw ownedByLibrary(

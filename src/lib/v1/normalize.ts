@@ -29,7 +29,7 @@
 import type Nostr from 'nostr-typedef';
 
 import { UnsupportedFilterError, validateFilter, validateFilterNames } from './key.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type { ReqError } from './reqerror.js';
 
 declare const normalized: unique symbol;
@@ -451,7 +451,7 @@ export class InvalidDescriptorError extends Error {
   /**
    * The four members `Error` gives this class, re-declared.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and inherited members are where that was
    * false**: `message`, `name`, `stack` and `cause` arrive from `Error`, where
    * they are mutable, so `err.message = '[redacted]'` compiled against the
@@ -493,6 +493,7 @@ export class InvalidDescriptorError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(InvalidDescriptorError);
 
 /**
  * Integers, checked as one rule rather than as a list of the values seen so far.

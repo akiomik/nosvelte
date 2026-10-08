@@ -6,6 +6,11 @@
  * entry an edit of the library or of the arm's instruments that `OE14` must
  * fail under. Moved here from #140, where it was attached as a script, at
  * 807ea1e; the descriptions are the ones #139's table gave each entry.
+ *
+ * #142 publishes the tags as standard read-only arrays again, in place of
+ * `ReadonlyList`, so the two entries about that mapped list are one here,
+ * `C6-tags-not-arrays`, and the entries anchored on it or on code of the walk
+ * #142 changed were re-anchored on that code.
  */
 import type { Ledger } from '../ledger.ts';
 
@@ -188,8 +193,8 @@ export default {
       edits: [
         {
           file: 'src/lib/v1/event.ts',
-          from: '  readonly tags: ReadonlyList<ReadonlyList<string>>;\n  /** @deprecated',
-          to: '  readonly tags: ReadonlyList<string[]>;\n  /** @deprecated'
+          from: '  readonly tags: readonly (readonly string[])[];\n  /** @deprecated',
+          to: '  readonly tags: readonly string[][];\n  /** @deprecated'
         }
       ]
     },
@@ -320,7 +325,7 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/declarations.ts',
-          from: '      writes.push(`${expression}.anything = ${expression};`);\n      return;',
+          from: '      writes.push(`${guard}${expression}.anything = ${expression};`);\n      return;',
           to: '      return;'
         }
       ]
@@ -344,8 +349,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/declarations.ts',
-          from: 'writes.push(`void ${expression}.call;`);',
-          to: 'void 0;'
+          from: '    if (callable(type)) writes.push(`${guard}void ${expression}.call;`);',
+          to: '    if (callable(type)) void 0;'
         }
       ]
     },
@@ -376,24 +381,24 @@ export default {
     {
       id: 'I-union-passes-over',
       arm: 'OE14',
-      describe: 'the walk returns on a union',
+      describe: 'the walk returns on a union of values and objects',
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/declarations.ts',
-          from: '    if (type.isUnion()) throw new Error(`writesThrough: ${expression} is a union`);',
-          to: '    if (type.isUnion()) return;'
+          from: '        throw new Error(`writesThrough: ${expression} is a union of values and objects`);',
+          to: '        return;'
         }
       ]
     },
     {
       id: 'I-unnamed-symbol-passes-over',
       arm: 'OE14',
-      describe: 'the walk skips a symbol it cannot name',
+      describe: 'the walk takes a symbol member it cannot name for `Symbol.iterator`',
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/declarations.ts',
-          from: '          throw new Error(`writesThrough: ${expression} has a symbol member the probe cannot name`);',
-          to: '          continue;'
+          from: '        throw new Error(`writesThrough: ${expression} has a symbol member the probe cannot name`);',
+          to: '        return `${expression}[Symbol.iterator]`;'
         }
       ]
     },
@@ -850,26 +855,14 @@ export default {
       ]
     },
     {
-      id: 'C6-tags-standard-readonly-arrays',
+      id: 'C6-tags-not-arrays',
       arm: 'OE14',
-      describe: 'the tags are published as plain `readonly (readonly string[])[]` again',
+      describe: 'the tags are published as a mapped read-only list, which is not an array',
       edits: [
         {
           file: 'src/lib/v1/event.ts',
-          from: '  readonly tags: ReadonlyList<ReadonlyList<string>>;',
-          to: '  readonly tags: readonly (readonly string[])[];'
-        }
-      ]
-    },
-    {
-      id: 'C6-list-over-array',
-      arm: 'OE14',
-      describe: '`ReadonlyList` maps the members of `Array` instead of `ReadonlyArray`',
-      edits: [
-        {
-          file: 'src/lib/v1/event.ts',
-          from: 'export type ReadonlyList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };',
-          to: 'export type ReadonlyList<T> = { readonly [K in keyof Array<T>]: Array<T>[K] };'
+          from: '  readonly tags: readonly (readonly string[])[];',
+          to: '  readonly tags: { readonly [K in keyof ReadonlyArray<{ readonly [J in keyof ReadonlyArray<string>]: ReadonlyArray<string>[J] }>]: ReadonlyArray<{ readonly [J in keyof ReadonlyArray<string>]: ReadonlyArray<string>[J] }>[K] };'
         }
       ]
     },
@@ -880,8 +873,8 @@ export default {
       edits: [
         {
           file: 'src/lib/v1/event.ts',
-          from: 'export type ReadonlyList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };',
-          to: 'declare global {\n  interface ReadonlyArray<T> {\n    fill(value: T): this;\n  }\n}\nexport type ReadonlyList<T> = { readonly [K in keyof ReadonlyArray<T>]: ReadonlyArray<T>[K] };'
+          from: 'export interface ReqEvent {\n',
+          to: 'declare global {\n  interface ReadonlyArray<T> {\n    fill(value: T): this;\n  }\n}\nexport interface ReqEvent {\n'
         }
       ]
     },
@@ -957,8 +950,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/declarations.ts',
-          from: "      (one) => ts.isInterfaceDeclaration(one.parent) && one.parent.name.text === 'ReadonlyArray'\n",
-          to: '      () => true\n'
+          from: 'STANDARD_READ_ONLY.has(one.parent.name.text)',
+          to: 'true'
         }
       ]
     },

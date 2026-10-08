@@ -25,7 +25,7 @@
   type Props = {
     request: ReqHandle;
     loading?: Snippet<[RequestOutletContext]> | undefined;
-    error?: Snippet<[{ request: ReqHandle; error: ReqOutletError }]> | undefined;
+    error?: Snippet<[{ readonly request: ReqHandle; readonly error: ReqOutletError }]> | undefined;
     nodata?: Snippet<[RequestOutletContext]> | undefined;
   } & (
     | { event: Snippet<[Event & RequestOutletContext]>; events?: undefined }
@@ -39,17 +39,17 @@
 </script>
 
 {#if outlet.slot === 'loading'}
-  {@render loading?.({ request })}
+  {@render loading?.(Object.freeze({ request }))}
 {:else if outlet.slot === 'error'}
-  {@render error?.({ request, error: outlet.error })}
+  {@render error?.(Object.freeze({ request, error: outlet.error }))}
 {:else if events !== undefined}
   {#if outlet.slot === 'nodata'}
-    {@render nodata?.({ request })}
+    {@render nodata?.(Object.freeze({ request }))}
   {:else}
-    {@render events({ events: shown, request })}
+    {@render events(Object.freeze({ events: shown, request }))}
   {/if}
 {:else if outlet.slot === 'nodata' || shown[0] === undefined}
-  {@render nodata?.({ request })}
+  {@render nodata?.(Object.freeze({ request }))}
 {:else}
-  {@render event?.({ event: shown[0], request })}
+  {@render event?.(Object.freeze({ event: shown[0], request }))}
 {/if}

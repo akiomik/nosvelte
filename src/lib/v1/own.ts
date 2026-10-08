@@ -68,7 +68,7 @@
 import { AccumulatorContractError } from './attempt.js';
 import type { RelayMessage } from './normalize.js';
 import { boundedMessage, describeValue } from './normalize.js';
-import { hardenOwned, isOwnedByLibrary, ownedByLibrary, sealOwned } from './owned.js';
+import { hardenOwned, isOwnedByLibrary, ownedByLibrary, sealClass, sealOwned } from './owned.js';
 import type {
   CapturedReqError,
   RefreshOutcomeError,
@@ -266,7 +266,7 @@ export class ReqFailure extends Error {
   /**
    * The three members `Error` gives this class, re-declared as `readonly`.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and these three were not**: they are inherited,
    * where they are mutable, so `state.error.message = '[redacted]'` compiled —
    * legal-looking code the run time refuses, which is the exact failure the
@@ -345,6 +345,7 @@ export class ReqFailure extends Error {
     // and is captured like any other foreign value when it reaches a boundary.
   }
 }
+sealClass(ReqFailure);
 
 /**
  * The provider this request was made under has been disposed.
@@ -359,8 +360,12 @@ export class ReqFailure extends Error {
  * note ("nothing — you are not meant to see this") are four answers. They are
  * separated now, and this is the one that is genuinely its own: not retryable on
  * the handle a consumer is holding, and not a relay's fault.
+ *
+ * Exported for the arms, which name each class this library makes; the entry
+ * does not publish it, and {@link providerDisposed} is how this library builds
+ * one.
  */
-class ProviderDisposedError extends Error {
+export class ProviderDisposedError extends Error {
   /**
    * The four members `Error` gives this class, re-declared. See any sibling for
    * why: inherited members are where the deep-`readonly` promise was false.
@@ -379,6 +384,7 @@ class ProviderDisposedError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(ProviderDisposedError);
 
 /**
  * Build one, minted, sealed and typed as what the channel publishes.

@@ -20,7 +20,7 @@ import type {
 } from './eventset.js';
 import { completionOf, completionOfRecord, project, refusalsOf } from './eventset.js';
 import type { Retention } from './normalize.js';
-import { hardenOwned, ownedByLibrary } from './owned.js';
+import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';
 import type {
   IncompleteError,
   RefreshOutcomeError,
@@ -253,7 +253,7 @@ export class IncompleteResultError extends Error {
   /**
    * The three members `Error` gives this class, re-declared as `readonly`.
    *
-   * **`B5-C6` says every member of every published type is `readonly` to the
+   * **`B5-C8` says every member of every published type is `readonly` to the
    * depth a consumer can reach, and inherited members are where that was
    * false**: `message`, `name` and `stack` arrive from `Error`, where they are
    * mutable, so `err.message = '[redacted]'` compiled against the emitted
@@ -306,6 +306,7 @@ export class IncompleteResultError extends Error {
     Object.freeze(this);
   }
 }
+sealClass(IncompleteResultError);
 
 /**
  * One published Error per incomplete answer, keyed on the
@@ -438,7 +439,7 @@ export function outcomeOf(
 // that permits a write over a frozen value is legal-looking code that fails at
 // run time, which this record calls worse than the defect it would be hiding —
 // and the union's discriminants were the half that got missed when the rule was
-// applied to the containers. `LK16` counts them now.
+// applied to the containers. `LE16` counts them now.
 export type RefreshOutcome =
   | { readonly kind: 'complete' }
   | { readonly kind: 'incomplete'; readonly causes: IncompleteCauses }
@@ -630,7 +631,7 @@ export function deriveState(
   // request publishes is the consumer's to hold and nobody else's — the events,
   // the causes, the refusals, and the object carrying them — and the rule was
   // repaired value by value until a walk over what a hook publishes counted the
-  // ones nobody had thought about (`PO1`). A container is frozen where it is
+  // ones nobody had thought about (`PB1`). A container is frozen where it is
   // built; this is where the state object is.
   const derived = deriveStateOf(observed, now);
   return { ...derived, state: Object.freeze(derived.state) };
@@ -1146,6 +1147,17 @@ export interface ReqHandle {
    * {@link EngineRequest.accumulator} is the seam now, and both sides of it run
    * on the same cache entry. Nothing here gives a caller an outcome belonging to
    * an attempt of a request it did not ask for.
+   *
+   * **A property, not a method**: TypeScript declares a method as an
+   * assignable slot, so `handle.refresh = …` compiled against this interface —
+   * and the run time took it too, because the handle was not frozen, so one
+   * consumer's replacement was every later reader's `refresh`. Declared
+   * `readonly`, the slot is refused by the type; the handle is sealed, so the
+   * write is refused at run time however it is spelled; and the call is the
+   * same call. The members TypeScript declares on every function — `call`,
+   * `prototype`, `caller` and the rest — stay assignable in those declarations,
+   * the exception `B5-C8` states, and the sealed function refuses them at run
+   * time.
    */
-  refresh(): Promise<RefreshOutcome>;
+  readonly refresh: () => Promise<RefreshOutcome>;
 }
