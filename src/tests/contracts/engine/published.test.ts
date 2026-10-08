@@ -34,6 +34,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { types } from 'node:util';
 
 import { render } from '@testing-library/svelte';
 import type { RxNostr } from 'rx-nostr';
@@ -142,6 +143,14 @@ async function nextOf(server: WS, type: string): Promise<unknown[]> {
   for (;;) {
     const message = (await server.nextMessage) as unknown[];
     if (message[0] === type) return message;
+  }
+}
+
+/** The next `EVENT` the server is sent for one event, past any other's. */
+async function nextEventOf(server: WS, id: string): Promise<unknown[]> {
+  for (;;) {
+    const message = await nextOf(server, 'EVENT');
+    if ((message[1] as { id?: unknown } | undefined)?.id === id) return message;
   }
 }
 
@@ -1243,10 +1252,18 @@ function bindingsOf(program: ScriptNode): [string, ScriptNode][] {
  * component rather than its text, so a local type under an outlet type's
  * name, an alias in one script beside the import in another, an inline
  * annotation or a second `$props()` fails the premise rather than passing on
- * the name it shares.
+ * the name it shares. So does a `generics` attribute: it declares type
+ * parameters the whole component sees, under any name, an outlet type's
+ * included, and none of the scripts' bindings says so.
  */
 function propsTypeOf(source: string): string | undefined {
   const parsed = parse(source, { modern: true });
+  if (
+    [parsed.instance, parsed.module].some((script) =>
+      (script?.attributes ?? []).some((attribute) => attribute.name === 'generics')
+    )
+  )
+    return undefined;
   const instance = parsed.instance?.content as unknown as ScriptNode | undefined;
   const module = parsed.module?.content as unknown as ScriptNode | undefined;
   if (instance === undefined) return undefined;
@@ -2144,16 +2161,29 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // more**: one with a member of its own would be a value this library
       // hands out that no case here reads. Asked of every `refresh()` below,
       // each path's own, since a path may build its promise apart.
+      // Its prototype and its own keys are a proxy's to answer, so the
+      // promise's own slot is asked too.
       const bare = <T>(returned: Promise<T>, name: string): Promise<T> => {
+        expect(
+          types.isPromise(returned) && !types.isProxy(returned),
+          `${name}: the platform’s own promise, not a stand-in`
+        ).toBe(true);
         expect(Object.getPrototypeOf(returned), `${name}: a promise of the platform’s`).toBe(
           Promise.prototype
         );
         expect(Reflect.ownKeys(returned), `${name}: with nothing of its own`).toEqual([]);
         return returned;
       };
+      expect(
+        () => bare(new Proxy(Promise.resolve(), {}), 'a proxy over a promise'),
+        'the promise check’s control: a proxy that answers both other questions as a promise'
+      ).toThrow(/a proxy over a promise: the platform’s own promise, not a stand-in/);
       // An Error two readers share, written to through the first and read
       // back through each: first shown to be one object, so an unchanged read
       // is about this Error and not another.
+      // Each answer it wrote to is recorded, so a case that stops writing is
+      // missing from the record rather than silent.
+      const writtenBack: string[] = [];
       const sharedAndKept = (
         answer: string,
         readers: Readonly<Record<string, () => unknown>>
@@ -2166,6 +2196,7 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           writeAndReadBack(held as object, readers).reached,
           `${answer}: a reader the consumer’s write reached`
         ).toEqual([]);
+        writtenBack.push(answer);
       };
       // **A fresh one each call, the caller's own**: every path below is
       // asked twice, and the two answers are two promises. The second is
@@ -2536,6 +2567,16 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(unshared, 'the codes two hooks on one descriptor do not share').toEqual([
           'missing-provider'
         ]);
+        // And every other one was written to through both.
+        expect(
+          writtenBack.filter((answer) => answer.endsWith(', two hooks share')),
+          'every code two hooks share, written to through both'
+        ).toEqual(
+          held
+            .map(([code, , door]) => `${code}${door}`)
+            .filter((one) => !unshared.includes(one))
+            .map((one) => `an Error, ${one}, two hooks share`)
+        );
         // **And the one built after the channel's own freeze**: a relay's
         // failure that comes back out of the accumulator seam is re-derived
         // into an `accumulator-contract` on its way to the state, past the
@@ -2745,10 +2786,11 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           tags: [['t', 'sent']],
           created_at: 1
         };
-        // Every path a send takes builds its own promise, and each is asked:
-        // refused above, accepted here, abandoned below.
-        const sending = bare(sender.value(signed), 'what an accepted send returns');
-        await nextOf(server, 'EVENT');
+        // Every path a send takes builds its own promise, and each is asked,
+        // twice with one input: refused above, accepted here, abandoned
+        // below. The second of each settles with the rest at the end.
+        const sending = fresh(() => sender.value(signed), 'what an accepted send returns');
+        await nextEventOf(server, signed.id);
         server.send(['OK', signed.id, true, 'saved: thanks']);
         const settledSend = await sending;
         expect(
@@ -2759,15 +2801,12 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         ).toEqual(['accepted']);
         check('a send, settled', settledSend);
         // And one no relay answers, which the teardown below abandons.
-        const unanswered = bare(
-          sender.value({
-            ...signed,
-            id: 'd'.repeat(64),
-            content: 'pb13-unanswered'
-          }),
+        const unansweredInput = { ...signed, id: 'd'.repeat(64), content: 'pb13-unanswered' };
+        const unanswered = fresh(
+          () => sender.value(unansweredInput),
           'what an abandoned send returns'
         );
-        await nextOf(server, 'EVENT');
+        await nextEventOf(server, unansweredInput.id);
 
         const nowhere = mount(() =>
           useStreamedReq(() => ({
@@ -2840,11 +2879,16 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const server = new WS(url, { jsonProtocol: true });
         const handed: object[] = [];
         const asHanded: (string | undefined)[] = [];
+        // What each template held once the signer had written to it: a
+        // template it could not write would be refused too, as a signer that
+        // threw, and say nothing about the comparison.
+        const asRewritten: (string | undefined)[] = [];
         const rewriting: NostrSigner = {
           signEvent: async (template) => {
             handed.push(template);
             asHanded.push(template.tags[0]?.[1]);
             (template.tags[0] as string[])[1] = 'rewritten by the signer';
+            asRewritten.push(template.tags[0]?.[1]);
             return {
               ...template,
               id: 'e'.repeat(64),
@@ -2868,9 +2912,21 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const first = await bare(signing.value(template), 'what a signed send returns');
         const second = await bare(signing.value(template), 'what a signed send returns');
         expect(
-          [first, second].map((one) => (one.status === 'refused' ? one.code : one.status)),
-          'a signer that signs its own rewrite is refused, each time'
-        ).toEqual(['signer-failed', 'signer-failed']);
+          asRewritten,
+          'the premise: each template was the signer’s to write, and it wrote to it'
+        ).toEqual(['rewritten by the signer', 'rewritten by the signer']);
+        expect(
+          [first, second].map((one) =>
+            one.status === 'refused' ? `${one.code}: ${one.message}` : one.status
+          ),
+          'a signer that signs its own rewrite is refused by the comparison, each time'
+        ).toEqual(
+          Array.from(
+            { length: 2 },
+            () =>
+              'signer-failed: nosvelte: the signer returned a different event from the one it was asked to sign.'
+          )
+        );
         check('a send, refused by its signer', first);
         expect(handed, 'the premise: the signer was asked twice').toHaveLength(2);
         expect(handed[0], 'two calls, two templates').not.toBe(handed[1]);
@@ -3547,6 +3603,24 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         handedBy('export {};', '{ loose: any }'),
         'the probe’s control: a prop it cannot read is reported'
       ).toMatch(/a prop the probe cannot read/);
+      // And `unknown` wherever a prop holds it: as a member, under an index
+      // signature of either key, and as a list's element. Each is reached
+      // through `NonNullable`, which turns `unknown` into `{}`, read as
+      // holding nothing.
+      expect(
+        [
+          '{ on: unknown }',
+          '{ on: Record<string, unknown> }',
+          '{ on: { [n: number]: unknown } }',
+          '{ on: unknown[] }'
+        ].map((typeText) => handedBy('export {};', typeText)),
+        'the probe’s control: an unknown, wherever a prop holds it'
+      ).toEqual([
+        'handedArgumentsOf: value.on is a prop the probe cannot read',
+        'handedArgumentsOf: value.on[string] is a prop the probe cannot read',
+        'handedArgumentsOf: value.on[number] is a prop the probe cannot read',
+        'handedArgumentsOf: value.on[] is a prop the probe cannot read'
+      ]);
       // A tuple is read position by position, each callback in it handed its
       // own arguments. Read as one union through its `number` index, as a
       // list is, two callbacks would be one signature the probe cannot place.
@@ -3618,6 +3692,10 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           [
             'imported in the module script alone',
             `<script module lang="ts">\n  import type { EventListProps } from './outlets.js';\n</script>\n<script lang="ts">\n  let { ids }: EventListProps = $props();\n</script>`
+          ],
+          [
+            'a generic under its name',
+            `<script lang="ts" generics="EventListProps extends import('./outlets.js').EventListProps & { onsettled?: (seen: { ids: string[] }) => void }">\n  import type { EventListProps } from './outlets.js';\n  let { ids }: EventListProps = $props();\n</script>`
           ]
         ].map(([shape, source]) => `${shape}: ${propsTypeOf(source as string) ?? 'refused'}`),
         'the premise’s control: each way a component can name its props otherwise'
@@ -3631,7 +3709,8 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         'imported in the module script, aliased in the instance: refused',
         'imported from elsewhere: refused',
         'declared in the module script beside the instance’s import: refused',
-        'imported in the module script alone: refused'
+        'imported in the module script alone: refused',
+        'a generic under its name: refused'
       ]);
       // A method this repository declares, with a member of its own; and two
       // lists of different types, since a type is walked where it is first met.

@@ -1038,6 +1038,11 @@ export function handedArgumentsOf(
   const found: string[] = [];
   const types: string[] = [];
   const exempted: string[] = [];
+  // The type a `?` or `!` leaves — except that `NonNullable<unknown>` is `{}`,
+  // which would hide an `unknown` behind an empty object read as holding
+  // nothing, where `readHeld` reports it.
+  const present = (type: ts.Type): ts.Type =>
+    type.getFlags() & ts.TypeFlags.Unknown ? type : checker.getNonNullableType(type);
   // A member of `text` by name, from whichever variant of it has one — a prop
   // only one variant of a union declares is a prop all the same. Asked by the
   // name's text, so a member keyed by a number (`0`) is found under `"0"`.
@@ -1129,7 +1134,7 @@ export function handedArgumentsOf(
         .getTypeArguments(held as ts.TypeReference)
         .entries())
         readHeld(
-          checker.getNonNullableType(element),
+          present(element),
           `NonNullable<(${text})[${checker.isTupleType(held) ? position : 'number'}]>`,
           `${label}[]`,
           depth + 1
@@ -1177,12 +1182,7 @@ export function handedArgumentsOf(
           throw new Error(
             `handedArgumentsOf: ${label} has an index signature the probe cannot name`
           );
-        readHeld(
-          checker.getNonNullableType(index.type),
-          indexText(text, key),
-          `${label}[${key}]`,
-          depth + 1
-        );
+        readHeld(present(index.type), indexText(text, key), `${label}[${key}]`, depth + 1);
       }
     const names = new Set(properties.map((one) => one.getName()));
     for (const name of names)
@@ -1191,7 +1191,7 @@ export function handedArgumentsOf(
         const property = checker.getPropertyOfType(variant, name);
         if (property === undefined) continue;
         readHeld(
-          checker.getNonNullableType(checker.getTypeOfSymbol(property)),
+          present(checker.getTypeOfSymbol(property)),
           memberText(text, name),
           `${label}.${name}`,
           depth + 1
