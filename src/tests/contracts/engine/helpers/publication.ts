@@ -318,8 +318,9 @@ export function breachesOf(root: unknown, at: string, discipline: Discipline): s
           // **A library prototype holds its class and nothing else**: any other
           // member — a method, whose answer nothing here can read, data every
           // instance shares, even a primitive — is one more thing each instance
-          // inherits that no rule names. And its `constructor` is the class
-          // whose `prototype` it is, not some other function wearing the name.
+          // inherits that no rule names. And its `constructor` is the class the
+          // arrangement imports with it, not another function wearing the name,
+          // even one whose own `prototype` is this one.
           if (key !== 'constructor') found.push(`${where}: a member every instance inherits`);
           else if (library !== undefined && held !== library)
             found.push(`${where}: a constructor that is not this prototype's class`);

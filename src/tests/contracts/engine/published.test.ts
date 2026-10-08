@@ -298,10 +298,12 @@ function writeAndReadBack(
 const LIBRARY = resolve(dirname(fileURLToPath(import.meta.url)), '../../../lib/v1');
 
 /**
- * The prototypes a published Error may have: every class this library
- * declares, and nothing else â€” an Error from anywhere else on a published value
- * is one this library did not make. `ProviderDisposedError` is not exported, so
- * its prototype is read off the one factory that makes it.
+ * Every class this library declares, by its prototype, and nothing else: the
+ * prototypes a published Error may have â€” an Error from anywhere else on a
+ * published value is one this library did not make â€” and the one class each
+ * must hold. Each is taken from where this file imports it, the entry's or its
+ * module's; `ProviderDisposedError` is exported from its module for this, and
+ * the entry does not publish it.
  */
 const LIBRARY_CLASSES: ReadonlyMap<object, object> = new Map(
   [
@@ -2198,6 +2200,27 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         ).toEqual([]);
         writtenBack.push(answer);
       };
+      // The cache's reader of a request's Error: the one entry of `namespace`
+      // in `cache`, whether the key names it as a part (a refused key) or
+      // inside its descriptor. No namespace, or not exactly one entry, is
+      // answered as it was found, which no Error is.
+      const cacheOf = (cache: QueryClient, namespace: string | undefined) => (): unknown => {
+        if (namespace === undefined) return 'no namespace to find an entry by';
+        const found = cache
+          .getQueryCache()
+          .getAll()
+          .filter((entry) =>
+            entry.queryKey.some(
+              (part) =>
+                part === namespace ||
+                (typeof part === 'string' && part.includes(`"ns":${JSON.stringify(namespace)}`))
+            )
+          );
+        const [only] = found;
+        return found.length === 1 && only !== undefined
+          ? (only.state as { error?: unknown }).error
+          : found;
+      };
       // **A fresh one each call, the caller's own**: every path below is
       // asked twice, and the two answers are two promises. The second is
       // settled before the population is counted, so neither is left behind.
@@ -2537,23 +2560,30 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
               code,
               mount(() => useStreamedReq(given)),
               door,
-              mount(() => useStreamedReq(given))
+              mount(() => useStreamedReq(given)),
+              given().namespace
             ] as const
         );
         await settle(150);
         const unshared: string[] = [];
-        for (const [code, hook, door, twin] of held) {
+        for (const [code, hook, door, twin, namespace] of held) {
           reached(code, (hook.value.state as { error?: unknown }).error);
           check(`an Error, ${code}${door}`, hook.value, engine(hook.value));
           const errorOf = (one: typeof hook): unknown =>
             (one.value.state as { error?: unknown }).error;
-          if (errorOf(twin) === errorOf(hook))
-            sharedAndKept(`an Error, ${code}${door}, two hooks share`, {
+          if (errorOf(twin) === errorOf(hook)) {
+            // The readers the row names, each of them.
+            const readers = {
               'the value written to': () => errorOf(hook),
               'a second hook': () => errorOf(twin),
-              'the same hook, read again': () => errorOf(hook)
-            });
-          else unshared.push(`${code}${door}`);
+              'its diagnostics': () =>
+                (twin.value.diagnostics as { lastError?: unknown }).lastError,
+              'the same hook, read again': () => errorOf(hook),
+              'the cache': cacheOf(client, namespace)
+            };
+            expect(Object.keys(readers), `an Error, ${code}${door}: the readers`).toEqual(READERS);
+            sharedAndKept(`an Error, ${code}${door}, two hooks share`, readers);
+          } else unshared.push(`${code}${door}`);
           twin.destroy();
           if (code !== 'accumulator-contract') {
             const rejected = await rejectionOf(() => hook.value.refresh());
@@ -2958,32 +2988,56 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
           setNostrContext(built);
           return built;
         });
-        const asking = (code: string, relay: string) =>
-          [
+        // Each asked by two hooks on one descriptor, as above, and the Error
+        // they share written to through every reader.
+        const asking = (code: string, relay: string) => {
+          const given = (): UseStreamedReqOpts => ({
+            namespace: `pb13-${code}`,
+            filters: [{ kinds: [1] }],
+            relays: [relay],
+            reqIdBase: `pb13-${code}`,
+            settleTimeoutMs: 300
+          });
+          return [
             code,
-            mount(() =>
-              useStreamedReq(() => ({
-                namespace: `pb13-${code}`,
-                filters: [{ kinds: [1] }],
-                relays: [relay],
-                reqIdBase: `pb13-${code}`,
-                settleTimeoutMs: 300
-              }))
-            )
+            mount(() => useStreamedReq(given)),
+            mount(() => useStreamedReq(given))
           ] as const;
+        };
         const held = [
           asking('relay-not-in-scope', 'wss://b.example'),
           asking('transport-incompatible', UNNAMEABLE)
         ];
         await settle(150);
-        for (const [code, hook] of held) {
+        for (const [code, hook, twin] of held) {
           reached(code, (hook.value.state as { error?: unknown }).error);
           check(`an Error, ${code}`, hook.value, engine(hook.value));
+          const errorOf = (one: typeof hook): unknown =>
+            (one.value.state as { error?: unknown }).error;
+          expect(errorOf(twin), `an Error, ${code}: the premise, two hooks share it`).toBe(
+            errorOf(hook)
+          );
+          const readers = {
+            'the value written to': () => errorOf(hook),
+            'a second hook': () => errorOf(twin),
+            'its diagnostics': () => (twin.value.diagnostics as { lastError?: unknown }).lastError,
+            'the same hook, read again': () => errorOf(hook),
+            'the cache': cacheOf(provider.value.client, `pb13-${code}`)
+          };
+          expect(Object.keys(readers), `an Error, ${code}: the readers`).toEqual(READERS);
+          sharedAndKept(`an Error, ${code}, two hooks share`, readers);
+          twin.destroy();
           const rejected = await rejectionOf(() => hook.value.refresh());
           rejectedWith(code, rejected);
           check(`a refresh, rejected with ${code}`, rejected);
           hook.destroy();
         }
+        expect(
+          writtenBack.filter((answer) =>
+            held.some(([code]) => answer === `an Error, ${code}, two hooks share`)
+          ),
+          'each of them written to through both'
+        ).toEqual(held.map(([code]) => `an Error, ${code}, two hooks share`));
 
         // **And what this library decides about its own classes does not read
         // `instanceof`.** A published Error reaches its class, which is
@@ -3408,9 +3462,9 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
       // signature is written under a key no member has; every prop that can be
       // called hands its arguments out; and the exception is a standard
       // member's slot, never a mutable list's.
-      const throwsOn = (typeText: string): string => {
+      const throwsOn = (typeText: string, imports = declarations): string => {
         try {
-          writesThrough(declarations, typeText, commands);
+          writesThrough(imports, typeText, commands);
         } catch (thrown) {
           return (thrown as Error).message;
         }
@@ -3479,6 +3533,15 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         throwsOn('{ refresh(): Promise<number> | number }'),
         'the probeâ€™s control: a command that may answer without a promise'
       ).toMatch(/does not return a promise/);
+      // And a type under the platform's name that the default library does
+      // not declare: the name alone is not the platform's promise.
+      expect(
+        throwsOn(
+          '{ refresh(): Promise<number> }',
+          `${declarations}\ninterface Promise<T> { then(done: (value: T) => void): void }`
+        ),
+        'the probeâ€™s control: a `Promise` declared outside the default library'
+      ).toMatch(/does not return a promise of the platform's/);
       // **One function type, a command under the handle and data's in a
       // snapshot**, in both orders: whichever is met first, the other is
       // classified where it is met.
@@ -3621,6 +3684,12 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         'handedArgumentsOf: value.on[number] is a prop the probe cannot read',
         'handedArgumentsOf: value.on[] is a prop the probe cannot read'
       ]);
+      // An index signature keyed by neither `string` nor `number` is one the
+      // reader cannot name in a type, and is reported.
+      expect(
+        handedBy('export {};', '{ on: { [key: `on${string}`]: (x: { m: number[] }) => void } }'),
+        'the probeâ€™s control: an index signature it cannot name'
+      ).toBe('handedArgumentsOf: value.on has an index signature the probe cannot name');
       // A tuple is read position by position, each callback in it handed its
       // own arguments. Read as one union through its `number` index, as a
       // list is, two callbacks would be one signature the probe cannot place.
@@ -3694,6 +3763,10 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
             `<script module lang="ts">\n  import type { EventListProps } from './outlets.js';\n</script>\n<script lang="ts">\n  let { ids }: EventListProps = $props();\n</script>`
           ],
           [
+            'with type arguments',
+            `${imported}  let { ids }: EventListProps<{ onsettled?: () => void }> = $props();\n</script>`
+          ],
+          [
             'a generic under its name',
             `<script lang="ts" generics="EventListProps extends import('./outlets.js').EventListProps & { onsettled?: (seen: { ids: string[] }) => void }">\n  import type { EventListProps } from './outlets.js';\n  let { ids }: EventListProps = $props();\n</script>`
           ]
@@ -3710,6 +3783,7 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         'imported from elsewhere: refused',
         'declared in the module script beside the instanceâ€™s import: refused',
         'imported in the module script alone: refused',
+        'with type arguments: refused',
         'a generic under its name: refused'
       ]);
       // A method this repository declares, with a member of its own; and two
