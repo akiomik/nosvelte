@@ -2708,6 +2708,68 @@ export default {
           to: "  const after = Object.fromEntries(\n    Object.entries(readers).map(([reader, read]) => {\n      if (reader === 'the cache') return [reader, before[reader]];\n      const root = read();\n      return [reader, paths.map((path) => readAt(root, path))];\n    })\n  ) as Record<string, unknown[]>;"
         }
       ]
+    },
+    {
+      id: 'C8-signer-tags-shared',
+      arm: 'PB13',
+      describe:
+        'every template the signer is handed holds one list of tags, refilled for each send',
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: 'async function signedEventOf(',
+          to: 'const SHARED_TAGS: string[][] = [];\nasync function signedEventOf('
+        },
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '    tags: expected.tags.map((tag) => [...tag]),',
+          to: '    tags: (SHARED_TAGS.splice(0, SHARED_TAGS.length, ...expected.tags.map((tag) => [...tag])), SHARED_TAGS),'
+        }
+      ]
+    },
+    {
+      id: 'I-writeback-roots-read-early',
+      arm: 'PB13',
+      describe:
+        'the write-back asks each reader twice before the write, and reads the members of what they answered after it',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: '  const before = answers();',
+          to: '  const early = Object.fromEntries(\n    Object.entries(readers).map(([reader, read]) => [reader, (read(), read())])\n  );\n  const sampled = (): Record<string, unknown[]> =>\n    Object.fromEntries(\n      Object.entries(early).map(([reader, root]) => [reader, paths.map((path) => readAt(root, path))])\n    );\n  const before = sampled();'
+        },
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: '  const after = answers();',
+          to: '  const after = sampled();\n  void answers;'
+        }
+      ]
+    },
+    {
+      id: 'C8-refused-send-settled-reused',
+      arm: 'PB13',
+      describe:
+        'a send of an input that is not an event answers a later call on the same input with the first promise once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
+          to: "  const settled = new WeakMap<object, Promise<SendResult>>();\n  return Object.freeze((input: SendInput, options?: SendOptions) => {\n    if (typeof input !== 'object' || input === null || 'kind' in input) return sendThrough(port, input, options);\n    const previous = settled.get(input);\n    if (previous !== undefined) return previous;\n    const sent = sendThrough(port, input, options);\n    void sent.then(() => {\n      if (!settled.has(input)) settled.set(input, sent);\n    });\n    return sent;\n  });"
+        }
+      ]
+    },
+    {
+      id: 'C8-template-send-settled-reused',
+      arm: 'PB13',
+      describe:
+        'a send of a template answers a later call on the same template with the first promise once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
+          to: "  const settled = new WeakMap<object, Promise<SendResult>>();\n  return Object.freeze((input: SendInput, options?: SendOptions) => {\n    if (typeof input !== 'object' || input === null || 'sig' in input || !('kind' in input)) return sendThrough(port, input, options);\n    const previous = settled.get(input);\n    if (previous !== undefined) return previous;\n    const sent = sendThrough(port, input, options);\n    void sent.then(() => {\n      if (!settled.has(input)) settled.set(input, sent);\n    });\n    return sent;\n  });"
+        }
+      ]
     }
   ],
   retired: [
