@@ -31,9 +31,16 @@
  * Git runs with no hooks while it does so. Every mutation is applied, run and
  * restored inside a copy. An edit that resolves outside it is refused, and a
  * restore that does not read back ends the run. The copies are removed when
- * the run ends, after any command still running in one is stopped. A run that
- * dies leaves only its copies, which `clean` removes once each proves to be
- * one of this repository's and nothing runs in it. The result file must be a plain file of its own, and
+ * the run ends, after any command still running in one is stopped, each
+ * attempted whatever another's removal does. Each supervised command's
+ * temporary directory (`TMPDIR`) is inside its copy, so what Vitest leaves
+ * there goes with it.
+ *
+ * A run that dies leaves its copies, which `clean` removes once each proves to
+ * be one of this repository's and neither its runner nor any supervisor
+ * recorded in it still runs. The commands that make a copy — `git worktree
+ * add`, the dependency clone — run unsupervised: a runner killed outright
+ * during one leaves that command to finish on its own. The result file must be a plain file of its own, and
  * not a tracked one; its header is written whole or not at all. This assumes
  * no other process replaces the result file or its directory while a run
  * writes it.
@@ -69,7 +76,7 @@
  *
  * Three flags trade load against time:
  * - `--jobs n` (default 1): how many runs go at once, each in a copy of its
- *   own, taking the next mutation as it finishes one. Each copy runs the
+ *   own, taking the next mutation as it finishes one, the longest first. Each copy runs the
  *   baseline first, and every copy must find each arm as the same test.
  * - `--workers n` (default 1): Vitest's `--maxWorkers` inside one run. Vitest
  *   gives a test file one worker, so it gains only where a run's arms are in
@@ -223,9 +230,17 @@ const fail = (message: string): never => {
   process.exit(2);
 };
 process.on('exit', () => {
-  // A command still running in a copy is stopped before any copy is removed.
+  // A command still running in a copy is stopped before any copy is removed,
+  // and every removal is attempted: one that throws leaves the rest to run.
   for (const supervisor of running) killGroup(supervisor.pid);
-  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  for (const cleanup of cleanups.splice(0).reverse())
+    try {
+      cleanup();
+    } catch (error) {
+      process.stderr.write(
+        `ledger: a copy was not removed (${(error as Error).message}); \`clean\` removes it once nothing runs in it\n`
+      );
+    }
 });
 
 /** A command that must succeed: its output, as bytes, or the run ends with what it said. */
@@ -551,7 +566,11 @@ function linksUnder(directory: string): string[] {
   return found;
 }
 
-/** Remove a copy: its worktree's registration, then its directory. */
+/**
+ * Remove a copy: its worktree's registration, then its directory, `owner.json`
+ * last — a removal that fails part-way leaves what `clean` needs to know the
+ * copy by.
+ */
 function discard(copy: Copy): boolean {
   const removed = spawnSync(
     'git',
@@ -561,6 +580,10 @@ function discard(copy: Copy): boolean {
       stdio: 'ignore'
     }
   );
+  if (existsSync(copy.directory))
+    for (const name of readdirSync(copy.directory))
+      if (name !== 'owner.json')
+        rmSync(join(copy.directory, name), { recursive: true, force: true });
   rmSync(copy.directory, { recursive: true, force: true });
   return removed.status === 0 && !existsSync(copy.directory);
 }
@@ -616,18 +639,35 @@ function cleanCommand(): void {
       leave('its tree is not a worktree of this repository');
       continue;
     }
-    let alive = false;
-    try {
-      process.kill(Number(owner.pid), 0);
-      alive = true;
-    } catch {
-      // Not running.
-    }
-    if (alive) {
+    const alive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (alive(Number(owner.pid))) {
       leave(`process ${owner.pid} is running`);
       continue;
     }
-    if (discard({ directory, tree })) removed += 1;
+    // A supervisor outlives its runner when it cannot act — stopped, say —
+    // and its group may still run in the copy.
+    const supervisors = readdirSync(directory)
+      .filter((one) => /^supervisor-\d+$/.test(one))
+      .map((one) => Number(one.slice('supervisor-'.length)))
+      .filter(alive);
+    if (supervisors.length > 0) {
+      leave(`supervisor ${supervisors.join(', ')} is running`);
+      continue;
+    }
+    let gone = false;
+    try {
+      gone = discard({ directory, tree });
+    } catch {
+      // Reported below.
+    }
+    if (gone) removed += 1;
     else leave('Git or the filesystem refused to remove it');
   }
   process.stdout.write(
@@ -691,18 +731,25 @@ function supervised(
   copy: Copy,
   limit: number
 ): Promise<{ stopped: boolean; code: number | null }> {
-  // In the copy's own directory, so a run that dies leaves nothing beside it.
+  // In the copy's own directory, so a run that dies leaves nothing beside it:
+  // the status file, and the command's temporary directory, which Vitest
+  // leaves behind as often as not.
   const status = join(mkdtempSync(join(copy.directory, 'status-')), 'status.json');
+  const temporary = mkdtempSync(join(copy.directory, 'tmp-'));
   const cwd = copy.tree;
   return new Promise((done) => {
     let stopped = false;
     const supervisor = spawn(process.execPath, [SUPERVISOR, status, ...command], {
       cwd,
       detached: true,
-      stdio: ['pipe', 'ignore', 'ignore']
+      stdio: ['pipe', 'ignore', 'ignore'],
+      env: { ...process.env, TMPDIR: temporary }
     });
     running.add(supervisor);
     const group = supervisor.pid;
+    // Recorded in the copy, so `clean` leaves it while this supervisor lives.
+    const record = group === undefined ? undefined : join(copy.directory, `supervisor-${group}`);
+    if (record !== undefined) writeFileSync(record, '');
     let grace: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       stopped = true;
@@ -723,6 +770,8 @@ function supervised(
         // No status written.
       }
       rmSync(dirname(status), { recursive: true, force: true });
+      rmSync(temporary, { recursive: true, force: true });
+      if (record !== undefined) rmSync(record, { force: true });
       done({ stopped, code });
     };
     supervisor.on('error', finish);
@@ -1093,7 +1142,12 @@ async function runCommand(
     return;
   }
 
-  const groups = groupsOf(pending);
+  // Longest first, as the estimate assumes, so the last run to finish is not
+  // a long one begun late.
+  const groups = groupsOf(pending)
+    .map((group, at) => ({ group, at, cost: estimateOf(ledger, group.entries.flatMap(armsOf)) }))
+    .sort((a, b) => b.cost - a.cost || a.at - b.at)
+    .map((one) => one.group);
   const jobs = jobsOf(options, groups.length);
   // One copy for each run at once, made one after another: each is checked
   // against the installation read, and `svelte-kit sync` runs in each.
