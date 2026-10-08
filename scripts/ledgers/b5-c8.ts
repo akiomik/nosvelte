@@ -2363,6 +2363,132 @@ export default {
           to: '          else void 0;'
         }
       ]
+    },
+    {
+      id: 'C8-provider-props-generic',
+      arm: 'PB13',
+      describe:
+        "`NostrApp` declares a type parameter under its props type's name, with a callback the library calls with a mutable list",
+      edits: [
+        {
+          file: 'src/lib/v1/components/NostrApp.svelte',
+          from: '<script lang="ts">\n',
+          to: '<script lang="ts" generics="NostrAppProps extends import(\'./outlets.js\').NostrAppProps & { onready?: (value: { mutable: number[] }) => void }">\n'
+        },
+        {
+          file: 'src/lib/v1/components/NostrApp.svelte',
+          from: '  let { relays = [], signer, children }: NostrAppProps = $props();',
+          to: '  let { relays = [], signer, children, onready }: NostrAppProps = $props();'
+        },
+        {
+          file: 'src/lib/v1/components/NostrApp.svelte',
+          from: '  setNostrContext(context);\n',
+          to: '  setNostrContext(context);\n  onready?.({ mutable: [] });\n'
+        }
+      ]
+    },
+    {
+      id: 'I-props-generics-admitted',
+      arm: 'PB13',
+      describe: 'the props premise passes a component with a `generics` attribute',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: "attribute.name === 'generics'",
+          to: "attribute.name === 'not-generics'"
+        }
+      ]
+    },
+    {
+      id: 'I-handed-unknown-member-hidden',
+      arm: 'PB13',
+      describe:
+        'the reader of what is handed out strips nullability from a member before it asks whether it is `unknown`',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/declarations.ts',
+          from: '        readHeld(\n          present(checker.getTypeOfSymbol(property)),\n          memberText(text, name),',
+          to: '        readHeld(\n          checker.getNonNullableType(checker.getTypeOfSymbol(property)),\n          memberText(text, name),'
+        }
+      ]
+    },
+    {
+      id: 'I-handed-unknown-index-hidden',
+      arm: 'PB13',
+      describe:
+        'the reader of what is handed out strips nullability from what an index signature holds before it asks whether it is `unknown`',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/declarations.ts',
+          from: 'readHeld(present(index.type), ',
+          to: 'readHeld(checker.getNonNullableType(index.type), '
+        }
+      ]
+    },
+    {
+      id: 'I-handed-unknown-element-hidden',
+      arm: 'PB13',
+      describe:
+        "the reader of what is handed out strips nullability from a list's element before it asks whether it is `unknown`",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/declarations.ts',
+          from: '          present(element),\n',
+          to: '          checker.getNonNullableType(element),\n'
+        }
+      ]
+    },
+    {
+      id: 'C8-signer-template-frozen',
+      arm: 'PB13',
+      describe:
+        "the template the signer is handed has its first tag frozen, so it is not the signer's to write",
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '    const signed: unknown = await signer.signEvent(handed);',
+          to: '    Object.freeze(handed.tags[0]);\n    const signed: unknown = await signer.signEvent(handed);'
+        }
+      ]
+    },
+    {
+      id: 'C8-signed-send-promise-reused',
+      arm: 'PB13',
+      describe:
+        'a send of a signed event answers a second call on the same input with the first promise',
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
+          to: "  const pending = new WeakMap<object, Promise<SendResult>>();\n  return Object.freeze((input: SendInput, options?: SendOptions) => {\n    if (typeof input === 'object' && input !== null && 'sig' in input) {\n      const previous = pending.get(input);\n      if (previous !== undefined) return previous;\n      const sent = sendThrough(port, input, options);\n      pending.set(input, sent);\n      return sent;\n    }\n    return sendThrough(port, input, options);\n  });"
+        }
+      ]
+    },
+    {
+      id: 'I-bare-brand-unchecked',
+      arm: 'PB13',
+      describe:
+        "the promise check asks a returned value's prototype and own keys alone, not its promise slot",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: 'types.isPromise(returned) && !types.isProxy(returned),',
+          to: 'true,'
+        }
+      ]
+    },
+    {
+      id: 'I-twins-not-written',
+      arm: 'PB13',
+      describe:
+        'the Error two hooks on one descriptor share is not written to, though they are shown to share it',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: "            sharedAndKept(`an Error, ${code}${door}, two hooks share`, {\n              'the value written to': () => errorOf(hook),\n              'a second hook': () => errorOf(twin),\n              'the same hook, read again': () => errorOf(hook)\n            });\n",
+          to: '            void 0;\n'
+        }
+      ]
     }
   ],
   retired: [
