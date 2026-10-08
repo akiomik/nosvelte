@@ -7,17 +7,18 @@
  * A landing is held to a rule: it fails under a mutation of each normative
  * clause of its row. A **ledger** is the list of those mutations, as data in
  * `scripts/ledgers/<name>.ts`: each entry an edit of the source and the arm it
- * must make fail. This applies one entry at a time, runs the arm, and restores
- * the file. It is run by hand, not by CI: a full run takes minutes to hours.
+ * must make fail. In each copy of the tree it makes, this applies one entry at
+ * a time, runs the arm, and restores the file. It is run by hand, not by CI: a
+ * full run takes minutes to hours.
  *
  *     node scripts/ledger.ts plan  <ledger> [ids…]  — checks, counts, estimate; runs nothing
- *     node scripts/ledger.ts run   <ledger> [ids…] [--out file] [--resume file] [--workers n] [--nice n] [--limit s]
+ *     node scripts/ledger.ts run   <ledger> [ids…] [--out file] [--resume file] [--jobs n] [--workers n] [--nice n] [--limit s]
  *     node scripts/ledger.ts table <ledger> <results>  — the markdown table a PR quotes
  *     node scripts/ledger.ts clean                     — remove the copies runs that died left behind
  *
  * **A run writes nothing of the tree it is started in but its result file.**
  * It reads the tree once and builds a disposable git worktree from what it
- * read:
+ * read, one for each run it has going at once (`--jobs`):
  * - `HEAD`, with the uncommitted changes applied;
  * - the untracked files that are not ignored, from the bytes captured;
  * - `node_modules` cloned, copy-on-write where the filesystem can, without
@@ -28,11 +29,18 @@
  *   reported, since reads and writes through it are shared.
  *
  * Git runs with no hooks while it does so. Every mutation is applied, run and
- * restored inside the copy. An edit that resolves outside it is refused, and a
- * restore that does not read back ends the run. The copy is removed when the
- * run ends. A run that dies leaves only its copy, which `clean` removes once
- * the copy proves to be one of this repository's and nothing runs in it. Two
- * runs are two copies. The result file must be a plain file of its own, and
+ * restored inside a copy. An edit that resolves outside it is refused, and a
+ * restore that does not read back ends the run. The copies are removed when
+ * the run ends, after any command still running in one is stopped, each
+ * attempted whatever another's removal does. Each supervised command's
+ * temporary directory (`TMPDIR`) is inside its copy, so what Vitest leaves
+ * there goes with it.
+ *
+ * A run that dies leaves its copies, which `clean` removes once each proves to
+ * be one of this repository's and neither its runner nor any supervisor
+ * recorded in it still runs. The commands that make a copy — `git worktree
+ * add`, the dependency clone — run unsupervised: a runner killed outright
+ * during one leaves that command to finish on its own. The result file must be a plain file of its own, and
  * not a tracked one; its header is written whole or not at all. This assumes
  * no other process replaces the result file or its directory while a run
  * writes it.
@@ -64,9 +72,19 @@
  * the runner kills the group, a grace period past the limit or as soon as the
  * supervisor ends. Only the runner dying while the supervisor cannot act is
  * not covered. Entries whose edits are identical, one
- * mutation held against several arms, run once. `--workers` (default 1) and
- * `--nice` trade load against time. A ledger's `calibration` turns a plan into
- * an estimate, and a run reports how far it drifted from it.
+ * mutation held against several arms, run once.
+ *
+ * Three flags trade load against time:
+ * - `--jobs n` (default 1): how many runs go at once, each in a copy of its
+ *   own, taking the next mutation as it finishes one, the longest first. Each copy runs the
+ *   baseline first, and every copy must find each arm as the same test.
+ * - `--workers n` (default 1): Vitest's `--maxWorkers` inside one run. Vitest
+ *   gives a test file one worker, so it gains only where a run's arms are in
+ *   several files; for a ledger whose arms share one file it changes nothing.
+ * - `--nice n`: the runs' scheduling priority.
+ *
+ * A ledger's `calibration` turns a plan into an estimate for the jobs chosen,
+ * and a run reports how far it drifted from it.
  *
  * **A result file says which tree it is about.** It records:
  * - the revision;
@@ -212,7 +230,17 @@ const fail = (message: string): never => {
   process.exit(2);
 };
 process.on('exit', () => {
-  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  // A command still running in a copy is stopped before any copy is removed,
+  // and every removal is attempted: one that throws leaves the rest to run.
+  for (const supervisor of running) killGroup(supervisor.pid);
+  for (const cleanup of cleanups.splice(0).reverse())
+    try {
+      cleanup();
+    } catch (error) {
+      process.stderr.write(
+        `ledger: a copy was not removed (${(error as Error).message}); \`clean\` removes it once nothing runs in it\n`
+      );
+    }
 });
 
 /** A command that must succeed: its output, as bytes, or the run ends with what it said. */
@@ -538,7 +566,11 @@ function linksUnder(directory: string): string[] {
   return found;
 }
 
-/** Remove a copy: its worktree's registration, then its directory. */
+/**
+ * Remove a copy: its worktree's registration, then its directory, `owner.json`
+ * last — a removal that fails part-way leaves what `clean` needs to know the
+ * copy by.
+ */
 function discard(copy: Copy): boolean {
   const removed = spawnSync(
     'git',
@@ -548,6 +580,10 @@ function discard(copy: Copy): boolean {
       stdio: 'ignore'
     }
   );
+  if (existsSync(copy.directory))
+    for (const name of readdirSync(copy.directory))
+      if (name !== 'owner.json')
+        rmSync(join(copy.directory, name), { recursive: true, force: true });
   rmSync(copy.directory, { recursive: true, force: true });
   return removed.status === 0 && !existsSync(copy.directory);
 }
@@ -603,18 +639,35 @@ function cleanCommand(): void {
       leave('its tree is not a worktree of this repository');
       continue;
     }
-    let alive = false;
-    try {
-      process.kill(Number(owner.pid), 0);
-      alive = true;
-    } catch {
-      // Not running.
-    }
-    if (alive) {
+    const alive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (alive(Number(owner.pid))) {
       leave(`process ${owner.pid} is running`);
       continue;
     }
-    if (discard({ directory, tree })) removed += 1;
+    // A supervisor outlives its runner when it cannot act — stopped, say —
+    // and its group may still run in the copy.
+    const supervisors = readdirSync(directory)
+      .filter((one) => /^supervisor-\d+$/.test(one))
+      .map((one) => Number(one.slice('supervisor-'.length)))
+      .filter(alive);
+    if (supervisors.length > 0) {
+      leave(`supervisor ${supervisors.join(', ')} is running`);
+      continue;
+    }
+    let gone = false;
+    try {
+      gone = discard({ directory, tree });
+    } catch {
+      // Reported below.
+    }
+    if (gone) removed += 1;
     else leave('Git or the filesystem refused to remove it');
   }
   process.stdout.write(
@@ -627,6 +680,9 @@ const filterOf = (arms: readonly string[]): string =>
   `\\b(?:${[...new Set(arms)].map(escape).join('|')}):`;
 
 interface Options {
+  /** Runs at once, each in a copy of its own. */
+  readonly jobs: number;
+  /** Vitest's `--maxWorkers` inside one run. */
   readonly workers: number;
   readonly nice: number | undefined;
   /** Seconds a run may take before its group is stopped and recorded as an error. */
@@ -647,8 +703,8 @@ interface Report {
   }[];
 }
 
-/** The supervisor of the command in progress: its pipe closed, its group stops. */
-let running: ChildProcess | undefined;
+/** The supervisors of the commands in progress: each one's pipe closed, its group stops. */
+const running = new Set<ChildProcess>();
 
 /** SIGKILL to a group this process started and has not yet seen end. */
 const killGroup = (pid: number | undefined): void => {
@@ -675,18 +731,25 @@ function supervised(
   copy: Copy,
   limit: number
 ): Promise<{ stopped: boolean; code: number | null }> {
-  // In the copy's own directory, so a run that dies leaves nothing beside it.
+  // In the copy's own directory, so a run that dies leaves nothing beside it:
+  // the status file, and the command's temporary directory, which Vitest
+  // leaves behind as often as not.
   const status = join(mkdtempSync(join(copy.directory, 'status-')), 'status.json');
+  const temporary = mkdtempSync(join(copy.directory, 'tmp-'));
   const cwd = copy.tree;
   return new Promise((done) => {
     let stopped = false;
     const supervisor = spawn(process.execPath, [SUPERVISOR, status, ...command], {
       cwd,
       detached: true,
-      stdio: ['pipe', 'ignore', 'ignore']
+      stdio: ['pipe', 'ignore', 'ignore'],
+      env: { ...process.env, TMPDIR: temporary }
     });
-    running = supervisor;
+    running.add(supervisor);
     const group = supervisor.pid;
+    // Recorded in the copy, so `clean` leaves it while this supervisor lives.
+    const record = group === undefined ? undefined : join(copy.directory, `supervisor-${group}`);
+    if (record !== undefined) writeFileSync(record, '');
     let grace: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       stopped = true;
@@ -697,7 +760,7 @@ function supervised(
       clearTimeout(timer);
       if (grace !== undefined) clearTimeout(grace);
       killGroup(group);
-      running = undefined;
+      running.delete(supervisor);
       // The command's own exit, which the supervisor wrote before stopping
       // its group; none, if the command never ran to an end.
       let code: number | null = null;
@@ -707,6 +770,8 @@ function supervised(
         // No status written.
       }
       rmSync(dirname(status), { recursive: true, force: true });
+      rmSync(temporary, { recursive: true, force: true });
+      if (record !== undefined) rmSync(record, { force: true });
       done({ stopped, code });
     };
     supervisor.on('error', finish);
@@ -887,6 +952,8 @@ function verdictOf(
 }
 
 function optionsOf(flags: ReadonlyMap<string, string>): Options {
+  const jobs = Number(flags.get('jobs') ?? '1');
+  if (!Number.isInteger(jobs) || jobs < 1) fail('--jobs takes a whole number from 1');
   const workers = Number(flags.get('workers') ?? '1');
   if (!Number.isInteger(workers) || workers < 1) fail('--workers takes a whole number from 1');
   const niceness = flags.get('nice');
@@ -895,7 +962,7 @@ function optionsOf(flags: ReadonlyMap<string, string>): Options {
     fail('--nice takes 0 to 20');
   const limit = Number(flags.get('limit') ?? '300');
   if (!Number.isFinite(limit) || limit <= 0) fail('--limit takes seconds, above 0');
-  return { workers, nice, limit };
+  return { jobs, workers, nice, limit };
 }
 
 /** Seconds the calibration expects one run of `arms` to take: an upper bound, start-up counted once per arm. */
@@ -908,24 +975,38 @@ function estimateOf(ledger: Ledger, arms: readonly string[]): number {
   }, 0);
 }
 
-/** Seconds a run of `chosen` is expected to take: the baseline, then each mutation. */
-function estimate(ledger: Ledger, chosen: readonly Entry[]): number {
+/**
+ * Seconds a run of `chosen` is expected to take with `jobs` at once: the
+ * baseline, which every copy runs at the same time, then the mutations, each
+ * given to whichever run is free first, the longest first.
+ */
+function estimate(ledger: Ledger, chosen: readonly Entry[], jobs: number): number {
   if (chosen.length === 0) return 0;
-  return groupsOf(chosen).reduce(
-    (sum, group) => sum + estimateOf(ledger, group.entries.flatMap(armsOf)),
-    estimateOf(ledger, chosen.flatMap(armsOf))
-  );
+  const lanes = Array.from({ length: Math.max(1, jobs) }, () => 0);
+  const costs = groupsOf(chosen)
+    .map((group) => estimateOf(ledger, group.entries.flatMap(armsOf)))
+    .sort((a, b) => b - a);
+  for (const cost of costs) {
+    const free = lanes.indexOf(Math.min(...lanes));
+    lanes[free] = (lanes[free] as number) + cost;
+  }
+  return estimateOf(ledger, chosen.flatMap(armsOf)) + Math.max(...lanes);
 }
+
+/** The runs at once a run can use: no more copies than there are mutations to give them. */
+const jobsOf = (options: Options, groups: number): number =>
+  Math.max(1, Math.min(options.jobs, groups));
 
 function planText(ledger: Ledger, chosen: readonly Entry[], options: Options): string {
   const groups = groupsOf(chosen);
+  const jobs = jobsOf(options, groups.length);
   return [
     `${ledger.name}: ${ledger.subject}`,
     `  entries ${chosen.length} of ${ledger.entries.length}, retired ${ledger.retired?.length ?? 0}`,
-    `  runs ${groups.length + 1}: ${groups.length} mutations and one baseline, each one Vitest process over ${ledger.files.join(', ')}, in a disposable copy of this tree`,
+    `  runs ${groups.length + jobs}: ${groups.length} mutations and ${jobs === 1 ? 'one baseline' : `a baseline in each of ${jobs} copies`}, each one Vitest process over ${ledger.files.join(', ')}, in a disposable copy of this tree`,
     `  arms ${[...new Set(chosen.flatMap(armsOf))].sort().join(', ')}`,
-    `  load: ${options.workers} worker${options.workers === 1 ? '' : 's'}${options.nice === undefined ? '' : `, nice ${options.nice}`}, at most ${options.limit} s a run`,
-    `  estimate about ${(estimate(ledger, chosen) / 60).toFixed(0)} min at one worker, from each arm's measured time (${ledger.calibration.measured})`
+    `  load: ${jobs} run${jobs === 1 ? '' : 's'} at once, each in a copy of its own; ${options.workers} Vitest worker${options.workers === 1 ? '' : 's'} a run${options.nice === undefined ? '' : `, nice ${options.nice}`}; at most ${options.limit} s a run`,
+    `  estimate about ${(estimate(ledger, chosen, jobs) / 60).toFixed(0)} min, from each arm's measured time (${ledger.calibration.measured})`
   ].join('\n');
 }
 
@@ -936,6 +1017,7 @@ interface Header {
   readonly revision: string;
   readonly fingerprint: string;
   readonly untracked: readonly string[];
+  readonly jobs: number;
   readonly workers: number;
   readonly nice: number | null;
   readonly limit: number;
@@ -995,10 +1077,12 @@ async function runCommand(
   // Before anything is made: an interruption from here on stops what runs and
   // discards what was made, with this process's exit.
   const interrupted = (signal: NodeJS.Signals): void => {
-    running?.stdin?.end();
-    killGroup(running?.pid);
+    for (const supervisor of running) {
+      supervisor.stdin?.end();
+      killGroup(supervisor.pid);
+    }
     process.stderr.write(
-      `ledger: stopped by ${signal}; the copy is discarded, and this tree was not written\n`
+      `ledger: stopped by ${signal}; the copies are discarded, and this tree was not written\n`
     );
     process.exit(130);
   };
@@ -1027,6 +1111,7 @@ async function runCommand(
       fail(`${resume} was written for another ledger, revision or tree`);
     // The load it was begun under, so one result file is one arrangement.
     options = {
+      jobs: header.jobs ?? 1,
       workers: header.workers ?? 1,
       nice: header.nice ?? undefined,
       limit: header.limit ?? 300
@@ -1040,6 +1125,7 @@ async function runCommand(
       revision: snapshot.revision,
       fingerprint: snapshot.fingerprint,
       untracked: snapshot.files.map((file) => file.path),
+      jobs: options.jobs,
       workers: options.workers,
       nice: options.nice ?? null,
       limit: options.limit
@@ -1056,55 +1142,83 @@ async function runCommand(
     return;
   }
 
-  const copy = await copyOf(snapshot, options.limit);
+  // Longest first, as the estimate assumes, so the last run to finish is not
+  // a long one begun late.
+  const groups = groupsOf(pending)
+    .map((group, at) => ({ group, at, cost: estimateOf(ledger, group.entries.flatMap(armsOf)) }))
+    .sort((a, b) => b.cost - a.cost || a.at - b.at)
+    .map((one) => one.group);
+  const jobs = jobsOf(options, groups.length);
+  // One copy for each run at once, made one after another: each is checked
+  // against the installation read, and `svelte-kit sync` runs in each.
+  const copies: Copy[] = [];
+  for (let at = 0; at < jobs; at += 1) copies.push(await copyOf(snapshot, options.limit));
 
   const arms = [...new Set(pending.flatMap(armsOf))];
   const started = Date.now();
-  const baseline = await runVitest(copy, ledger, arms, options);
-  if ('error' in baseline) fail(`the baseline did not run: ${baseline.error}`);
-  const identities = identitiesOf((baseline as { report: Report }).report, arms, copy.tree);
+  // The baseline in every copy, at once: each copy must pass the arms
+  // unmutated, and find each as the same test as the first copy does, or
+  // its verdicts would be read off another test.
+  const baselines = await Promise.all(copies.map((copy) => runVitest(copy, ledger, arms, options)));
+  const identityMaps = baselines.map((baseline, at) => {
+    if ('error' in baseline) fail(`the baseline did not run in copy ${at + 1}: ${baseline.error}`);
+    const copy = copies[at] as Copy;
+    return identitiesOf((baseline as { report: Report }).report, arms, copy.tree);
+  });
+  const identities = identityMaps[0] as Map<string, Identity>;
+  for (const [at, other] of identityMaps.entries())
+    for (const arm of arms)
+      if (!same(other.get(arm) as Identity, identities.get(arm) as Identity))
+        fail(`copy ${at + 1} finds ${arm} as another test than copy 1 does`);
 
   const counts = { killed: 0, survived: 0, error: 0, timedOut: 0 };
-  for (const group of groupsOf(pending)) {
-    const begun = Date.now();
-    const groupArms = [...new Set(group.entries.flatMap(armsOf))];
-    const originals = new Map<string, string>();
-    for (const edit of group.edits)
-      if (!originals.has(edit.file))
-        originals.set(edit.file, readFileSync(inside(copy, edit.file), 'utf8'));
-    let outcome: Awaited<ReturnType<typeof runVitest>>;
-    try {
-      const contents = new Map(originals);
+  let next = 0;
+  // Each run takes the next mutation as it finishes one. JavaScript runs one
+  // of these at a time between awaits, so taking a mutation and writing a
+  // result line are each whole.
+  const lane = async (copy: Copy): Promise<void> => {
+    for (let group = groups[next++]; group !== undefined; group = groups[next++]) {
+      const begun = Date.now();
+      const groupArms = [...new Set(group.entries.flatMap(armsOf))];
+      const originals = new Map<string, string>();
       for (const edit of group.edits)
-        contents.set(edit.file, replaced(contents.get(edit.file) as string, edit));
-      for (const [file, text] of contents) writeFileSync(inside(copy, file), text);
-      outcome = await runVitest(copy, ledger, groupArms, options);
-    } finally {
-      for (const [file, text] of originals) {
-        writeFileSync(inside(copy, file), text);
-        if (readFileSync(inside(copy, file), 'utf8') !== text)
-          fail(
-            `${file} did not read back as restored in the copy; the run ends, and the copy is discarded`
-          );
+        if (!originals.has(edit.file))
+          originals.set(edit.file, readFileSync(inside(copy, edit.file), 'utf8'));
+      let outcome: Awaited<ReturnType<typeof runVitest>>;
+      try {
+        const contents = new Map(originals);
+        for (const edit of group.edits)
+          contents.set(edit.file, replaced(contents.get(edit.file) as string, edit));
+        for (const [file, text] of contents) writeFileSync(inside(copy, file), text);
+        outcome = await runVitest(copy, ledger, groupArms, options);
+      } finally {
+        for (const [file, text] of originals) {
+          writeFileSync(inside(copy, file), text);
+          if (readFileSync(inside(copy, file), 'utf8') !== text)
+            fail(
+              `${file} did not read back as restored in a copy; the run ends, and the copies are discarded`
+            );
+        }
+      }
+      const seconds = (Date.now() - begun) / 1000;
+      const results = resultsOf(outcome, groupArms, identities, copy.tree);
+      for (const entry of group.entries) {
+        const result = verdictOf(entry, results);
+        counts[result.verdict] += 1;
+        if (result.timedOut) counts.timedOut += 1;
+        appendFileSync(
+          out,
+          `${JSON.stringify({ kind: 'entry', id: entry.id, arm: entry.arm, ...result, seconds })}\n`
+        );
+        process.stdout.write(
+          `${entry.id.padEnd(44)} ${result.verdict.toUpperCase()}${result.timedOut ? ' (timed out)' : ''}  ${result.message}\n`
+        );
       }
     }
-    const seconds = (Date.now() - begun) / 1000;
-    const results = resultsOf(outcome, groupArms, identities, copy.tree);
-    for (const entry of group.entries) {
-      const result = verdictOf(entry, results);
-      counts[result.verdict] += 1;
-      if (result.timedOut) counts.timedOut += 1;
-      appendFileSync(
-        out,
-        `${JSON.stringify({ kind: 'entry', id: entry.id, arm: entry.arm, ...result, seconds })}\n`
-      );
-      process.stdout.write(
-        `${entry.id.padEnd(44)} ${result.verdict.toUpperCase()}${result.timedOut ? ' (timed out)' : ''}  ${result.message}\n`
-      );
-    }
-  }
+  };
+  await Promise.all(copies.map(lane));
   const spent = (Date.now() - started) / 1000;
-  const expected = estimate(ledger, pending);
+  const expected = estimate(ledger, pending, jobs);
   const summary = {
     kind: 'summary',
     ...counts,
