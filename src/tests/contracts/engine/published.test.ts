@@ -2194,10 +2194,14 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         expect(held, `${answer}: the premise, an Error to write to`).toBeInstanceOf(Error);
         for (const [reader, read] of Object.entries(readers))
           expect(read(), `${answer}: the premise, ${reader} holds the same Error`).toBe(held);
-        expect(
-          writeAndReadBack(held as object, readers).reached,
-          `${answer}: a reader the consumerâ€™s write reached`
-        ).toEqual([]);
+        const { before, reached } = writeAndReadBack(held as object, readers);
+        // Each reader sampled before the write and after it, not only shown to
+        // hold the Error: a reader left out of the write-back would read as one
+        // the write did not reach.
+        expect(Object.keys(before), `${answer}: every reader read back`).toEqual(
+          Object.keys(readers)
+        );
+        expect(reached, `${answer}: a reader the consumerâ€™s write reached`).toEqual([]);
         writtenBack.push(answer);
       };
       // The cache's reader of a request's Error: the one entry of `namespace`
@@ -2223,8 +2227,12 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
       };
       // **A fresh one each call, the caller's own**: every path below is
       // asked twice, and the two answers are two promises. The second is
-      // settled before the population is counted, so neither is left behind.
-      const seconds: Promise<unknown>[] = [];
+      // settled before the population is counted, so neither is left behind,
+      // and what it settles with is read for the discipline as the first's is.
+      const seconds: [string, Promise<unknown>][] = [];
+      const againOf = (name: string, value: unknown): void => {
+        breaches.push(...breachesOf(value, `${name}, asked again`, disciplineOver([])));
+      };
       const twice = <T>(call: () => Promise<T>, name: string): [Promise<T>, Promise<T>] => {
         const pair: [Promise<T>, Promise<T>] = [bare(call(), name), bare(call(), name)];
         expect(pair[0], `${name}: a fresh promise each call`).not.toBe(pair[1]);
@@ -2232,7 +2240,7 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
       };
       const fresh = <T>(call: () => Promise<T>, name: string): Promise<T> => {
         const [first, second] = twice(call, name);
-        seconds.push(second);
+        seconds.push([name, second]);
         return first;
       };
       const rejectionOf = async (call: () => Promise<unknown>): Promise<unknown> => {
@@ -2251,6 +2259,7 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         );
         if (first === undefined || second === undefined)
           throw new Error('the premise: refresh() rejects, each call');
+        againOf('what a rejected refresh() rejects with', second.thrown);
         return first.thrown;
       };
       // What one outlet was handed, rendered once over `request` â€” and the
@@ -2802,11 +2811,10 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         const refusedSend = await sender.value({} as never);
         expect(refusedSend.status, 'the premise: a send refused').toBe('refused');
         check('a send, refused', refusedSend);
-        const sent = sender.value({} as never);
-        const sentAgain = sender.value({} as never);
-        expect(sent, 'the premise: a fresh promise each send').not.toBe(sentAgain);
-        bare(sent, 'what a send returns');
-        await Promise.all([sent, sentAgain]);
+        againOf(
+          'a send, refused',
+          await fresh(() => sender.value({} as never), 'what a send returns')
+        );
         const signed = {
           id: 'a'.repeat(64),
           pubkey: 'b'.repeat(64),
@@ -2908,17 +2916,26 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         const url = nextUrl();
         const server = new WS(url, { jsonProtocol: true });
         const handed: object[] = [];
-        const asHanded: (string | undefined)[] = [];
-        // What each template held once the signer had written to it: a
-        // template it could not write would be refused too, as a signer that
-        // threw, and say nothing about the comparison.
-        const asRewritten: (string | undefined)[] = [];
+        // A template's content, its count of tags and its first tag's value.
+        const shapeOf = (template: { content: string; tags: string[][] }): unknown[] => [
+          template.content,
+          template.tags.length,
+          template.tags[0]?.[1]
+        ];
+        const asHanded: unknown[][] = [];
+        // What each template held once the signer had written to it â€” at
+        // each level: the template, its list of tags, and one tag. A template
+        // it could not write would be refused too, as a signer that threw,
+        // and say nothing about the comparison.
+        const asRewritten: unknown[][] = [];
         const rewriting: NostrSigner = {
           signEvent: async (template) => {
             handed.push(template);
-            asHanded.push(template.tags[0]?.[1]);
+            asHanded.push(shapeOf(template));
+            (template as { content: string }).content = 'rewritten by the signer';
+            (template.tags as string[][]).push(['p', 'added by the signer']);
             (template.tags[0] as string[])[1] = 'rewritten by the signer';
-            asRewritten.push(template.tags[0]?.[1]);
+            asRewritten.push(shapeOf(template));
             return {
               ...template,
               id: 'e'.repeat(64),
@@ -2939,12 +2956,22 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         });
         const signing = mount(() => useSend());
         const template = { kind: 1, content: 'pb13-signed', tags: [['t', 'as written']] };
-        const first = await bare(signing.value(template), 'what a signed send returns');
-        const second = await bare(signing.value(template), 'what a signed send returns');
+        // One after the other, so the first's rewrite has happened before the
+        // second is asked for, and the two promises compared.
+        const firstSent = bare(signing.value(template), 'what a signed send returns');
+        const first = await firstSent;
+        const secondSent = bare(signing.value(template), 'what a signed send returns');
+        expect(secondSent, 'what a signed send returns: a fresh promise each call').not.toBe(
+          firstSent
+        );
+        const second = await secondSent;
+        againOf('a send, refused by its signer', second);
         expect(
           asRewritten,
           'the premise: each template was the signerâ€™s to write, and it wrote to it'
-        ).toEqual(['rewritten by the signer', 'rewritten by the signer']);
+        ).toEqual(
+          Array.from({ length: 2 }, () => ['rewritten by the signer', 2, 'rewritten by the signer'])
+        );
         expect(
           [first, second].map((one) =>
             one.status === 'refused' ? `${one.code}: ${one.message}` : one.status
@@ -2963,8 +2990,12 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         expect(
           asHanded,
           'each handed as written: the firstâ€™s rewrite reached neither the second nor the comparison'
-        ).toEqual(['as written', 'as written']);
-        expect(template.tags[0]?.[1], 'and the callerâ€™s own template untouched').toBe('as written');
+        ).toEqual(Array.from({ length: 2 }, () => ['pb13-signed', 1, 'as written']));
+        expect(template, 'and the callerâ€™s own template untouched').toEqual({
+          kind: 1,
+          content: 'pb13-signed',
+          tags: [['t', 'as written']]
+        });
         signing.destroy();
         provider.destroy();
         server.close();
@@ -3192,7 +3223,7 @@ describe('what a request publishes is the consumerâ€™s to hold and nobody elseâ€
         provider.destroy();
       }
 
-      await Promise.all(seconds);
+      for (const [name, second] of seconds) againOf(name, await second);
       expect([...roster].sort(), 'the population, case by case').toEqual([...POPULATION].sort());
       expect([...codes].sort(), 'an Error under every code a hook publishes one with').toEqual(
         [...new Set([...REQ_ERROR_CODES, ...RELAY_REFUSAL_CODES, 'missing-randomness'])].sort()
