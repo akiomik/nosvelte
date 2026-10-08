@@ -2194,13 +2194,26 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         expect(held, `${answer}: the premise, an Error to write to`).toBeInstanceOf(Error);
         for (const [reader, read] of Object.entries(readers))
           expect(read(), `${answer}: the premise, ${reader} holds the same Error`).toBe(held);
-        const { before, reached } = writeAndReadBack(held as object, readers);
-        // Each reader sampled before the write and after it, not only shown to
-        // hold the Error: a reader left out of the write-back would read as one
-        // the write did not reach.
-        expect(Object.keys(before), `${answer}: every reader read back`).toEqual(
-          Object.keys(readers)
+        // Each reader read before the write and after it, counted, not only
+        // shown to hold the Error: a reader left out of either read would read
+        // as one the write did not reach.
+        const calls = new Map<string, number>();
+        const { reached } = writeAndReadBack(
+          held as object,
+          Object.fromEntries(
+            Object.entries(readers).map(([reader, read]) => [
+              reader,
+              () => {
+                calls.set(reader, (calls.get(reader) ?? 0) + 1);
+                return read();
+              }
+            ])
+          )
         );
+        expect(
+          Object.keys(readers).map((reader) => `${reader}: ${calls.get(reader) ?? 0}`),
+          `${answer}: every reader read before the write and after it`
+        ).toEqual(Object.keys(readers).map((reader) => `${reader}: 2`));
         expect(reached, `${answer}: a reader the consumer’s write reached`).toEqual([]);
         writtenBack.push(answer);
       };
@@ -2811,9 +2824,10 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         const refusedSend = await sender.value({} as never);
         expect(refusedSend.status, 'the premise: a send refused').toBe('refused');
         check('a send, refused', refusedSend);
+        const refusedInput = {} as never;
         againOf(
           'a send, refused',
-          await fresh(() => sender.value({} as never), 'what a send returns')
+          await fresh(() => sender.value(refusedInput), 'what a send returns')
         );
         const signed = {
           id: 'a'.repeat(64),
@@ -2909,12 +2923,16 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       // **The signer's template is the signer's, and only because of how it
       // is made**: `B5-C8` leaves it out of the population as a fresh copy
       // each call, compared with a frozen copy once signed. So a signer that
-      // rewrites a tag in place and signs what it rewrote is refused, and two
-      // calls are handed two templates, the first's rewrite reaching neither
-      // the second nor what the library compared against.
+      // rewrites its template in place and signs what it rewrote is refused,
+      // and each call is handed a template of its own, no earlier rewrite
+      // reaching it or what the library compared against. **One level at a
+      // time** — the content, the list of tags, one tag — each asked of two
+      // sends, so a comparison that trusted one of them is not covered by a
+      // refusal the others caused.
       {
         const url = nextUrl();
         const server = new WS(url, { jsonProtocol: true });
+        const LEVELS = ['the content', 'a tag added', 'a tag rewritten'] as const;
         const handed: object[] = [];
         // A template's content, its count of tags and its first tag's value.
         const shapeOf = (template: { content: string; tags: string[][] }): unknown[] => [
@@ -2923,18 +2941,20 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
           template.tags[0]?.[1]
         ];
         const asHanded: unknown[][] = [];
-        // What each template held once the signer had written to it — at
-        // each level: the template, its list of tags, and one tag. A template
-        // it could not write would be refused too, as a signer that threw,
-        // and say nothing about the comparison.
+        // What each template held once the signer had written to it. A
+        // template it could not write would be refused too, as a signer that
+        // threw, and say nothing about the comparison.
         const asRewritten: unknown[][] = [];
         const rewriting: NostrSigner = {
           signEvent: async (template) => {
+            const level = LEVELS[Math.floor(handed.length / 2)];
             handed.push(template);
             asHanded.push(shapeOf(template));
-            (template as { content: string }).content = 'rewritten by the signer';
-            (template.tags as string[][]).push(['p', 'added by the signer']);
-            (template.tags[0] as string[])[1] = 'rewritten by the signer';
+            if (level === 'the content')
+              (template as { content: string }).content = 'rewritten by the signer';
+            else if (level === 'a tag added')
+              (template.tags as string[][]).push(['p', 'added by the signer']);
+            else (template.tags[0] as string[])[1] = 'rewritten by the signer';
             asRewritten.push(shapeOf(template));
             return {
               ...template,
@@ -2956,41 +2976,51 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
         });
         const signing = mount(() => useSend());
         const template = { kind: 1, content: 'pb13-signed', tags: [['t', 'as written']] };
-        // One after the other, so the first's rewrite has happened before the
-        // second is asked for, and the two promises compared.
-        const firstSent = bare(signing.value(template), 'what a signed send returns');
-        const first = await firstSent;
-        const secondSent = bare(signing.value(template), 'what a signed send returns');
-        expect(secondSent, 'what a signed send returns: a fresh promise each call').not.toBe(
-          firstSent
-        );
-        const second = await secondSent;
-        againOf('a send, refused by its signer', second);
+        // One after the other, so each rewrite has happened before the next
+        // send is asked for, and each pair's two promises compared.
+        const answers: Awaited<ReturnType<typeof signing.value>>[] = [];
+        for (const level of LEVELS) {
+          const firstSent = bare(signing.value(template), 'what a signed send returns');
+          answers.push(await firstSent);
+          const secondSent = bare(signing.value(template), 'what a signed send returns');
+          expect(
+            secondSent,
+            `what a signed send returns, ${level}: a fresh promise each call`
+          ).not.toBe(firstSent);
+          answers.push(await secondSent);
+        }
         expect(
           asRewritten,
           'the premise: each template was the signer’s to write, and it wrote to it'
-        ).toEqual(
-          Array.from({ length: 2 }, () => ['rewritten by the signer', 2, 'rewritten by the signer'])
-        );
+        ).toEqual([
+          ['rewritten by the signer', 1, 'as written'],
+          ['rewritten by the signer', 1, 'as written'],
+          ['pb13-signed', 2, 'as written'],
+          ['pb13-signed', 2, 'as written'],
+          ['pb13-signed', 1, 'rewritten by the signer'],
+          ['pb13-signed', 1, 'rewritten by the signer']
+        ]);
         expect(
-          [first, second].map((one) =>
+          answers.map((one) =>
             one.status === 'refused' ? `${one.code}: ${one.message}` : one.status
           ),
-          'a signer that signs its own rewrite is refused by the comparison, each time'
+          'a signer that signs its own rewrite is refused by the comparison, at each level'
         ).toEqual(
           Array.from(
-            { length: 2 },
+            { length: 6 },
             () =>
               'signer-failed: nosvelte: the signer returned a different event from the one it was asked to sign.'
           )
         );
+        const [first, ...again] = answers;
         check('a send, refused by its signer', first);
-        expect(handed, 'the premise: the signer was asked twice').toHaveLength(2);
-        expect(handed[0], 'two calls, two templates').not.toBe(handed[1]);
+        for (const one of again) againOf('a send, refused by its signer', one);
+        expect(handed, 'the premise: the signer was asked six times').toHaveLength(6);
+        expect(new Set(handed).size, 'six calls, six templates').toBe(6);
         expect(
           asHanded,
-          'each handed as written: the first’s rewrite reached neither the second nor the comparison'
-        ).toEqual(Array.from({ length: 2 }, () => ['pb13-signed', 1, 'as written']));
+          'each handed as written: no rewrite reached a later template or the comparison'
+        ).toEqual(Array.from({ length: 6 }, () => ['pb13-signed', 1, 'as written']));
         expect(template, 'and the caller’s own template untouched').toEqual({
           kind: 1,
           content: 'pb13-signed',
@@ -3296,11 +3326,13 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       expect(Object.isFrozen(leaky), 'the control’s premise: frozen, by the platform’s word').toBe(
         true
       );
+      // Read through every reader the row names, so none is the one the
+      // write-back passes over.
       expect(
-        writeAndReadBack(leaky, { 'the value written to': () => leaky, 'a reader': () => leaky })
+        writeAndReadBack(leaky, Object.fromEntries(READERS.map((reader) => [reader, () => leaky])))
           .reached,
         'the write-back’s control: a live setter'
-      ).toEqual(['the value written to: stack', 'a reader: stack']);
+      ).toEqual(READERS.map((reader) => `${reader}: stack`));
       const marker = Symbol('member');
       const nested = Object.freeze({
         cause: Object.defineProperty({}, 'note', { value: 'as it was', configurable: true }),
