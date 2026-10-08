@@ -381,7 +381,7 @@ export default {
     {
       id: 'I-union-passes-over',
       arm: 'OE14',
-      describe: 'the walk returns on a union',
+      describe: 'the walk returns on a union of values and objects',
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/declarations.ts',
@@ -393,7 +393,7 @@ export default {
     {
       id: 'I-unnamed-symbol-passes-over',
       arm: 'OE14',
-      describe: 'the walk skips a symbol it cannot name',
+      describe: 'the walk takes a symbol member it cannot name for `Symbol.iterator`',
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/declarations.ts',

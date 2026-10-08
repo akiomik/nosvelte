@@ -19,7 +19,10 @@
  * - the snippet reader's silent depth cut, replaced by a reader that reports
  *   past its depth (`I-handed-depth-*`);
  * - `sealClass`'s second call, which sealing the prototype made redundant,
- *   since the class is its prototype's `constructor`.
+ *   since the class is its prototype's `constructor`;
+ * - the discipline's walk of a `constructor` that is not a function, as a
+ *   value, and its clause reporting one on its own: the comparison with the
+ *   class the arrangement imports reports it.
  */
 import type { Ledger } from '../ledger.ts';
 
@@ -2347,8 +2350,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/published.test.ts',
-          from: '          if (errorOf(twin) === errorOf(hook))',
-          to: '          if (false)'
+          from: '          if (errorOf(twin) === errorOf(hook)) {',
+          to: '          if (false) {'
         }
       ]
     },
@@ -2359,8 +2362,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/published.test.ts',
-          from: '          else unshared.push(`${code}${door}`);',
-          to: '          else void 0;'
+          from: '          } else unshared.push(`${code}${door}`);',
+          to: '          } else void 0;'
         }
       ]
     },
@@ -2485,8 +2488,81 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/published.test.ts',
-          from: "            sharedAndKept(`an Error, ${code}${door}, two hooks share`, {\n              'the value written to': () => errorOf(hook),\n              'a second hook': () => errorOf(twin),\n              'the same hook, read again': () => errorOf(hook)\n            });\n",
-          to: '            void 0;\n'
+          from: '            sharedAndKept(`an Error, ${code}${door}, two hooks share`, readers);',
+          to: '            void readers;'
+        }
+      ]
+    },
+    {
+      id: 'I-twins-readers-cut',
+      arm: 'PB13',
+      describe: 'the Error two hooks on one descriptor share is not read back through the cache',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: "              'the cache': cacheOf(client, namespace)\n",
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-provider-twins-not-written',
+      arm: 'PB13',
+      describe:
+        'the Errors two hooks share under the transport that cannot name a relay are not written to',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: '          sharedAndKept(`an Error, ${code}, two hooks share`, readers);',
+          to: '          void readers;'
+        }
+      ]
+    },
+    {
+      id: 'I-promise-name-alone',
+      arm: 'PB13',
+      describe: "the probe takes any type named `Promise` for the platform's",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/declarations.ts',
+          from: "              symbol?.getName() === 'Promise' &&\n              (symbol.getDeclarations() ?? []).every((one) =>\n                program.isSourceFileDefaultLibrary(one.getSourceFile())\n              )\n",
+          to: "              symbol?.getName() === 'Promise'\n"
+        }
+      ]
+    },
+    {
+      id: 'I-handed-unnameable-index-skipped',
+      arm: 'PB13',
+      describe: 'the reader of what is handed out passes over an index signature it cannot name',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/declarations.ts',
+          from: '        if (key === undefined)\n          throw new Error(\n            `handedArgumentsOf: ${label} has an index signature the probe cannot name`\n          );\n',
+          to: '        if (key === undefined) continue;\n'
+        }
+      ]
+    },
+    {
+      id: 'I-props-type-arguments-admitted',
+      arm: 'PB13',
+      describe: 'the props premise passes an annotation with type arguments',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/published.test.ts',
+          from: '    reference.typeArguments !== undefined ||\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'C8-template-send-promise-carries-members',
+      arm: 'PB13',
+      describe: 'the promise a send of a template returns carries a member of its own',
+      edits: [
+        {
+          file: 'src/lib/v1/send.svelte.ts',
+          from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
+          to: "  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    typeof input === 'object' && input !== null && 'kind' in input && !('sig' in input)\n      ? Object.assign(sendThrough(port, input, options), { progress: [] as string[] })\n      : sendThrough(port, input, options)\n  );"
         }
       ]
     }
@@ -2515,34 +2591,6 @@ export default {
           file: 'src/lib/v1/reqerror.ts',
           from: '    REQUEST_TRANSPORT_REFUSALS.add(this);\n    Object.freeze(this);',
           to: '    REQUEST_TRANSPORT_REFUSALS.add(this);'
-        }
-      ]
-    },
-    {
-      id: 'I-pub-constructor-record-unwalked',
-      arm: 'PB13',
-      reason:
-        "Removed: the walk of a `constructor` that is not a function, as a value. The same object is reported as not its prototype's class, so the walk could not change a verdict.",
-      describe: 'the discipline does not walk a `constructor` that is not a function',
-      edits: [
-        {
-          file: 'src/tests/contracts/engine/helpers/publication.ts',
-          from: "          visit(held, where, typeof held === 'function' ? 'function' : 'value');",
-          to: "          if (typeof held === 'function') visit(held, where, 'function');"
-        }
-      ]
-    },
-    {
-      id: 'I-pub-impostor-record-admitted',
-      arm: 'PB13',
-      reason:
-        'Removed: the clause that reported a `constructor` that is not a function on its own. The comparison with the class the arrangement imports reports it.',
-      describe: 'the discipline admits a record whose `prototype` is the prototype as its class',
-      edits: [
-        {
-          file: 'src/tests/contracts/engine/helpers/publication.ts',
-          from: "            typeof held !== 'function' ||\n",
-          to: ''
         }
       ]
     }
