@@ -73,10 +73,11 @@
  * - a fingerprint of the uncommitted changes, the untracked files copied
  *   (also listed), and the dependency tree npm recorded installing
  *   (`node_modules/.package-lock.json`);
- * - the ledger's hash, and the load chosen. The hash is of what decides a
- *   verdict: the ledger's name, its files, and each entry's id, arms and
- *   edits. A ledger recalibrated or reworded after a run still quotes that
- *   run, and one whose entries changed does not.
+ * - the ledger's hash, and the load chosen. The hash is of the data a verdict
+ *   is decided from, in its order: the ledger's name, its files, and each
+ *   entry's id, arms and edits. A ledger recalibrated or reworded after a run
+ *   still quotes that run. Any change to that data refuses it, even one that
+ *   cannot change a verdict, such as an entry's independent edits reordered.
  *
  * `--resume` continues one only for the same tree and ledger. An edit made by
  * hand inside `node_modules` is not seen. `table` quotes a result file only
