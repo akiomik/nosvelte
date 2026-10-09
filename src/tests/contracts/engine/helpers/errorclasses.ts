@@ -74,35 +74,50 @@ const blanked = (text: string): string => text.replace(/[^\n]/g, ' ');
  * object literal had a brace inside it and matched nothing; then the parser's
  * `fragment` alone was read, and a class built in `customElement`'s `extend`
  * option, and `Reflect.construct` in an expression, each left the landing green —
- * all measured. So every node outside the two scripts is visited, and a `new`
- * or any read of `Reflect` there is a construction the scans refuse.
+ * all measured. So every node outside the two scripts is visited, and a `new`,
+ * `Reflect` read in any position, or anything named `construct` there is a
+ * construction the scans refuse.
  */
 export const componentAs = (module: string, source: string): Module => {
   let scripts = blanked(source);
-  for (const block of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
-    const body = block[1] ?? '';
-    const at = (block.index ?? 0) + block[0].indexOf('>') + 1;
-    scripts = scripts.slice(0, at) + body + scripts.slice(at + body.length);
-  }
   let markup: NonNullable<Module['markup']>;
   try {
     const constructsAt: number[] = [];
     const tree = parseComponent(source, { modern: true });
+    // **Where each script stands is the parser's answer, not a pattern's.** A
+    // `generics="T extends Record<string, unknown>"` attribute put a `>` inside
+    // the opening tag, the pattern took it for the tag's end, and the script's
+    // construction was parsed as something else — the landing green, measured.
+    for (const script of [tree.instance, tree.module]) {
+      const { start, end } = (script?.content ?? {}) as { start?: unknown; end?: unknown };
+      if (typeof start === 'number' && typeof end === 'number')
+        scripts = scripts.slice(0, start) + source.slice(start, end) + scripts.slice(end);
+    }
     // The scripts are the TypeScript parse's to read.
     const seen = new Set<unknown>([tree.instance, tree.module]);
     const visit = (node: unknown): void => {
       if (typeof node !== 'object' || node === null || seen.has(node)) return;
       seen.add(node);
-      const { type, start, object } = node as { type?: unknown; start?: unknown; object?: unknown };
-      const reflective =
-        type === 'MemberExpression' && (object as { name?: unknown } | null)?.name === 'Reflect';
-      if ((type === 'NewExpression' || reflective) && typeof start === 'number')
-        constructsAt.push(start);
+      const { type, start, name, value } = node as {
+        type?: unknown;
+        start?: unknown;
+        name?: unknown;
+        value?: unknown;
+      };
+      // A construction, `Reflect` read in any position, or anything named
+      // `construct`, however it is reached.
+      const constructs =
+        type === 'NewExpression' ||
+        (type === 'Identifier' && (name === 'Reflect' || name === 'construct')) ||
+        (type === 'Literal' && value === 'construct');
+      if (constructs && typeof start === 'number') constructsAt.push(start);
       for (const child of Object.values(node)) visit(child);
     };
     visit(tree);
     markup = {
-      constructsOn: constructsAt.map((at) => source.slice(0, at).split('\n').length)
+      constructsOn: [
+        ...new Set(constructsAt.map((at) => source.slice(0, at).split('\n').length))
+      ].sort((one, other) => one - other)
     };
   } catch {
     markup = { unreadable: true };
@@ -364,13 +379,15 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
         if (clause !== undefined && classNameOf(node) === undefined)
           unread.push(`${at(node)}: a class with no name to be held by`);
       }
+      // **`construct` is refused by its name, whatever reaches it.** The check
+      // read `Reflect.construct` with `Reflect` named directly, and
+      // `globalThis.Reflect.construct(…)` and `const { construct } = Reflect`
+      // walked past it — measured. The library has no other use for the word.
       if (
-        ts.isPropertyAccessExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === 'Reflect' &&
-        node.name.text === 'construct'
+        (ts.isIdentifier(node) && node.text === 'construct') ||
+        (ts.isStringLiteralLike(node) && node.text === 'construct')
       )
-        unread.push(`${at(node)}: a construction through \`Reflect.construct\``);
+        unread.push(`${at(node)}: a construction through \`construct\``);
       if (
         ts.isElementAccessExpression(node) &&
         ts.isIdentifier(node.expression) &&
@@ -412,6 +429,9 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
       ts.forEachChild(node, visit);
     };
     visit(file);
+    // What the parser could not read is not a module the scan has read.
+    if ((file as unknown as { parseDiagnostics: readonly unknown[] }).parseDiagnostics.length > 0)
+      unread.push(`${module}: source the parser could not read`);
     if (markup !== undefined && 'unreadable' in markup)
       unread.push(`${module}: a component whose markup the parser could not read`);
     for (const line of markup !== undefined && 'constructsOn' in markup ? markup.constructsOn : [])

@@ -140,11 +140,12 @@ function heldBy(root: unknown): Set<object> {
   // A worklist rather than recursion: a chain of twenty thousand ordinary
   // objects overflowed the stack, the overflow was caught as a refused read,
   // and the tail went unnoted without a word — measured.
-  const waiting: unknown[] = [root];
+  const waiting: unknown[] = [];
   const add = (value: unknown): void => {
     if ((typeof value === 'object' || typeof value === 'function') && value !== null)
       waiting.push(value);
   };
+  add(root);
   while (waiting.length > 0) {
     const value = waiting.pop() as object;
     if (held.has(value)) continue;
@@ -206,6 +207,16 @@ const noted =
 /** The boundary, with what it is handed noted as handed in. */
 const capture = (thrown: unknown, source: FailureSource): ReqError =>
   libraryCapture(theirOwn('a value handed to the boundary', thrown), source);
+
+/**
+ * A proxy over a target of the arm's own, the target and what it holds noted
+ * first. {@link heldBy} does not open a proxy, so a library that read a child
+ * through the proxy and kept it would otherwise keep something never noted —
+ * measured, the landing green.
+ */
+function proxied<T extends object>(label: string, target: T, handler: ProxyHandler<T>): T {
+  return new Proxy(theirOwn(label, target), handler);
+}
 
 // **"Kept" is asked of the heap, not of the stores this arm knows about.** A
 // walk can only read the stores it is pointed at, and a module-private `Set`
@@ -613,12 +624,14 @@ describe('the failure channel publishes a value this library made, never one it 
               }
             }
           );
+          const behindTheProxy = { a: 'behind a proxy the noting does not open' };
           theirOwn('the noting’s control', {
             holds: [hanging],
             map: new Map([[asKey, asValue]]),
             set: new Set([asMember]),
             chain,
-            watched
+            watched,
+            fronted: proxied('the noting’s control', { behindTheProxy }, {})
           });
           expect(
             [
@@ -628,10 +641,12 @@ describe('the failure channel publishes a value this library made, never one it 
               noted(asMember),
               noted(tail),
               noted(watched),
-              trapped
+              noted(behindTheProxy),
+              trapped,
+              [...heldBy(null), ...heldBy(undefined), ...heldBy(1), ...heldBy('thrown')].length
             ],
             'the noting: what hangs off a value, a Map’s keys and values, a Set’s members and the end of a long chain are noted too; a proxy is noted and not opened'
-          ).toEqual([true, true, true, true, true, true, 0]);
+          ).toEqual([true, true, true, true, true, true, true, 0, 0]);
           retained.clear();
         }
       })();
@@ -905,16 +920,18 @@ describe('the failure channel publishes a value this library made, never one it 
       // consumer can reach**, and directly at every door: none of them throws
       // out of it, each is recorded as a copy, and each says what it was.
       await (async (): Promise<void> => {
-        const refusing = new Proxy(new Error('refuses to be frozen'), {
-          preventExtensions: (): boolean => false
-        });
-        const partway = new Proxy(new Error('the freeze fails part-way'), {
+        const refusing = proxied(
+          'a hostile value',
+          new Error('refuses to be frozen', { cause: { theirs: 'behind a proxy' } }),
+          { preventExtensions: (): boolean => false }
+        );
+        const partway = proxied('a hostile value', new Error('the freeze fails part-way'), {
           defineProperty: (target, key, slot): boolean => {
             if (key === 'message') throw new Error('defineProperty refused part-way');
             return Reflect.defineProperty(target, key, slot);
           }
         });
-        const revoked = Proxy.revocable({}, {});
+        const revoked = Proxy.revocable(theirOwn('a hostile value', {}), {});
         revoked.revoke();
         const members = theirOwn('an AggregateError’s members', [
           theirOwn('a member', new Error('the first member')),
@@ -939,7 +956,8 @@ describe('the failure channel publishes a value this library made, never one it 
           ],
           [
             'a proxy that answers `instanceof Error` over a plain object',
-            new Proxy(
+            proxied(
+              'a hostile value',
               { message: 'not really an Error' },
               { getPrototypeOf: (): object => Error.prototype }
             ),
@@ -1287,6 +1305,8 @@ describe('the failure channel publishes a value this library made, never one it 
             'class Ranged extends RangeError {}',
             'const built = Reflect.construct(Ranged, []);',
             "const named = Reflect['construct'](Ranged, []);",
+            'const viaGlobal = globalThis.Reflect.construct(Ranged, []);',
+            'const { construct } = Reflect;',
             'const parenthesised = ownedByLibrary(new (Ranged)());'
           ].join('\n')
         );
@@ -1318,17 +1338,28 @@ describe('the failure channel publishes a value this library made, never one it 
         ];
         expect(
           [
-            whatTheScanCannotRead([probe]).length,
+            whatTheScanCannotRead([probe]),
             whatTheScanCannotRead([expression]).length,
+            whatTheScanCannotRead([parsedAs('broken.ts', 'const = ;')]),
             whatTheScanCannotRead(allowed),
             whatTheScanCannotRead(lookalikes).map((line) => line.split(':')[0]),
             errorClasses([probe]).map(({ name }) => name),
             constructionSites(new Set(['Ranged']), [probe]).map(({ wrapper }) => wrapper)
           ],
-          'the scans’ controls: a minter shadowed by an import, a non-name base, a nameless class and both spellings of Reflect.construct refused; a function expression refused; the two allowed bindings read, and their lookalikes refused; a built-in base and a parenthesised construction read'
+          'the scans’ controls: each spelling it cannot read refused for its own reason, a function expression and source that does not parse refused, the two allowed bindings read and their lookalikes refused, a built-in base and a parenthesised construction read'
         ).toEqual([
-          5,
+          [
+            'probe.ts:1: `ownedByLibrary` bound to something it may not be',
+            'probe.ts:2: a class extending something that is not a name',
+            'probe.ts:3: a class with no name to be held by',
+            'probe.ts:5: a construction through `construct`',
+            'probe.ts:6: `Reflect` read by a computed name',
+            'probe.ts:6: a construction through `construct`',
+            'probe.ts:7: a construction through `construct`',
+            'probe.ts:8: a construction through `construct`'
+          ],
           1,
+          ['broken.ts: source the parser could not read'],
           [],
           ['owned.ts', 'other/refusal.ts', 'package.ts'],
           ['Ranged'],
@@ -1340,11 +1371,12 @@ describe('the failure channel publishes a value this library made, never one it 
             '<div>',
             '  {#if shown}{new Ranged({ nested: { braces: true } })}{/if}',
             '</div>',
-            '<script lang="ts">',
-            '  const made = ownedByLibrary(new Ranged());',
-            '</script>',
+            // On the tag's own line, where a pattern that ends the tag at the
+            // `>` in its attribute turns the script into an unclosed string.
+            '<script lang="ts" generics="T extends Record<string, unknown>">const made = ownedByLibrary(new Ranged());</script>',
             '<p>{Reflect.construct(Ranged, [])}</p>',
-            '<svelte:options customElement={{ tag: "x-probe", extend: (Base) => class extends Base { static made = new Ranged(); } }} />'
+            '<svelte:options customElement={{ tag: "x-probe", extend: (Base) => class extends Base { static made = new Ranged(); } }} />',
+            '<i>{String(globalThis.Reflect.construct(Ranged, []))}</i>'
           ].join('\n')
         );
         expect(
@@ -1356,11 +1388,12 @@ describe('the failure channel publishes a value this library made, never one it 
           ],
           'the components’ control: a construction in a script, read at its own line; one in the markup, one through Reflect and one in an option, refused'
         ).toEqual([
-          ['Probe.svelte:5 ownedByLibrary'],
+          ['Probe.svelte:4 ownedByLibrary'],
           [
             'Probe.svelte:2: a construction outside the scripts, which no scan reads',
-            'Probe.svelte:7: a construction outside the scripts, which no scan reads',
-            'Probe.svelte:8: a construction outside the scripts, which no scan reads'
+            'Probe.svelte:5: a construction outside the scripts, which no scan reads',
+            'Probe.svelte:6: a construction outside the scripts, which no scan reads',
+            'Probe.svelte:7: a construction outside the scripts, which no scan reads'
           ]
         ]);
         expect(
@@ -1669,7 +1702,9 @@ describe('the failure channel publishes a value this library made, never one it 
       await (async (): Promise<void> => {
         const refusing = theirOwn(
           'a payload',
-          new Proxy(new Error('refuses to be frozen'), { preventExtensions: (): boolean => false })
+          proxied('a payload', new Error('refuses to be frozen'), {
+            preventExtensions: (): boolean => false
+          })
         );
         const atTheSeam: [
           string,
@@ -1711,7 +1746,7 @@ describe('the failure channel publishes a value this library made, never one it 
           ]
         ];
         const answersNothing = (): unknown =>
-          new Proxy(new Error('answers nothing'), {
+          proxied('a payload', new Error('answers nothing'), {
             get: (): never => {
               throw new Error('every read refuses');
             },
