@@ -43,7 +43,7 @@ import { MAIN_SURFACE } from '$lib/v1/surface.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
 import Outlets from './fixtures/Outlets.svelte';
-import { propsTypeOf } from './helpers/components.js';
+import { propsTypeOf, scriptExportsOf } from './helpers/components.js';
 import { exportsOf } from './helpers/declarations.js';
 import { againstEmitted, EMITTED, reachableFrom } from './helpers/emitted.js';
 import {
@@ -818,6 +818,73 @@ describe('which failure code reaches which surface, and what a consumer compiles
             `${specifier}: no exported callable answers a type predicate`
           ).toEqual([]);
         }
+        // **The index adds nothing of its own**: every statement re-exports,
+        // each component as the default of its own file. A component is a
+        // value the walk below cannot type, so the place one could be wrapped
+        // — `Object.assign(Article, { snapshot })` — is read off the index's
+        // parse, and the wrapping passed the export list: measured.
+        const reExports = (text: string): string[] =>
+          ts
+            .createSourceFile('index.ts', text, ts.ScriptTarget.Latest, true)
+            .statements.map((statement) => {
+              if (
+                !ts.isExportDeclaration(statement) ||
+                statement.moduleSpecifier === undefined ||
+                !ts.isStringLiteral(statement.moduleSpecifier)
+              )
+                return `not a re-export: ${statement.getText().split('\n')[0] ?? ''}`;
+              const clause = statement.exportClause;
+              const what =
+                clause === undefined
+                  ? '*'
+                  : ts.isNamedExports(clause)
+                    ? clause.elements
+                        .map((one) =>
+                          one.propertyName === undefined
+                            ? one.name.text
+                            : `${one.propertyName.getText()} as ${one.name.text}`
+                        )
+                        .join(', ')
+                    : `* as ${clause.name.getText()}`;
+              return `${statement.isTypeOnly ? 'type ' : ''}${what} from ${statement.moduleSpecifier.text}`;
+            })
+            .sort();
+        expect(
+          reExports(
+            "import Wrapped from './components/Article.svelte';\nexport const Article = Wrapped;\n"
+          ).filter((line) => line.startsWith('not a re-export')).length,
+          'the index reader’s control: an import and a constant are not re-exports'
+        ).toBe(2);
+        expect(
+          reExports(readFileSync(join(LIBRARY, 'index.ts'), 'utf8')),
+          'the index re-exports the entry, the hook and each component, and declares nothing'
+        ).toEqual(
+          [
+            ...MAIN_SURFACE.components.map(
+              (component) => `default as ${component} from ./components/${component}.svelte`
+            ),
+            '* from ./public-entry.js',
+            'useReq from ./req.svelte.js'
+          ].sort()
+        );
+        // **And a component gives out its props and nothing else**: an
+        // instance script's export is reached through `bind:this`, and a
+        // module script's beside the component, and neither is in the outlet
+        // type the walk reads.
+        expect(
+          scriptExportsOf(
+            '<script lang="ts">\n  export function recognise(): boolean { return true; }\n</script>\n'
+          ),
+          'the script reader’s control: an instance export is seen'
+        ).toEqual(['instance: ExportNamedDeclaration']);
+        expect(
+          MAIN_SURFACE.components.flatMap((component) =>
+            scriptExportsOf(
+              readFileSync(join(LIBRARY, 'components', `${component}.svelte`), 'utf8')
+            ).map((line) => `${component}: ${line}`)
+          ),
+          'no published component’s script exports anything'
+        ).toEqual([]);
       })();
 
       // **(3b) And everything reachable from what is given out**: every type a
@@ -840,6 +907,7 @@ describe('which failure code reaches which surface, and what a consumer compiles
             // hides it.
             'declare const rejection: RefreshRejection;',
             'export declare class Lookalike { static readonly tools: { recognises(value: unknown): value is ReqError; snapshot(): Promise<typeof ReqFailure> }; }',
+            'export declare class Defaulted { static make<T = typeof ReqFailure>(): T; }',
             'export type Renamed = { readonly held: typeof rejection };'
           ].join('\n')
         );
@@ -859,8 +927,8 @@ describe('which failure code reaches which surface, and what a consumer compiles
               declaration.name?.text === 'ReqFailure' &&
               resolve(declaration.getSourceFile().fileName) === join(EMITTED, 'own.d.ts')
           );
-        const breaches = (files: readonly ts.SourceFile[]) => {
-          const { reached, unread } = reachableFrom(graph, files);
+        const breaches = (files: readonly ts.SourceFile[], names?: readonly string[]) => {
+          const { reached, unread } = reachableFrom(graph, files, names);
           const found: string[] = [...unread.map((line) => `unread: ${line}`)];
           for (const { path, type } of reached) {
             if (
@@ -879,15 +947,20 @@ describe('which failure code reaches which surface, and what a consumer compiles
           }
           return { found, size: reached.length };
         };
-        const control = breaches([consumer]).found;
+        // Each lookalike walked on its own, since a type the walk has met
+        // once is not met again by another way.
+        const lookalike = breaches([consumer], ['Lookalike']).found;
+        const defaulted = breaches([consumer], ['Defaulted']).found;
+        const renamed = breaches([consumer], ['Renamed']).found;
         expect(
           [
-            control.some((line) => line.startsWith('guard: __consumer__.ts:Lookalike.tools')),
-            control.some((line) => line.startsWith('snapshot: __consumer__.ts:Lookalike.tools')),
-            control.some((line) => line.startsWith('rejection: __consumer__.ts:Renamed'))
+            lookalike.some((line) => line.startsWith('guard: __consumer__.ts:Lookalike.tools')),
+            lookalike.some((line) => line.startsWith('snapshot: __consumer__.ts:Lookalike.tools')),
+            defaulted.some((line) => line.startsWith('snapshot:') && line.includes('<default>')),
+            renamed.some((line) => line.startsWith('rejection: __consumer__.ts:Renamed'))
           ],
-          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, and the rejection set inside an alias'
-        ).toEqual([true, true, true]);
+          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, and the rejection set inside an alias'
+        ).toEqual([true, true, true, true]);
         const published = ['public-entry.d.ts', 'req.svelte.d.ts', 'components/outlets.d.ts'].map(
           (name) => {
             const file = program.getSourceFile(join(EMITTED, name));
@@ -954,9 +1027,7 @@ describe('which failure code reaches which surface, and what a consumer compiles
               }
             }))
           );
-        const providing = (
-          name: string,
-          descriptor: Partial<ReqDescriptor> = {},
+        const providerOf = (
           options: { transportKeys?: TransportKeys; environment?: 'server' } = {}
         ) => {
           const url = nextUrl();
@@ -971,8 +1042,13 @@ describe('which failure code reaches which surface, and what a consumer compiles
             setNostrContext(built);
             return built;
           });
-          return { url, server, provider, held: requested(name, descriptor) };
+          return { url, server, provider };
         };
+        const providing = (
+          name: string,
+          descriptor: Partial<ReqDescriptor> = {},
+          options: { transportKeys?: TransportKeys; environment?: 'server' } = {}
+        ) => ({ ...providerOf(options), held: requested(name, descriptor) });
 
         // RM26 first: no provider above the hook. The context this suite
         // backs `getContext` with is one map for the file, so "first" is the
@@ -1159,6 +1235,51 @@ describe('which failure code reaches which surface, and what a consumer compiles
           failures.push(...forbiddenAt(observed).map((line) => `over a kept answer: ${line}`));
           held.destroy();
         }
+        // **And a descriptor refused over an answer the hook keeps**, through
+        // `useReq`: `refresh()` reads the plan again and rejects, and the state
+        // keeps the answer it holds. A `refresh` that swallowed the rejection
+        // only once there was an answer held every other arrangement: measured.
+        {
+          let refused = false;
+          const { server, provider } = providerOf();
+          const kept = mount(() =>
+            useReq(() => ({
+              kind: 'request',
+              descriptor: {
+                namespace: 'ra1-kept-refusal',
+                settleTimeoutMs: 300,
+                filters: refused
+                  ? [{ search: 'unsupported' } as unknown as Nostr.Filter]
+                  : [{ kinds: [1] }]
+              }
+            }))
+          );
+          const id = await waitForReq(server);
+          respondWithEvent(server, id, fakeEvent({ kind: 1 }));
+          respondWithEose(server, id);
+          await settle(200);
+          refused = true;
+          const call = await settledCall(kept.value.refresh());
+          const observed = observe(kept.value, call);
+          const [, , , rejects, slot, lastError] = SURFACES;
+          const state = kept.value.state;
+          expect(
+            [
+              state.status,
+              state.status === 'loading' ? 0 : state.events.length,
+              codeOf(observed[rejects]),
+              isOwnedByLibrary(observed[rejects]),
+              observed[slot],
+              observed[lastError]
+            ],
+            'a descriptor refused over a kept answer: the answer stays, and refresh() rejects'
+          ).toEqual(['settled', 1, 'unsupported-filter', true, undefined, undefined]);
+          failures.push(
+            ...forbiddenAt(observed).map((line) => `over a kept answer, refused: ${line}`)
+          );
+          kept.destroy();
+          provider.destroy();
+        }
         // RM27 and RM28: a relay the provider cannot read, refused on the state
         // and on `refresh()`.
         {
@@ -1245,18 +1366,29 @@ describe('which failure code reaches which surface, and what a consumer compiles
       // **(6) An abandoned attempt is a cancellation**, and publishes nothing —
       // read before the consumer goes away and after it, since a publication
       // caused by the going away is what a snapshot taken before cannot see.
+      // Through `useReq`, whose own `refresh` is what the consumer holds: one
+      // that turned the release into a rejection held every engine cell here,
+      // measured.
       await (async (): Promise<void> => {
-        const { rxNostr, server } = createTestRelay(nextUrl());
+        const url = nextUrl();
+        const server = new WS(url, { jsonProtocol: true });
+        const provider = mount(() => {
+          const built = createNostrContext({
+            relays: [url],
+            harness: HARNESS_DIVERGENCES,
+            verifyEvent: acceptAnyEvent
+          });
+          setNostrContext(built);
+          return built;
+        });
         const held = mount(() =>
-          useStreamedReq(() => ({
-            verifyEvent: acceptAnyEvent,
-            attempts,
-            rxNostr,
-            client,
-            namespace: 'ra1-abandoned',
-            filters: [{ kinds: [1] }],
-            reqIdBase: 'ra1-abandoned',
-            settleTimeoutMs: 5_000
+          useReq(() => ({
+            kind: 'request',
+            descriptor: {
+              namespace: 'ra1-abandoned',
+              filters: [{ kinds: [1] }],
+              settleTimeoutMs: 5_000
+            }
           }))
         );
         respondWithEose(server, await waitForReq(server));
@@ -1277,6 +1409,7 @@ describe('which failure code reaches which surface, and what a consumer compiles
           ),
           'and no surface carries a failure, before the release or after it'
         ).toEqual([]);
+        provider.destroy();
       })();
 
       // **(7) What a second copy of this package keeps**: `instanceof` does
@@ -1470,11 +1603,9 @@ describe('which failure code reaches which surface, and what a consumer compiles
           return built;
         });
         const held = mount(() =>
-          useStreamedReq(() => ({
-            namespace: 'ra1-server',
-            filters: [{ kinds: [1] }],
-            reqIdBase: 'ra1-server',
-            settleTimeoutMs: 300
+          useReq(() => ({
+            kind: 'request',
+            descriptor: { namespace: 'ra1-server', filters: [{ kinds: [1] }], settleTimeoutMs: 300 }
           }))
         );
         await settle(80);

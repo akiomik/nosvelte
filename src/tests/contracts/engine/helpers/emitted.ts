@@ -143,7 +143,9 @@ const LEAVES =
  * and intersection members, its type arguments, the properties declared in
  * the emitted declarations or the consumer (a platform's `Error.isError` is
  * not this library giving anything out), the parameters and returns of its
- * call and construct signatures, and its index signatures.
+ * call and construct signatures, its index signatures, and a type
+ * parameter's constraint and default. `names`, where given, picks the
+ * exports to start from, so a control's lookalikes are walked one at a time.
  *
  * **What an export hands out is not only what it is.** A guard held as a
  * member of a static object of a published class, or a snapshot constructor a
@@ -154,7 +156,8 @@ const LEAVES =
  */
 export function reachableFrom(
   compiled: Compiled,
-  files: readonly ts.SourceFile[]
+  files: readonly ts.SourceFile[],
+  names?: readonly string[]
 ): { reached: Reached[]; unread: string[] } {
   const { checker } = compiled;
   const ours = (symbol: ts.Symbol): boolean =>
@@ -170,6 +173,7 @@ export function reachableFrom(
       continue;
     }
     for (const exported of checker.getExportsOfModule(module)) {
+      if (names !== undefined && !names.includes(exported.getName())) continue;
       const resolved =
         exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
       const at = `${relative(EMITTED, file.fileName)}:${exported.getName()}`;
@@ -195,9 +199,14 @@ export function reachableFrom(
       type.types.forEach((member, at) => next(`|${String(at)}`, member));
       continue;
     }
+    // A type parameter is what its constraint and its default are: a
+    // signature `<T = X>(): T` hands a caller exactly `X`, and the walk that
+    // read only the constraint passed it: measured.
     if (type.flags & ts.TypeFlags.TypeParameter) {
       const constraint = checker.getBaseConstraintOfType(type);
       if (constraint !== undefined && constraint !== type) next('<constraint>', constraint);
+      const fallback = checker.getDefaultFromTypeParameter(type);
+      if (fallback !== undefined) next('<default>', fallback);
       continue;
     }
     if (type.flags & ts.TypeFlags.Instantiable) {
