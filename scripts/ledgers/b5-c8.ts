@@ -2095,7 +2095,7 @@ export default {
       describe: 'the props premise admits a name bound twice across the scripts',
       edits: [
         {
-          file: 'src/tests/contracts/engine/published.test.ts',
+          file: 'src/tests/contracts/engine/helpers/components.ts',
           from: '  if (bound.length !== 1 || binding === undefined) return undefined;',
           to: '  if (binding === undefined) return undefined;'
         }
@@ -2107,7 +2107,7 @@ export default {
       describe: 'the props premise reads the instance script alone',
       edits: [
         {
-          file: 'src/tests/contracts/engine/published.test.ts',
+          file: 'src/tests/contracts/engine/helpers/components.ts',
           from: '  const scripts = module === undefined ? [instance] : [instance, module];',
           to: '  const scripts = [instance];'
         }
@@ -2119,7 +2119,7 @@ export default {
       describe: 'the props premise admits an import from anywhere',
       edits: [
         {
-          file: 'src/tests/contracts/engine/published.test.ts',
+          file: 'src/tests/contracts/engine/helpers/components.ts',
           from: "    declaration?.source?.value === './outlets.js'",
           to: '    declaration !== undefined'
         }
@@ -2131,7 +2131,7 @@ export default {
       describe: 'the props premise admits an aliased import',
       edits: [
         {
-          file: 'src/tests/contracts/engine/published.test.ts',
+          file: 'src/tests/contracts/engine/helpers/components.ts',
           from: '    specifier.imported?.name === name &&\n',
           to: ''
         }
@@ -2143,7 +2143,7 @@ export default {
       describe: 'the props premise admits a second `$props()`',
       edits: [
         {
-          file: 'src/tests/contracts/engine/published.test.ts',
+          file: 'src/tests/contracts/engine/helpers/components.ts',
           from: '  if (calls.length !== 1 || only === undefined) return undefined;',
           to: '  if (only === undefined) return undefined;'
         }
@@ -2396,7 +2396,7 @@ export default {
       describe: 'the props premise passes a component with a `generics` attribute',
       edits: [
         {
-          file: 'src/tests/contracts/engine/published.test.ts',
+          file: 'src/tests/contracts/engine/helpers/components.ts',
           from: "attribute.name === 'generics'",
           to: "attribute.name === 'not-generics'"
         }
@@ -2548,7 +2548,7 @@ export default {
       describe: 'the props premise passes an annotation with type arguments',
       edits: [
         {
-          file: 'src/tests/contracts/engine/published.test.ts',
+          file: 'src/tests/contracts/engine/helpers/components.ts',
           from: '    reference.typeArguments !== undefined ||\n',
           to: ''
         }
