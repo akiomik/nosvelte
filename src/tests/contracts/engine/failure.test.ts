@@ -313,6 +313,20 @@ describe('the failure channel publishes a value this library made, never one it 
           'relay'
         ]
       ];
+      // The instruments' controls: the walk finds a node two non-enumerable
+      // links down, and the shape changes when that node is written to.
+      const control = theirs('a control');
+      expect(
+        reachable(control.error).has(control.leaf),
+        'the walk’s control: a node two non-enumerable links down'
+      ).toBe(true);
+      const controlShape = shapeOf(control.error);
+      control.leaf.note = 'written';
+      expect(
+        shapeOf(control.error) === controlShape,
+        'the shape’s control: a write two links down changes it'
+      ).toBe(false);
+
       for (const [entrance, arrive, door] of entrances) {
         const { error, middle, leaf } = theirs(`thrown at ${entrance}`);
         const before = shapeOf(error);
@@ -633,28 +647,50 @@ describe('the failure channel publishes a value this library made, never one it 
       ).toEqual([true, true, true]);
 
       // **(7) `stack` is closed before the value is frozen**, at every class
-      // and on the snapshot, and whatever the host's getter answers.
+      // and on the snapshot, and whatever the host's getter answers — a
+      // preparer that answers nothing, or one that throws. Read through the
+      // descriptor alone, and recorded rather than asserted: under a preparer
+      // that throws, every read of a live `stack` throws, the test runner's
+      // own included.
       const closed = (value: Error, what: string): void => {
         const slot = Object.getOwnPropertyDescriptor(value, 'stack');
-        const before = value.stack;
         try {
           (value as { stack?: string }).stack = 'rewritten by a second reader';
         } catch {
           // A closed property refuses, which is one way of keeping it.
         }
-        if (slot?.set !== undefined || slot?.writable !== false || value.stack !== before)
+        const after = Object.getOwnPropertyDescriptor(value, 'stack');
+        if (slot?.set !== undefined || slot?.writable !== false || after?.value !== slot.value)
           failures.push(`${what}: \`stack\` is not closed`);
       };
       const previous = Error.prepareStackTrace;
       try {
         for (const [label, prepare] of [
           ['the host’s own preparer', previous],
-          ['a preparer that answers nothing', (): undefined => undefined]
+          ['a preparer that answers nothing', (): undefined => undefined],
+          [
+            'a preparer that throws',
+            (): never => {
+              throw new Error('a dependency’s preparer threw');
+            }
+          ]
         ] as const) {
           Error.prepareStackTrace = prepare;
           for (const [name, build] of Object.entries(oneOfEachClass())) {
             if (name === 'ReqFailure') continue;
-            closed(build(), `${name}, under ${label}`);
+            let built: Error;
+            try {
+              built = build();
+            } catch {
+              failures.push(`${name}, under ${label}: not constructed`);
+              continue;
+            }
+            closed(built, `${name}, under ${label}`);
+            // **And frozen at the end of its constructor**, after the close:
+            // every class but the base the five refusals extend, which closes
+            // and leaves the freeze to each subclass.
+            if (name !== 'RelayConfigurationError' && !Object.isFrozen(built))
+              failures.push(`${name}, under ${label}: not frozen when it is made`);
           }
           closed(
             capture(new Error('from outside'), 'relay') as Error,
