@@ -24,9 +24,9 @@ export default {
   ],
   calibration: {
     measured:
-      "one run of each arm's duration in a single Vitest run at 45de427 — FC1's again after it was rewritten, 3.4 s — plus 3.5 s for a run's start-up, measured as one run of one fast arm; one worker, on a shared 10-core machine",
+      "one run of each arm's duration in a single Vitest run at 45de427 — FC1's again after its sections were split, 3.6 s — plus 3.5 s for a run's start-up, measured as one run of one fast arm; one worker, on a shared 10-core machine",
     seconds: {
-      FC1: 6.9,
+      FC1: 7.1,
       PB6: 3.9,
       PB7: 3.5,
       PB8: 3.7,
@@ -1091,6 +1091,79 @@ export default {
           file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
           from: "  (readdirSync(lib, { recursive: true, encoding: 'utf8' }) as string[])",
           to: "  (readdirSync(lib, { recursive: false, encoding: 'utf8' }) as string[])"
+        }
+      ]
+    },
+    {
+      id: 'C9-keeps-the-first',
+      arm: 'FC1',
+      describe:
+        'the boundary keeps the first value it is handed at each door, and lets every later one go',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'export function capture(thrown: unknown, source: FailureSource): ReqError {',
+          to: 'const FIRST = new Map<unknown, unknown>();\nexport function capture(thrown: unknown, source: FailureSource): ReqError {\n  if (!FIRST.has(source)) FIRST.set(source, thrown);'
+        }
+      ]
+    },
+    {
+      id: 'I-handed-in-unnoted',
+      arm: 'FC1',
+      describe: 'FC1 notes nothing of what it hands the library',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    handedIn.push({ label, ref: new WeakRef(value) });',
+          to: '    void label;'
+        }
+      ]
+    },
+    {
+      id: 'I-final-collection-assumed',
+      arm: 'FC1',
+      describe: "FC1's last collection answers that everything is gone without asking",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '      const left = await collected(handedIn.map(({ ref }) => ref));',
+          to: '      const left = handedIn.map(() => true);'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-misses-expressions',
+      arm: 'FC1',
+      describe: "the scan does not count a function expression's name as a binding",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '        const named = parent !== undefined && (parent as { name?: ts.Node }).name === node;',
+          to: '        const named =\n          parent !== undefined &&\n          !ts.isFunctionExpression(parent) &&\n          (parent as { name?: ts.Node }).name === node;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-skips-markup',
+      arm: 'FC1',
+      describe: "the scan does not read a component's markup",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '    for (const expression of markup?.matchAll(/\\{[^{}]*\\bnew\\b[^{}]*\\}/g) ?? []) {',
+          to: '    for (const expression of [] as RegExpExecArray[]) {\n      void markup;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-blanks-scripts',
+      arm: 'FC1',
+      describe: "the component reader keeps a component's scripts blank",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '  return { ...parsedAs(module, scripts), markup };',
+          to: '  return { ...parsedAs(module, blanked(source)), markup };'
         }
       ]
     }
