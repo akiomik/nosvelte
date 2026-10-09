@@ -214,8 +214,14 @@ export function saidWithBounds(
  * semantic member and its contract at the same time. That is what a literal
  * union costs, and it is paid deliberately: the alternative is an open type that
  * promises a consumer nothing.
+ *
+ * **Read off the published variants rather than declared beside them**, for the
+ * reason `ReqErrorCode` is: a consumer switches on the `source` the variants in
+ * `ReqError` declare, and an alias written out here could stay three while a
+ * variant said four. Derived, a source added to a variant is a key `CODE_OF`
+ * does not have, which does not compile.
  */
-export type FailureSource = 'descriptor' | 'relay' | 'unspecified';
+export type FailureSource = CapturedReqError['source'];
 
 /**
  * The `code` a consumer branches on, as a literal union.
@@ -224,7 +230,7 @@ export type FailureSource = 'descriptor' | 'relay' | 'unspecified';
  * branches on the literal, and `readonly code: string` promises them nothing —
  * measured in the emitted declarations, which carried exactly that.
  */
-export type FailureCode = 'descriptor-unreadable' | 'relay-failed' | 'unspecified';
+export type FailureCode = CapturedReqError['code'];
 
 const CODE_OF: Readonly<Record<FailureSource, FailureCode>> = Object.freeze({
   descriptor: 'descriptor-unreadable',
@@ -636,6 +642,31 @@ export function captureFromRelay(reason: unknown): RelayLegError {
   // re-derives it before this line sees it. Measured on all ten codes — every
   // one comes back `relay-failed`. `LegEnd.error` is typed for exactly that.
   return captured.code === 'relay-failed' ? captured : copyOf(reason, 'relay', MAX_CAUSE_DEPTH);
+}
+
+/**
+ * A function whose rejection is this library's, whatever its body threw.
+ *
+ * For the query function, whose rejection query-core keeps — on `error` and on
+ * `failureReason` — and which every reader of the state copies again. The catch
+ * inside it, where a failure is recorded against its attempt, begins at its
+ * `try`, and what the function did before that — claiming the attempt's id,
+ * linking cancellation — threw past it: an attempt registry whose `begin` threw
+ * left the thrower's own object on both of query-core's slots. Here the whole
+ * function is inside the boundary, so a line added above that `try` is too. What
+ * is already this library's passes through, because `unspecified` never
+ * re-derives.
+ */
+export function rejectsWithOurs<A extends unknown[], T>(
+  run: (...args: A) => Promise<T>
+): (...args: A) => Promise<T> {
+  return async (...args) => {
+    try {
+      return await run(...args);
+    } catch (thrown) {
+      throw capture(thrown, 'unspecified');
+    }
+  };
 }
 
 /**

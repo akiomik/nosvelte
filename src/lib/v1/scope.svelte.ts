@@ -1074,6 +1074,30 @@ function isRelayUrl(value: string): boolean {
 }
 
 /**
+ * A transport's answer, read once: a copy of its entries when it is an array
+ * whose entries can be read, and `undefined` when it is not one or refuses to be
+ * read.
+ *
+ * **Every judgement, the comparison and the refusal of an answer that could be
+ * read are made from the copy.** The checks used to read it and the refusal
+ * read it again: an answer whose iterator gave a valid name the first time and
+ * an object of the transport's the second came out frozen inside
+ * `TransportKeyMismatchError.actual` with the object itself still live —
+ * measured — and an index getter that threw was read outside the guard around
+ * the call, so the transport's own `Error` reached the provider uncaptured, at
+ * both seams. An answer that cannot be read at all is the one thing read twice:
+ * it is already refused, and its refusal renders it again, so what that read
+ * returns this time can only change the words, and the refusal keeps a string.
+ */
+function listed(answer: unknown): unknown[] | undefined {
+  try {
+    return Array.isArray(answer) ? Array.from(answer as unknown[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * What the transport calls one relay.
  *
  * `reportAs` is the URL a refusal names, and it is a separate parameter because
@@ -1110,11 +1134,10 @@ function transportName(transportKeys: TransportKeys, url: string, reportAs = url
   // gained this check a commit before this one and the comment there claimed
   // the per-relay path already had it; it did not, and this is the path a
   // consumer reaches first.
-  if (!Array.isArray(answer))
-    throw ownedByLibrary(new TransportIncompatibleError([reportAs], [url], answer));
-  if (answer.length !== 1)
-    throw ownedByLibrary(new TransportIncompatibleError([reportAs], [url], answer));
-  const name = answer[0];
+  const said = listed(answer);
+  if (said?.length !== 1)
+    throw ownedByLibrary(new TransportIncompatibleError([reportAs], [url], said ?? answer));
+  const name = said[0];
   // **The cast that used to stand here was the only thing saying this is a
   // string.** The transport is the one seam this file already declines to
   // trust — the mismatch check above is that distrust written down — and the
@@ -1876,15 +1899,15 @@ export function createRelayScope(
     // straight past this into `TransportKeyMismatchError.actual`, which is
     // typed `readonly string[]` and rendered the hole as `null` — the exact
     // collapse `describeValue` exists to stop. `Array.from` fills holes with
-    // `undefined`, which the first clause below then refuses.
-    if (
-      !Array.isArray(actual) ||
-      Array.from(actual).some((name) => typeof name !== 'string' || !isRelayUrl(name))
-    ) {
-      throw ownedByLibrary(new TransportIncompatibleError(wrote, expected, actual));
-    }
-    if (!sameNames(expected, actual))
-      throw ownedByLibrary(new TransportKeyMismatchError({ wrote, expected, actual }));
+    // `undefined`, which the check below then refuses. It is {@link listed}'s
+    // copy now, and the comparison and the refusal read that copy rather than
+    // the answer again.
+    const said = listed(actual);
+    if (said === undefined || !said.every((name) => typeof name === 'string' && isRelayUrl(name)))
+      throw ownedByLibrary(new TransportIncompatibleError(wrote, expected, said ?? actual));
+    const names = said as string[];
+    if (!sameNames(expected, names))
+      throw ownedByLibrary(new TransportKeyMismatchError({ wrote, expected, actual: names }));
     return next;
   };
   // Named rather than read back out of `scope`, which is what the Svelte
