@@ -41,8 +41,11 @@ import {
 /** The library's own modules: `src/lib/v1`, and every directory under it. */
 const lib = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../lib/v1');
 
-/** A parsed module: where it is, relative to the library, and its syntax tree. */
-export type Module = { module: string; file: ts.SourceFile };
+/**
+ * A parsed module: where it is, relative to the library, and its syntax tree —
+ * and, for a component, its markup, which the tree does not hold.
+ */
+export type Module = { module: string; file: ts.SourceFile; markup?: string };
 
 /** Source text parsed as TypeScript, under the name it is reported by. */
 export const parsedAs = (module: string, text: string): Module => ({
@@ -50,19 +53,30 @@ export const parsedAs = (module: string, text: string): Module => ({
   file: ts.createSourceFile(module, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 });
 
+/** A span of text blanked to spaces, its newlines kept, so every line stays where it was. */
+const blanked = (text: string): string => text.replace(/[^\n]/g, ' ');
+
 /**
- * A component's scripts, where they stand in the file: everything outside a
- * `<script>` block is blanked to spaces, newlines kept, so a line a site is
- * reported at is the component's own line.
+ * A component, read as the scans read a module: its scripts parsed where they
+ * stand in the file, and its markup — everything else, styles and comments
+ * blanked — kept beside them, so that what runs in a template expression is
+ * not a place the scans silently do not look ({@link whatTheScanCannotRead}).
  */
-const scriptsOf = (source: string): string => {
-  let text = source.replace(/[^\n]/g, ' ');
+export const componentAs = (module: string, source: string): Module => {
+  let scripts = blanked(source);
+  let markup = source;
   for (const block of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
     const body = block[1] ?? '';
     const at = (block.index ?? 0) + block[0].indexOf('>') + 1;
-    text = text.slice(0, at) + body + text.slice(at + body.length);
+    scripts = scripts.slice(0, at) + body + scripts.slice(at + body.length);
   }
-  return text;
+  for (const pattern of [
+    /<script\b[^>]*>[\s\S]*?<\/script>/g,
+    /<style\b[^>]*>[\s\S]*?<\/style>/g,
+    /<!--[\s\S]*?-->/g
+  ])
+    markup = markup.replace(pattern, blanked);
+  return { ...parsedAs(module, scripts), markup };
 };
 
 /**
@@ -92,7 +106,9 @@ export const parsedModules = (): Module[] =>
     .sort()
     .map((path) => {
       const source = readFileSync(path, 'utf8');
-      return parsedAs(relative(lib, path), path.endsWith('.svelte') ? scriptsOf(source) : source);
+      return path.endsWith('.svelte')
+        ? componentAs(relative(lib, path), source)
+        : parsedAs(relative(lib, path), source);
     });
 
 /** The name a class is reachable by: its own, or the binding it is assigned to. */
@@ -284,10 +300,21 @@ export const MINTERS = ['ownedByLibrary', 'sealOwned'];
  * be held by, `export default class extends Error`, is not in the population the
  * scan builds. Each is refused here rather than read, so the next spelling is a
  * decision rather than a site the scan does not see.
+ *
+ * **A binding is refused by where the name stands, not by which declaration
+ * stands there.** The first version listed the declarations that bind a name,
+ * and a named function expression — `(function ownedByLibrary(v) { … })()` —
+ * was not on the list: an unminted refusal read as minted, landing and `WI23`
+ * green. So the list is the other one now, the places a name stands without
+ * binding anything — a member, a property, an export — and a minter's name
+ * standing anywhere else as a declaration's name is refused unless it is the
+ * plain import from `owned.js`, or the function in `owned.ts` itself. And a
+ * construction in a component's markup, which the parsed scripts do not hold,
+ * is refused rather than passed over.
  */
 export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules()): string[] => {
   const unread: string[] = [];
-  for (const { module, file } of modules) {
+  for (const { module, file, markup } of modules) {
     const at = (node: ts.Node): string =>
       `${module}:${file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1}`;
     const visit = (node: ts.Node): void => {
@@ -315,21 +342,22 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
         unread.push(`${at(node)}: \`Reflect\` read by a computed name`);
       if (ts.isIdentifier(node) && MINTERS.includes(node.text)) {
         const parent = node.parent as ts.Node | undefined;
-        const declares =
+        const named = parent !== undefined && (parent as { name?: ts.Node }).name === node;
+        const bindsNothing =
           parent !== undefined &&
-          (ts.isImportSpecifier(parent) ||
-            ts.isNamespaceImport(parent) ||
-            ts.isImportClause(parent) ||
-            ((ts.isVariableDeclaration(parent) ||
-              ts.isFunctionDeclaration(parent) ||
-              ts.isParameter(parent) ||
-              ts.isBindingElement(parent) ||
-              ts.isClassDeclaration(parent)) &&
-              parent.name === node));
-        if (declares) {
+          (ts.isPropertyAccessExpression(parent) ||
+            ts.isPropertyAssignment(parent) ||
+            ts.isPropertyDeclaration(parent) ||
+            ts.isPropertySignature(parent) ||
+            ts.isMethodDeclaration(parent) ||
+            ts.isMethodSignature(parent) ||
+            ts.isGetAccessorDeclaration(parent) ||
+            ts.isSetAccessorDeclaration(parent) ||
+            ts.isExportSpecifier(parent) ||
+            ts.isEnumMember(parent));
+        if (named && !bindsNothing) {
           const importedAsItself =
             ts.isImportSpecifier(parent) &&
-            parent.name === node &&
             parent.propertyName === undefined &&
             ts.isStringLiteral(parent.parent.parent.parent.moduleSpecifier) &&
             parent.parent.parent.parent.moduleSpecifier.text === './owned.js';
@@ -341,6 +369,10 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
       ts.forEachChild(node, visit);
     };
     visit(file);
+    for (const expression of markup?.matchAll(/\{[^{}]*\bnew\b[^{}]*\}/g) ?? []) {
+      const line = (markup ?? '').slice(0, expression.index).split('\n').length;
+      unread.push(`${module}:${String(line)}: a construction in the markup, which no scan reads`);
+    }
   }
   return unread;
 };
