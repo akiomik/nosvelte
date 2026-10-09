@@ -1701,7 +1701,7 @@ B4-C11       public        test:DN6
 B5-C3        internal      test:ES3
 B5-C6        internal      test:OE14+OE1+OE2+OE6+OE10
 B5-C8        internal      test:PB13+PB1+PB3+PB4+PB5+PB9+CG10+EY10+ES24+LE16
-B5-C9        internal      test:FC1
+B5-C9        internal      test:FC1+PB6+PB7+PB8+PB10+PB12+TR20+TR21+CG1+CG11b+WI23+WI24+WI28
 B5-C10       internal      TBD
 B-γ-C1       public        TBD
 C6-C3        architecture  TBD
