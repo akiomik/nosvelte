@@ -944,6 +944,16 @@ export interface Exported {
   readonly name: string;
   /** `class`: a constructor and an instance type; `value`: a function or constant; `type`: a type alone. */
   readonly kind: 'type' | 'class' | 'value';
+  /** The name of the symbol the export resolves to, through every alias: a renamed re-export says what it is. */
+  readonly defines: string;
+  /** The library module that declares it, relative to `src/lib/v1`, or `''` outside it. */
+  readonly module: string;
+  /**
+   * Whether anything callable it gives out — itself, or a member of what it
+   * is, a class's statics included — answers a type predicate: a recognition
+   * guard, however it is named.
+   */
+  readonly guards: boolean;
 }
 
 /**
@@ -969,7 +979,34 @@ export function exportsOf(specifier: string): Exported[] {
         : resolved.flags & (ts.SymbolFlags.Function | ts.SymbolFlags.Variable)
           ? 'value'
           : 'type';
-    return { name: symbol.getName(), kind };
+    const declaration = resolved.declarations?.[0];
+    const file = declaration?.getSourceFile().fileName ?? '';
+    const library = resolve(ROOT, 'src/lib/v1');
+    const module = file.startsWith(`${library}/`) ? file.slice(library.length + 1) : '';
+    // A predicate the platform declares — `Error.isError`, which every class
+    // here inherits as a static — is not one this library gives out; the
+    // callables read are the export itself and the members it declares.
+    const declaredHere = (one: ts.Symbol): boolean =>
+      (one.declarations ?? []).some((each) =>
+        each.getSourceFile().fileName.startsWith(`${library}/`)
+      );
+    let guards = false;
+    if (kind !== 'type' && declaration !== undefined) {
+      const value = checker.getTypeOfSymbolAtLocation(resolved, declaration);
+      const callables = [
+        value,
+        ...value
+          .getProperties()
+          .filter(declaredHere)
+          .map((one) => checker.getTypeOfSymbolAtLocation(one, declaration))
+      ];
+      guards = callables.some((type) =>
+        type
+          .getCallSignatures()
+          .some((signature) => checker.getTypePredicateOfSignature(signature) !== undefined)
+      );
+    }
+    return { name: symbol.getName(), kind, defines: resolved.getName(), module, guards };
   });
 }
 
