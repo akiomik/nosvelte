@@ -220,16 +220,11 @@ export default {
       ]
     },
     {
-      id: 'C10-class-codes-swapped',
+      id: 'C10-class-code-taken',
       arm: 'RA1',
       requires: ['LE17', 'LE19'],
-      describe: "`MissingProviderError` and `MissingRandomnessError` carry each other's code",
+      describe: "`MissingRandomnessError` carries `missing-provider`, another class's code",
       edits: [
-        {
-          file: 'src/lib/v1/context.svelte.ts',
-          from: "  readonly code = 'missing-provider' as const;",
-          to: "  readonly code = 'missing-randomness' as const;"
-        },
         {
           file: 'src/lib/v1/attempt.ts',
           from: "  readonly code = 'missing-randomness' as const;",
@@ -278,7 +273,7 @@ export default {
     {
       id: 'C10-last-error-misses-the-entry',
       arm: 'RA1',
-      requires: ['RX1'],
+      requires: ['RX1', 'RX5'],
       describe: "`lastError` does not read the query's rejection",
       edits: [
         {
@@ -376,7 +371,7 @@ export default {
         {
           file: 'src/lib/v1/useStreamedReq.svelte.ts',
           from: '        ? ownedByLibrary(new MissingProviderError())',
-          to: "        ? ownedByLibrary(new InvalidDescriptorError('client', 'is missing'))"
+          to: "        ? ownedByLibrary(\n            new InvalidDescriptorError(MissingProviderError.name === '' ? 'rxNostr' : 'client', 'is missing')\n          )"
         }
       ]
     },
@@ -449,8 +444,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/reach.test.ts',
-          from: '    if (INHERITED[code][surface] === undefined && seen === code)',
-          to: "    if (INHERITED[code][surface] === undefined && seen === Symbol.for('never'))"
+          from: '    if (INHERITED[code][surface] === undefined && codeOf(observed[surface]) === code)',
+          to: "    if (INHERITED[code][surface] === undefined && codeOf(observed[surface]) === Symbol.for('never'))"
         }
       ]
     },
@@ -461,8 +456,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/reach.test.ts',
-          from: '    if (seen !== undefined && INHERITED[seen as ReqErrorCode]?.[surface] === undefined)',
-          to: "    if (seen === Symbol.for('never'))"
+          from: '    return seen !== undefined && INHERITED[seen as ReqErrorCode]?.[surface] === undefined',
+          to: "    return seen === Symbol.for('never')"
         }
       ]
     },
@@ -498,7 +493,7 @@ export default {
         {
           file: 'src/tests/contracts/engine/helpers/emitted.ts',
           from: '    if (path === SOURCE || path.startsWith(`${SOURCE}/`)) {',
-          to: "    if (path === '\\0') {"
+          to: '    if (path === `${SOURCE}\\0`) {'
         }
       ]
     },
@@ -571,6 +566,423 @@ export default {
           file: 'src/tests/contracts/engine/reach.test.ts',
           from: '          outletTypes.add(props);',
           to: '          void props;'
+        }
+      ]
+    },
+    {
+      id: 'C10-public-refresh-resolves',
+      arm: 'RA1',
+      describe:
+        "`useReq`'s own `refresh` resolves where the engine's rejects, so a consumer is never refused",
+      edits: [
+        {
+          file: 'src/lib/v1/req.svelte.ts',
+          from: '    refresh: () => handle.refresh()',
+          to: "    refresh: async () => {\n      try { return await handle.refresh(); }\n      catch { return { kind: 'not-started', reason: 'deferred' } as const; }\n    }"
+        }
+      ]
+    },
+    {
+      id: 'C10-handle-refresh-wider',
+      arm: 'RA1',
+      describe: '`ReqHandle.refresh` is declared to resolve the partial answer as an error outcome',
+      edits: [
+        {
+          file: 'src/lib/v1/engine.ts',
+          from: '  readonly refresh: () => Promise<RefreshOutcome>;',
+          to: "  readonly refresh: () => Promise<RefreshOutcome | { readonly kind: 'error'; readonly error: IncompleteError }>;"
+        }
+      ]
+    },
+    {
+      id: 'C10-diagnostics-wider',
+      arm: 'RA1',
+      describe: '`ReqHandle.diagnostics` declares `lastError` as any `Error`, behind every alias',
+      edits: [
+        {
+          file: 'src/lib/v1/engine.ts',
+          from: '  readonly diagnostics: ReqDiagnostics;\n',
+          to: "  readonly diagnostics: Omit<ReqDiagnostics, 'lastError'> & {\n    readonly lastError: ReqLastError | Error | undefined;\n  };\n"
+        }
+      ]
+    },
+    {
+      id: 'C10-error-slot-withheld',
+      arm: 'RA1',
+      describe: 'the request components withhold the error snippet from the partial answer',
+      edits: [
+        {
+          file: 'src/lib/v1/components/RequestOutlets.svelte',
+          from: '  {@render error?.(Object.freeze({ request, error: outlet.error }))}',
+          to: '  {@render (outlet.error.code === "incomplete-result" ? undefined : error)?.(Object.freeze({ request, error: outlet.error }))}'
+        }
+      ]
+    },
+    {
+      id: 'C10-last-error-only-on-error',
+      arm: 'RA1',
+      describe:
+        '`lastError` reads the failure only while the state is `error`, so a failed refresh over a kept answer leaves it empty',
+      edits: [
+        {
+          file: 'src/lib/v1/engine.ts',
+          from: '      data?.failure?.error ??\n      entryError ??',
+          to: "      (state.status === 'error' ? data?.failure?.error : undefined) ??\n      (state.status === 'error' ? entryError : undefined) ??"
+        }
+      ]
+    },
+    {
+      id: 'C10-cause-fresh',
+      arm: 'RA1',
+      describe:
+        "a relay's failure named as the contract violation carries a fresh copy on its cause rather than the relay's value",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: '  return ownedByLibrary(new AccumulatorContractError(said.text, value));',
+          to: '  return ownedByLibrary(new AccumulatorContractError(said.text, captureFromRelay(new Error(value.message))));'
+        }
+      ]
+    },
+    {
+      id: 'C10-cause-typed-error',
+      arm: 'RA1',
+      describe:
+        "every variant's `cause` is declared as `Error`, so a consumer cannot branch on a nested code",
+      edits: [
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly code: 'incomplete-result';",
+          to: "      readonly cause?: Error | undefined;\n      readonly code: 'incomplete-result';"
+        },
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly code: 'invalid-descriptor';",
+          to: "      readonly cause?: Error | undefined;\n      readonly code: 'invalid-descriptor';"
+        },
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly code: 'unsupported-filter';",
+          to: "      readonly cause?: Error | undefined;\n      readonly code: 'unsupported-filter';"
+        },
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly code: 'relay-not-in-scope';",
+          to: "      readonly cause?: Error | undefined;\n      readonly code: 'relay-not-in-scope';"
+        },
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly code: 'transport-incompatible';",
+          to: "      readonly cause?: Error | undefined;\n      readonly code: 'transport-incompatible';"
+        },
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly code: 'accumulator-contract';\n    }\n  | {\n      readonly name: string;\n      readonly message: string;\n      readonly stack?: string;\n      readonly cause?: ReqError | undefined;\n      readonly code: 'provider-disposed';\n    }\n  | {\n      readonly name: string;\n      readonly message: string;\n      readonly stack?: string;\n      readonly cause?: ReqError | undefined;\n      readonly code: 'missing-provider';\n    }\n  | {\n      readonly name: string;\n      readonly message: string;\n      readonly stack?: string;\n      readonly cause?: ReqError | undefined;",
+          to: "      readonly cause?: Error | undefined;\n      readonly code: 'accumulator-contract';\n    }\n  | {\n      readonly name: string;\n      readonly message: string;\n      readonly stack?: string;\n      readonly cause?: Error | undefined;\n      readonly code: 'provider-disposed';\n    }\n  | {\n      readonly name: string;\n      readonly message: string;\n      readonly stack?: string;\n      readonly cause?: Error | undefined;\n      readonly code: 'missing-provider';\n    }\n  | {\n      readonly name: string;\n      readonly message: string;\n      readonly stack?: string;\n      readonly cause?: Error | undefined;"
+        },
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly thrownName: string;\n      readonly truncated: boolean;\n      readonly source: 'relay';",
+          to: "      readonly cause?: Error | undefined;\n      readonly thrownName: string;\n      readonly truncated: boolean;\n      readonly source: 'relay';"
+        },
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly cause?: ReqError | undefined;\n      readonly thrownName: string;\n      readonly truncated: boolean;\n      readonly source: 'unspecified';",
+          to: "      readonly cause?: Error | undefined;\n      readonly thrownName: string;\n      readonly truncated: boolean;\n      readonly source: 'unspecified';"
+        }
+      ]
+    },
+    {
+      id: 'C10-static-tools',
+      arm: 'RA1',
+      describe:
+        'a published class holds a static object with a recognition guard and a factory resolving to the snapshot class',
+      edits: [
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: '  /**\n   * The three members `Error` gives this class, re-declared as `readonly`.',
+          to: "  static readonly failureTools = {\n    snapshot: () => import('./own.js').then(({ ReqFailure }) => ReqFailure),\n    recognises: (value: unknown): value is import('./reqerror.js').ReqError =>\n      typeof value === 'object' && value !== null && 'code' in value\n  };\n  /**\n   * The three members `Error` gives this class, re-declared as `readonly`."
+        }
+      ]
+    },
+    {
+      id: 'C10-instance-guard',
+      arm: 'RA1',
+      describe: 'a published class gives out a recognition guard on every instance',
+      edits: [
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: "  readonly code = 'missing-provider' as const;\n",
+          to: "  readonly code = 'missing-provider' as const;\n\n  /** A recognition guard, given out on every instance. */\n  recognises(value: unknown): value is import('./reqerror.js').ReqError {\n    return typeof value === 'object' && value !== null && 'code' in value;\n  }\n"
+        }
+      ]
+    },
+    {
+      id: 'C10-static-snapshot',
+      arm: 'RA1',
+      describe: 'a published class holds the snapshot class as a static',
+      edits: [
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: "import { providerDisposed } from './own.js';",
+          to: "import { providerDisposed, ReqFailure } from './own.js';"
+        },
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: "  readonly code = 'missing-provider' as const;\n",
+          to: "  readonly code = 'missing-provider' as const;\n\n  /** The snapshot class, handed out as a member. */\n  static readonly Snapshot = ReqFailure;\n"
+        }
+      ]
+    },
+    {
+      id: 'C10-namespace-guard',
+      arm: 'RA1',
+      describe: 'the entry gives out a recognition guard inside a namespace',
+      edits: [
+        {
+          file: 'src/lib/v1/public-entry.ts',
+          from: "export { useSend } from './send.svelte.js';",
+          to: "export { useSend } from './send.svelte.js';\n// eslint-disable-next-line @typescript-eslint/no-namespace\nexport namespace Recognise {\n  export const reqError = (value: unknown): value is import('./reqerror.js').ReqError =>\n    typeof value === 'object' && value !== null && 'code' in value;\n}"
+        }
+      ]
+    },
+    {
+      id: 'C10-enum-published',
+      arm: 'RA1',
+      describe: 'the entry gives out an enum, a value no list of values had',
+      edits: [
+        {
+          file: 'src/lib/v1/public-entry.ts',
+          from: "export { useSend } from './send.svelte.js';",
+          to: "export { useSend } from './send.svelte.js';\nexport enum FailureKind {\n  Descriptor = 'descriptor',\n  Relay = 'relay'\n}"
+        }
+      ]
+    },
+    {
+      id: 'C10-snapshot-as-component-name',
+      arm: 'RA1',
+      describe:
+        "the entry gives out the snapshot class under a component's name, which it does not use",
+      edits: [
+        {
+          file: 'src/lib/v1/public-entry.ts',
+          from: "export { useSend } from './send.svelte.js';",
+          to: "export { useSend } from './send.svelte.js';\nimport { ReqFailure } from './own.js';\nexport const Article = ReqFailure;"
+        }
+      ]
+    },
+    {
+      id: 'C10-recogniser-as-component-name',
+      arm: 'RA1',
+      describe: "the entry gives out a `boolean` recogniser under a component's name",
+      edits: [
+        {
+          file: 'src/lib/v1/public-entry.ts',
+          from: "export { useSend } from './send.svelte.js';",
+          to: "export { useSend } from './send.svelte.js';\nexport const Article = (value: unknown): boolean =>\n  typeof value === 'object' && value !== null && 'code' in value;"
+        }
+      ]
+    },
+    {
+      id: 'C10-rejection-renamed-type',
+      arm: 'RA1',
+      describe: 'the entry publishes the rejection set as a type alias of a new name',
+      edits: [
+        {
+          file: 'src/lib/v1/public-entry.ts',
+          from: "export { useSend } from './send.svelte.js';",
+          to: "export { useSend } from './send.svelte.js';\nexport type RefreshFailure = import('./reqerror.js').RefreshRejection;"
+        }
+      ]
+    },
+    {
+      id: 'C10-failure-code-string',
+      arm: 'RA1',
+      describe: '`FailureCode` widens to `string` under its own name',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: "export type FailureCode = CapturedReqError['code'];",
+          to: 'export type FailureCode = string;'
+        }
+      ]
+    },
+    {
+      id: 'C10-relay-family-string',
+      arm: 'RA1',
+      describe: '`RelayConfigurationErrorCode` widens to `string` under its own name',
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: 'export type RelayConfigurationErrorCode =',
+          to: 'export type RelayConfigurationErrorCode = string'
+        }
+      ]
+    },
+    {
+      id: 'C10-copy-code-wrong',
+      arm: 'RA1',
+      requires: ['LE19'],
+      describe:
+        '`MissingRandomnessError` carries `missing-provider` at run time, in every copy, while its type says otherwise',
+      edits: [
+        {
+          file: 'src/lib/v1/attempt.ts',
+          from: "    (this as { name: string }).name = 'MissingRandomnessError';",
+          to: "    (this as { name: string }).name = 'MissingRandomnessError';\n    Object.assign(this, { code: 'missing-provider' });"
+        }
+      ]
+    },
+    {
+      id: 'C10-caught-message-writable',
+      arm: 'RA1',
+      requires: ['LE17'],
+      describe:
+        '`MissingRandomnessError.message` is writable in the declaration a consumer compiles against',
+      edits: [
+        {
+          file: 'src/lib/v1/attempt.ts',
+          from: '  declare readonly message: string;\n  declare readonly name: string;\n  declare readonly stack?: string;\n  /**',
+          to: '  declare message: string;\n  declare readonly name: string;\n  declare readonly stack?: string;\n  /**'
+        }
+      ]
+    },
+    {
+      id: 'C10-disposed-client-unowned',
+      arm: 'RA1',
+      requires: ['RX4'],
+      describe:
+        '`refresh()` on a client the caller disposed rejects with an error this library did not mint',
+      edits: [
+        {
+          file: 'src/lib/v1/stream.ts',
+          from: '  if (relays === undefined) {\n    throw ownedByLibrary(\n      new InvalidDescriptorError(',
+          to: "  if (relays === undefined) {\n    if (String(relays) === 'undefined') throw new Error('the client is gone');\n    throw ownedByLibrary(\n      new InvalidDescriptorError("
+        }
+      ]
+    },
+    {
+      id: 'C10-incomplete-misses-last-error',
+      arm: 'RA1',
+      requires: ['RX3'],
+      describe: "`lastError` does not carry the partial answer's error",
+      edits: [
+        {
+          file: 'src/lib/v1/engine.ts',
+          from: "      (state.status === 'incomplete' ? state.error : undefined),",
+          to: "      (state.status === 'incomplete' ? undefined : undefined),"
+        }
+      ]
+    },
+    {
+      id: 'C10-opaque-fault-as-descriptor',
+      arm: 'RA1',
+      requires: ['RX12'],
+      describe: 'a fault this library cannot attribute is attributed to the descriptor',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: "      throw capture(thrown, 'unspecified');",
+          to: "      throw capture(thrown, 'descriptor');"
+        }
+      ]
+    },
+    {
+      id: 'I-kind-by-callable',
+      arm: 'RA1',
+      describe:
+        'the export reader calls only a function or a variable a value, so an enum and a namespace are types',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/declarations.ts',
+          from: '        : resolved.flags & ts.SymbolFlags.Value\n',
+          to: '        : resolved.flags & (ts.SymbolFlags.Function | ts.SymbolFlags.Variable)\n'
+        }
+      ]
+    },
+    {
+      id: 'I-fixture-members-dropped',
+      arm: 'RA1',
+      describe:
+        "the export reader reads members declared in the library only, so a fixture's are dropped",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/declarations.ts',
+          from: '          each.getSourceFile().fileName.startsWith(`${library}/`) ||\n          each.getSourceFile().fileName === home',
+          to: "          each.getSourceFile().fileName.startsWith(`${library}/`) ||\n          (each.getSourceFile().fileName === home && home === '\\0')"
+        }
+      ]
+    },
+    {
+      id: 'I-walk-members-skipped',
+      arm: 'RA1',
+      describe: 'the reachability walk does not follow members',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '      if (ours(property)) next(',
+          to: "      if (ours(property) && property.getName() === '\\0') next("
+        }
+      ]
+    },
+    {
+      id: 'I-walk-returns-skipped',
+      arm: 'RA1',
+      describe: 'the reachability walk does not follow what a signature returns',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '        next(kind, checker.getReturnTypeOfSignature(signature));',
+          to: "        if (String(kind) === '\\0') next(kind, checker.getReturnTypeOfSignature(signature));"
+        }
+      ]
+    },
+    {
+      id: 'I-walk-rejection-unread',
+      arm: 'RA1',
+      describe: 'the reachability walk does not ask whether a type is the rejection set',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/reach.test.ts',
+          from: '              found.push(`rejection: ${path}`);',
+          to: '              void path;'
+        }
+      ]
+    },
+    {
+      id: 'I-silent-unread',
+      arm: 'RA1',
+      describe: "the bridge does not read the surfaces a witness's arrangement leaves silent",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/reach.test.ts',
+          from: '  for (const surface of SILENT_AT[witness] ?? [])',
+          to: "  for (const surface of (SILENT_AT[witness] ?? []).filter(() => arm === '\\0'))"
+        }
+      ]
+    },
+    {
+      id: 'I-family-by-spelling',
+      arm: 'RA1',
+      describe:
+        "the class population reads a code's annotation by its name rather than its members",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/reach.test.ts',
+          from: 'annotated === undefined ? { literals } : { family: annotated, literals };',
+          to: 'annotated === undefined ? { literals } : { family: annotated, literals: [annotated] };'
+        }
+      ]
+    },
+    {
+      id: 'I-same-codes-subset',
+      arm: 'RA1',
+      describe: 'the per-line comparison accepts a line whose codes include the expected ones',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/reach.test.ts',
+          from: '          JSON.stringify(found) === JSON.stringify(codes);',
+          to: '          codes.every((one) => found.includes(one));'
         }
       ]
     }
