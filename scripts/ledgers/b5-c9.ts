@@ -1013,11 +1013,11 @@ export default {
     {
       id: 'I-scan-allows-reflect',
       arm: 'FC1',
-      describe: 'the scan lets a construction through `Reflect.construct` pass',
+      describe: 'the scan lets a construction through anything named `construct` pass',
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
-          from: '        unread.push(`${at(node)}: a construction through \\`Reflect.construct\\``);',
+          from: '        unread.push(`${at(node)}: a construction through \\`construct\\``);',
           to: '        void node;'
         }
       ]
@@ -1270,8 +1270,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
-          from: '        constructsAt.push(start);',
-          to: '        void constructsAt;'
+          from: "      if (constructs && typeof start === 'number') constructsAt.push(start);",
+          to: '      void [constructs, start];'
         }
       ]
     },
@@ -1326,12 +1326,12 @@ export default {
     {
       id: 'I-markup-allows-reflect',
       arm: 'FC1',
-      describe: 'the component reader lets `Reflect` through outside the scripts',
+      describe: 'the component reader lets `Reflect` and `construct` through outside the scripts',
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
-          from: "        type === 'MemberExpression' && (object as { name?: unknown } | null)?.name === 'Reflect';",
-          to: "        type === 'MemberExpression' && object === undefined;"
+          from: "        (type === 'Identifier' && (name === 'Reflect' || name === 'construct')) ||\n        (type === 'Literal' && value === 'construct');",
+          to: "        (type === 'Identifier' && name === undefined && value === undefined);"
         }
       ]
     },
@@ -1405,6 +1405,121 @@ export default {
           file: 'src/tests/contracts/engine/failure.test.ts',
           from: '    held.add(value);\n',
           to: '    held.add(value);\n    if (held.size > 10_000) break;\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-keeps-a-cause-behind-a-proxy',
+      arm: 'FC1',
+      describe: "the boundary keeps a cause it read through a caller's proxy",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'export function capture(thrown: unknown, source: FailureSource): ReqError {',
+          to: "const CAUSES = new Set<unknown>();\nexport function capture(thrown: unknown, source: FailureSource): ReqError {\n  const reached = safely(() => (thrown as { cause?: unknown }).cause);\n  if (safely(() => (reached as { theirs?: unknown }).theirs) === 'behind a proxy') CAUSES.add(reached);"
+        }
+      ]
+    },
+    {
+      id: 'C9-construct-in-a-generic-script',
+      arm: 'FC1',
+      describe:
+        "a component constructs a refusal of this library's on the line of a script tag whose `generics` attribute holds a `>`, unminted",
+      edits: [
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: "  import { useReq } from '../req.svelte.js';",
+          to: "  import { useReq } from '../req.svelte.js';\n  import { RelayConfigurationError } from '../scope.svelte.js';"
+        },
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: '<script lang="ts">',
+          to: '<script lang="ts" generics="T extends Record<string, unknown>">const made = new RelayConfigurationError(\'invalid-relay-input\', [], \'unminted\'); void made;'
+        }
+      ]
+    },
+    {
+      id: 'C9-construct-via-global-reflect',
+      arm: 'FC1',
+      describe:
+        "a component constructs a refusal of this library's through `globalThis.Reflect.construct` in its markup, unminted",
+      edits: [
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: "  import { useReq } from '../req.svelte.js';",
+          to: "  import { useReq } from '../req.svelte.js';\n  import { RelayConfigurationError } from '../scope.svelte.js';"
+        },
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: '<RequestOutlets {request}',
+          to: "<p>{String(globalThis.Reflect.construct(RelayConfigurationError, ['invalid-relay-input', [], 'unminted']))}</p>\n<RequestOutlets {request}"
+        }
+      ]
+    },
+    {
+      id: 'C9-construct-destructured',
+      arm: 'FC1',
+      describe:
+        'a refusal is constructed through `construct` destructured from `Reflect`, unminted',
+      edits: [
+        {
+          file: 'src/lib/v1/normalize.ts',
+          from: "    throw ownedByLibrary(new InvalidDescriptorError('namespace', 'must be a string'));",
+          to: "    throw (() => {\n      const { construct } = Reflect;\n      return construct(InvalidDescriptorError, ['namespace', 'must be a string']);\n    })();"
+        }
+      ]
+    },
+    {
+      id: 'I-noting-root-unchecked',
+      arm: 'FC1',
+      describe: "FC1's noting takes its root without asking whether it is an object",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '  const waiting: unknown[] = [];',
+          to: '  const waiting: unknown[] = [root];'
+        },
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '  add(root);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-proxy-targets-unnoted',
+      arm: 'FC1',
+      describe: "FC1's proxies wrap targets that were never noted",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '  return new Proxy(theirOwn(label, target), handler);',
+          to: '  return new Proxy(label === label ? target : target, handler);'
+        }
+      ]
+    },
+    {
+      id: 'I-scripts-by-pattern',
+      arm: 'FC1',
+      describe:
+        "the component reader takes a script's body from a pattern instead of the parser's range",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '        scripts = scripts.slice(0, start) + source.slice(start, end) + scripts.slice(end);',
+          to: "        void [start, end];\n    for (const block of source.matchAll(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/g)) {\n      const body = block[1] ?? '';\n      const at = (block.index ?? 0) + block[0].indexOf('>') + 1;\n      scripts = scripts.slice(0, at) + body + scripts.slice(at + body.length);\n    }"
+        }
+      ]
+    },
+    {
+      id: 'I-parse-diagnostics-ignored',
+      arm: 'FC1',
+      describe: 'the scan passes source the parser could not read',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '    if ((file as unknown as { parseDiagnostics: readonly unknown[] }).parseDiagnostics.length > 0)',
+          to: '    if ((file as unknown as { parseDiagnostics: readonly unknown[] }).parseDiagnostics.length < 0)'
         }
       ]
     }
