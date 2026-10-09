@@ -986,6 +986,116 @@ export default {
           to: '          codes.every((one) => found.includes(one));'
         }
       ]
+    },
+    {
+      id: 'C10-public-release-rejects',
+      arm: 'RA1',
+      describe:
+        "`useReq`'s own `refresh` rejects when the consumer releases the request, where the engine resolves a cancellation",
+      edits: [
+        {
+          file: 'src/lib/v1/req.svelte.ts',
+          from: "import type { ReqHandle } from './engine.js';",
+          to: "import { AttemptAbandonedError } from './attempt.js';\nimport type { ReqHandle } from './engine.js';"
+        },
+        {
+          file: 'src/lib/v1/req.svelte.ts',
+          from: '    refresh: () => handle.refresh()',
+          to: "    refresh: async () => {\n      const outcome = await handle.refresh();\n      if (outcome.kind === 'cancelled' && outcome.reason === 'consumer-released')\n        throw new AttemptAbandonedError('the consumer released its request');\n      return outcome;\n    }"
+        }
+      ]
+    },
+    {
+      id: 'C10-public-refusal-swallowed-over-answer',
+      arm: 'RA1',
+      describe:
+        "`useReq`'s own `refresh` swallows a descriptor refusal once the request holds an answer",
+      edits: [
+        {
+          file: 'src/lib/v1/req.svelte.ts',
+          from: '    refresh: () => handle.refresh()',
+          to: "    refresh: async () => {\n      const state = handle.state;\n      const hasAnswer = state.status === 'settled' && state.events.length > 0;\n      try {\n        return await handle.refresh();\n      } catch (reason) {\n        if (hasAnswer && (reason as { code?: unknown }).code === 'unsupported-filter')\n          return { kind: 'not-started', reason: 'deferred' } as const;\n        throw reason;\n      }\n    }"
+        }
+      ]
+    },
+    {
+      id: 'C10-component-wrapped',
+      arm: 'RA1',
+      describe: 'the index wraps a component with a member that hands out the snapshot class',
+      edits: [
+        {
+          file: 'src/lib/v1/index.ts',
+          from: "export { default as Article } from './components/Article.svelte';",
+          to: "import ArticleComponent from './components/Article.svelte';\nimport { ReqFailure } from './own.js';\nexport const Article = Object.assign(ArticleComponent, { snapshot: () => ReqFailure });"
+        }
+      ]
+    },
+    {
+      id: 'C10-component-instance-export',
+      arm: 'RA1',
+      describe:
+        "a published component's instance script exports a recognition guard, reached through `bind:this`",
+      edits: [
+        {
+          file: 'src/lib/v1/components/Article.svelte',
+          from: "  import RequestOutlets from './RequestOutlets.svelte';\n",
+          to: "  import RequestOutlets from './RequestOutlets.svelte';\n  export function recognise(value: unknown): value is import('../reqerror.js').ReqError {\n    return typeof value === 'object' && value !== null && 'code' in value;\n  }\n"
+        }
+      ]
+    },
+    {
+      id: 'C10-generic-default-snapshot',
+      arm: 'RA1',
+      describe:
+        "a published class's static method hands out the snapshot class as its type parameter's default",
+      edits: [
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: "import { providerDisposed } from './own.js';",
+          to: "import { providerDisposed, ReqFailure } from './own.js';"
+        },
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: '  /**\n   * The three members `Error` gives this class, re-declared as `readonly`.',
+          to: '  static snapshot<T = typeof ReqFailure>(): T {\n    return ReqFailure as T;\n  }\n  /**\n   * The three members `Error` gives this class, re-declared as `readonly`.'
+        }
+      ]
+    },
+    {
+      id: 'I-walk-defaults-skipped',
+      arm: 'RA1',
+      describe: "the reachability walk does not follow a type parameter's default",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: "      if (fallback !== undefined) next('<default>', fallback);",
+          to: "      if (fallback !== undefined && String(fallback) === '\\0') next('<default>', fallback);"
+        }
+      ]
+    },
+    {
+      id: 'I-index-reader-blind',
+      arm: 'RA1',
+      describe: 'the index reader takes any statement for a re-export',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/reach.test.ts',
+          from: "                return `not a re-export: ${statement.getText().split('\\n')[0] ?? ''}`;",
+          to: "                return 'useReq from ./req.svelte.js';"
+        }
+      ]
+    },
+    {
+      id: 'I-script-exports-unread',
+      arm: 'RA1',
+      describe: 'the component reader finds no export in any script',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/components.ts',
+          from: "      .filter((statement) => statement.type.startsWith('Export'))",
+          to: "      .filter((statement) => statement.type === '\\0')"
+        }
+      ]
     }
   ]
 } satisfies Ledger;
