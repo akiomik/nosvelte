@@ -1151,6 +1151,92 @@ export default {
           to: "        if (String(argument) === '\\0') next('<>', argument);"
         }
       ]
+    },
+    {
+      id: 'C10-component-untyped-event',
+      arm: 'RA1',
+      describe:
+        'a published component dispatches an untyped event carrying the snapshot class, which its declaration erases to `any`',
+      edits: [
+        {
+          file: 'src/lib/v1/components/Article.svelte',
+          from: "   */\n  import { useReq } from '../req.svelte.js';\n",
+          to: "   */\n  import { createEventDispatcher, onMount } from 'svelte';\n  import { ReqFailure } from '../own.js';\n  import { useReq } from '../req.svelte.js';\n"
+        },
+        {
+          file: 'src/lib/v1/components/Article.svelte',
+          from: '  let { namespace, pubkey, identifier, children, loading, error, nodata }: ArticleProps = $props();\n\n',
+          to: "  let { namespace, pubkey, identifier, children, loading, error, nodata }: ArticleProps = $props();\n\n  const dispatch = createEventDispatcher();\n  onMount(() => dispatch('snapshot', ReqFailure));\n\n"
+        }
+      ]
+    },
+    {
+      id: 'C10-component-receiver',
+      arm: 'RA1',
+      describe:
+        'a published component exports a function whose receiver is typed as the snapshot class',
+      edits: [
+        {
+          file: 'src/lib/v1/components/Article.svelte',
+          from: "   */\n  import { useReq } from '../req.svelte.js';\n",
+          to: "   */\n  import { ReqFailure } from '../own.js';\n  import { useReq } from '../req.svelte.js';\n"
+        },
+        {
+          file: 'src/lib/v1/components/Article.svelte',
+          from: '  let { namespace, pubkey, identifier, children, loading, error, nodata }: ArticleProps = $props();\n\n',
+          to: '  let { namespace, pubkey, identifier, children, loading, error, nodata }: ArticleProps = $props();\n\n  export function acceptsSnapshot(this: typeof ReqFailure): boolean {\n    return typeof this === "function";\n  }\n\n'
+        }
+      ]
+    },
+    {
+      id: 'C10-component-unused-local',
+      arm: 'RA1',
+      describe:
+        "a published component's own unused `SvelteComponent`, which a filter on the message took for the generator's",
+      edits: [
+        {
+          file: 'src/lib/v1/components/Article.svelte',
+          from: '\n  const request = useReq(() => ({\n',
+          to: '\n  export function ping(): boolean {\n    const SvelteComponent = 1;\n    return true;\n  }\n\n  const request = useReq(() => ({\n'
+        }
+      ]
+    },
+    {
+      id: 'I-shadow-unread',
+      arm: 'RA1',
+      describe:
+        "the emit's check for a component sharing a name with a module beside it finds none",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: "  paths.filter((path) => path.endsWith('.svelte') && paths.includes(`${path}.ts`));",
+          to: "  paths.filter((path) => path.endsWith('.svelte') && paths.includes(`${path}.ts`) && path === '\\0');"
+        }
+      ]
+    },
+    {
+      id: 'I-any-unread',
+      arm: 'RA1',
+      describe: 'the reachability walk does not report an `any` it reaches',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/reach.test.ts',
+          from: '            if (type.flags & ts.TypeFlags.Any) found.push(`any: ${path}`);',
+          to: "            if (type.flags & ts.TypeFlags.Any && path === '\\0') found.push(`any: ${path}`);"
+        }
+      ]
+    },
+    {
+      id: 'I-walk-receiver-skipped',
+      arm: 'RA1',
+      describe: "the reachability walk does not read a signature's receiver",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '        if (signature.thisParameter !== undefined)',
+          to: "        if (signature.thisParameter !== undefined && String(signature) === '\\0')"
+        }
+      ]
     }
   ],
   retired: [
