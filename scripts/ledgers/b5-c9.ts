@@ -1114,8 +1114,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/failure.test.ts',
-          from: '    handedIn.push({ label, ref: new WeakRef(value) });',
-          to: '    void label;'
+          from: '  for (const node of heldBy(value)) handedIn.push({ label, ref: new WeakRef(node) });',
+          to: '  void [label, heldBy];'
         }
       ]
     },
@@ -1150,8 +1150,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
-          from: '    for (const expression of markup?.matchAll(/\\{[^{}]*\\bnew\\b[^{}]*\\}/g) ?? []) {',
-          to: '    for (const expression of [] as RegExpExecArray[]) {\n      void markup;'
+          from: "    for (const line of markup !== undefined && 'constructsOn' in markup ? markup.constructsOn : [])",
+          to: '    for (const line of [] as number[])'
         }
       ]
     },
@@ -1164,6 +1164,114 @@ export default {
           file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
           from: '  return { ...parsedAs(module, scripts), markup };',
           to: '  return { ...parsedAs(module, blanked(source)), markup };'
+        }
+      ]
+    },
+    {
+      id: 'C9-keeps-the-cut-tail',
+      arm: 'FC1',
+      describe: "the copy keeps the caller's node past the depth bound in a module-private set",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'function copyOf<S extends FailureSource>(',
+          to: 'const TAIL = new Set<unknown>();\nfunction copyOf<S extends FailureSource>('
+        },
+        {
+          file: 'src/lib/v1/own.ts',
+          from: '  const hasCause = nextCause !== undefined && nextCause !== null;\n',
+          to: '  const hasCause = nextCause !== undefined && nextCause !== null;\n  if (hasCause && depth <= 1) TAIL.add(nextCause);\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-keeps-accepted-answers',
+      arm: 'FC1',
+      describe: 'the per-relay seam keeps every answer it accepted in a module-private set',
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: 'function transportName(',
+          to: 'const ACCEPTED = new Set<unknown>();\nfunction transportName('
+        },
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: '  if (!isRelayUrl(name)) {\n    throw ownedByLibrary(new TransportIncompatibleError([reportAs], [url], name));\n  }\n  return name;',
+          to: '  if (!isRelayUrl(name)) {\n    throw ownedByLibrary(new TransportIncompatibleError([reportAs], [url], name));\n  }\n  ACCEPTED.add(answer);\n  return name;'
+        }
+      ]
+    },
+    {
+      id: 'C9-minter-nested-at-home',
+      arm: 'FC1',
+      describe:
+        '`owned.ts` declares a second `ownedByLibrary` inside a function, which mints nothing',
+      edits: [
+        {
+          file: 'src/lib/v1/owned.ts',
+          from: 'export function ownedByLibrary',
+          to: "export function extraRefusalForProbe(): Error {\n  function ownedByLibrary<T extends object>(value: T): T {\n    return value;\n  }\n  return ownedByLibrary(new Error('an extra refusal'));\n}\n\nexport function ownedByLibrary"
+        }
+      ]
+    },
+    {
+      id: 'I-noting-shallow',
+      arm: 'FC1',
+      describe: 'FC1 notes the value handed in and nothing it holds',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '  for (const node of heldBy(value)) handedIn.push({ label, ref: new WeakRef(node) });',
+          to: "  for (const node of [value].filter((one): one is object => typeof one === 'object' && one !== null))\n    handedIn.push({ label, ref: new WeakRef(node) });"
+        }
+      ]
+    },
+    {
+      id: 'I-adapters-unnoted',
+      arm: 'FC1',
+      describe: "FC1's transport adapters do not note what they answer",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: "    return theirOwn('a transport’s answer', answer);",
+          to: '    return answer;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-home-anywhere',
+      arm: 'FC1',
+      describe: 'the scan allows a minter declared anywhere in `owned.ts`, nested or not',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: "            module === 'owned.ts' && ts.isFunctionDeclaration(parent) && parent.parent === file;",
+          to: "            module === 'owned.ts' && ts.isFunctionDeclaration(parent);"
+        }
+      ]
+    },
+    {
+      id: 'I-scan-import-by-spelling',
+      arm: 'FC1',
+      describe:
+        'the scan allows an import of the minter by the spelling of its path, wherever that resolves',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: "            posix.normalize(posix.join(posix.dirname(module), specifier.text)) === 'owned.js';",
+          to: "            specifier.text === './owned.js';"
+        }
+      ]
+    },
+    {
+      id: 'I-markup-unparsed',
+      arm: 'FC1',
+      describe: "the component reader finds no construction in a component's markup",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: "      if (type === 'NewExpression' && typeof start === 'number') constructsAt.push(start);",
+          to: '      void [type, start, constructsAt];'
         }
       ]
     }
