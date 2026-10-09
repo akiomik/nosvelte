@@ -394,6 +394,13 @@ describe('this library mints where it constructs, and closes before it freezes',
     // it. Read off the declaring module's exports at run time: a class that
     // becomes exported is a class a consumer can build, and it has to move into
     // the table that measures what building one does.
+    // **In v1 there is no such class**, and that is said rather than left for
+    // the read below to pass over: every class is exported from its module,
+    // so the table is empty and the read is of nothing until a class is not.
+    expect(
+      Object.keys(libraryOnly),
+      'the premise in v1: no class this library declares is kept from its module’s exports'
+    ).toEqual([]);
     const escaped = Object.entries(libraryOnly)
       .filter(([name, { exports }]) => Object.keys(exports()).includes(name))
       .map(([name]) => name);
@@ -491,9 +498,10 @@ describe('this library mints where it constructs, and closes before it freezes',
     // covered by (2), which is a claim about all of them.
     // **`providerDisposed` where this read `internalFailure`.** The mechanism is
     // the same one — a class the library throws, minted at its construction site
-    // — and the factory is what the split renamed it to; the class behind it is
-    // the one a consumer cannot name, so this call is also the only way to reach
-    // it at all.
+    // — and the factory is what the split renamed it to. In the spike the class
+    // behind it was one a consumer could not name, so this call was the only way
+    // to reach it; v1 exports it from its module, so the table above builds it
+    // as a consumer would, and this is the instance the library itself builds.
     expect(isOwnedByLibrary(providerDisposed('the provider connection is terminated'))).toBe(true);
     expect(isOwnedByLibrary(capture(new Error('from outside'), 'relay'))).toBe(true);
     expect(
