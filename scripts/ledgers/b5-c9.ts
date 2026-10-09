@@ -24,9 +24,9 @@ export default {
   ],
   calibration: {
     measured:
-      "one run of each arm's duration in a single Vitest run at 45de427, plus 3.5 s for a run's start-up, measured as one run of one fast arm; one worker, on a shared 10-core machine",
+      "one run of each arm's duration in a single Vitest run at 45de427 — FC1's again after it was rewritten, 3.4 s — plus 3.5 s for a run's start-up, measured as one run of one fast arm; one worker, on a shared 10-core machine",
     seconds: {
-      FC1: 5.2,
+      FC1: 6.9,
       PB6: 3.9,
       PB7: 3.5,
       PB8: 3.7,
@@ -338,7 +338,7 @@ export default {
       id: 'C9-membership-forgeable',
       arm: 'FC1',
       requires: ['PB8'],
-      describe: 'a value with a channel code counts as ours',
+      describe: 'a value with any `code` counts as ours',
       edits: [
         {
           file: 'src/lib/v1/owned.ts',
@@ -458,8 +458,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/failure.test.ts',
-          from: "    if (slot !== undefined && 'value' in slot) reachable(slot.value, seen);",
-          to: '    void slot;'
+          from: "      else if ('value' in slot) visit(slot.value, `${path}.${String(key)}`);",
+          to: "      else if ('value' in slot) void slot;"
         }
       ]
     },
@@ -470,26 +470,635 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/failure.test.ts',
-          from: '  const nodes = [...reachable(root)];',
-          to: '  const nodes = [root];'
+          from: '  const { nodes, unread } = walk(root);\n  return JSON.stringify({',
+          to: '  const { nodes, unread } = { nodes: new Set<object>([root]), unread: [] as string[] };\n  return JSON.stringify({'
         }
       ]
-    }
-  ],
-  retired: [
+    },
     {
-      id: 'C9-state-uncaptured',
+      id: 'C9-query-function-unwrapped',
       arm: 'FC1',
-      describe: "the state hands the query's error to `terminalFailure` uncaptured",
+      describe:
+        "the query function rejects with what it threw before its `try`, the attempt registry's own value included",
       edits: [
         {
           file: 'src/lib/v1/useStreamedReq.svelte.ts',
-          from: "    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined;",
-          to: "    query.status === 'error' ? terminalFailure(query.error as unknown as ReqError) : undefined;"
+          from: 'queryFn: rejectsWithOurs(async (context: unknown) => {',
+          to: 'queryFn: (async (context: unknown) => {'
         }
-      ],
-      reason:
-        "Equivalent on every path: every value the query function throws is one this library made — the descriptor refusal it captured at its door, a disposed provider's value, a minted accumulator-contract error, or what the accumulator's catch captured — and `capture` at `unspecified`, the door that cannot attribute, hands this library's own channel values back unchanged. Measured to survive in the ledger's run just before its retirement, on FC1 as it reads the cache. The falsifier is a throw into the query's error that this library did not mint."
+      ]
+    },
+    {
+      id: 'C9-rejection-per-read',
+      arm: 'FC1',
+      describe:
+        "the query's rejection is copied again by every reader, so no two reads are one object",
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  const rejectedWith = (): ReqStateError | undefined => queryRejection;',
+          to: "  const rejectedWith = (): ReqStateError | undefined =>\n    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined;"
+        }
+      ]
+    },
+    {
+      id: 'C9-state-uncaptured',
+      arm: 'FC1',
+      describe:
+        "the state hands the query's error to `terminalFailure` uncaptured, so the query library's own cancellation is published as itself",
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: "    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined\n  );",
+          to: "    query.status === 'error' ? terminalFailure(query.error as unknown as ReqError) : undefined\n  );"
+        }
+      ]
+    },
+    {
+      id: 'C9-set-answer-reread',
+      arm: 'FC1',
+      describe:
+        "the set probe's mismatch refusal reads the transport's answer again instead of the copy it judged",
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: 'throw ownedByLibrary(new TransportKeyMismatchError({ wrote, expected, actual: names }));',
+          to: 'throw ownedByLibrary(new TransportKeyMismatchError({ wrote, expected, actual: actual as string[] }));'
+        }
+      ]
+    },
+    {
+      id: 'C9-answer-read-unguarded',
+      arm: 'FC1',
+      describe:
+        "reading the transport's answer is outside the guard, so what a read of it throws leaves as itself",
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: '    return Array.isArray(answer) ? Array.from(answer as unknown[]) : undefined;\n  } catch {\n    return undefined;',
+          to: '    return Array.isArray(answer) ? Array.from(answer as unknown[]) : undefined;\n  } catch (thrown) {\n    throw thrown;'
+        }
+      ]
+    },
+    {
+      id: 'C9-source-declared',
+      arm: 'FC1',
+      describe: '`FailureSource` is written out beside the variants instead of read off them',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: "export type FailureSource = CapturedReqError['source'];",
+          to: "export type FailureSource = 'descriptor' | 'relay' | 'unspecified';"
+        }
+      ]
+    },
+    {
+      id: 'C9-code-union-declared',
+      arm: 'FC1',
+      describe: '`ReqErrorCode` is written out beside the variants instead of read off them',
+      edits: [
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "export type ReqErrorCode = ReqError['code'];",
+          to: "export type ReqErrorCode =\n  | 'invalid-descriptor'\n  | 'unsupported-filter'\n  | 'relay-not-in-scope'\n  | 'transport-incompatible'\n  | 'descriptor-unreadable'\n  | 'relay-failed'\n  | 'incomplete-result'\n  | 'accumulator-contract'\n  | 'provider-disposed'\n  | 'missing-provider'\n  | 'unspecified';"
+        }
+      ]
+    },
+    {
+      id: 'C9-variant-fourth-source',
+      arm: 'FC1',
+      describe: 'a published variant declares a source the channel does not have',
+      edits: [
+        {
+          file: 'src/lib/v1/reqerror.ts',
+          from: "      readonly source: 'relay';",
+          to: "      readonly source: 'relay' | 'transport';"
+        }
+      ]
+    },
+    {
+      id: 'C9-cause-unattributed',
+      arm: 'FC1',
+      describe:
+        'a copied cause is attributed to the fallback rather than to the door its root arrived at',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'copyOf(nextCause, source, depth - 1)',
+          to: "copyOf(nextCause, 'unspecified', depth - 1)"
+        }
+      ]
+    },
+    {
+      id: 'C9-falsy-cause-dropped',
+      arm: 'FC1',
+      describe: "a cause of `0`, `false` or `''` is dropped as if there were none",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'const hasCause = nextCause !== undefined && nextCause !== null;',
+          to: 'const hasCause = Boolean(nextCause);'
+        }
+      ]
+    },
+    {
+      id: 'C9-empty-message-dropped',
+      arm: 'FC1',
+      describe: 'an empty message is treated as no message',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: "if (typeof message === 'string') return boundedMessage(message);",
+          to: "if (typeof message === 'string' && message.length > 0) return boundedMessage(message);"
+        }
+      ]
+    },
+    {
+      id: 'C9-cut-keeps-the-end',
+      arm: 'FC1',
+      describe: 'a cut keeps the last 200 units rather than the first',
+      edits: [
+        {
+          file: 'src/lib/v1/normalize.ts',
+          from: 'const cut = rendered.slice(0, MAX_RENDERED);',
+          to: 'const cut = rendered.slice(-MAX_RENDERED);'
+        }
+      ]
+    },
+    {
+      id: 'C9-truncated-declared',
+      arm: 'FC1',
+      describe: "a value of anybody's that says it was cut is published as cut",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'isOwnedByLibrary(thrown) && safely(() => (thrown as ReqFailure).truncated) === true;',
+          to: 'safely(() => (thrown as ReqFailure).truncated) === true;'
+        }
+      ]
+    },
+    {
+      id: 'C9-cause-left-open',
+      arm: 'FC1',
+      describe: 'a copied cause is an open object another reader can add to',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'this.cause = fields.cause;',
+          to: 'this.cause =\n      fields.cause === undefined\n        ? undefined\n        : Object.create(Object.getPrototypeOf(fields.cause), Object.getOwnPropertyDescriptors(fields.cause));'
+        }
+      ]
+    },
+    {
+      id: 'C9-answer-unbounded',
+      arm: 'FC1',
+      describe: 'the transport refusal renders what the transport answered without a bound',
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: 'const rendered = describeValue(answered);',
+          to: "const rendered = JSON.stringify(answered) ?? 'undefined';"
+        }
+      ]
+    },
+    {
+      id: 'C9-relay-adapter-unguarded',
+      arm: 'FC1',
+      describe: "the per-relay adapter's throw is rendered by a read that can throw",
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: "new TransportIncompatibleError([reportAs], [url], saidBy(thrown, String), 'threw')",
+          to: "new TransportIncompatibleError([reportAs], [url], String(thrown), 'threw')"
+        }
+      ]
+    },
+    {
+      id: 'C9-set-adapter-unguarded',
+      arm: 'FC1',
+      describe: "the set adapter's throw is rendered by a read that can throw",
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: "new TransportIncompatibleError(wrote, expected, saidBy(thrown, String), 'threw')",
+          to: "new TransportIncompatibleError(wrote, expected, String(thrown), 'threw')"
+        }
+      ]
+    },
+    {
+      id: 'C9-relay-input-unguarded',
+      arm: 'FC1',
+      describe: 'an unreadable relay entry is rendered by a read that can throw',
+      edits: [
+        {
+          file: 'src/lib/v1/scope.svelte.ts',
+          from: "new InvalidRelayInputError('a relay', `could not be read: ${saidBy(thrown, describeValue)}`)",
+          to: "new InvalidRelayInputError('a relay', `could not be read: ${String(thrown)}`)"
+        }
+      ]
+    },
+    {
+      id: 'C9-chain-past-the-bound-cut',
+      arm: 'FC1',
+      describe: "the copy deletes the caller's link past the bound",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'const hasCause = nextCause !== undefined && nextCause !== null;',
+          to: 'const hasCause = nextCause !== undefined && nextCause !== null;\n  if (depth === 1)\n    safely(() => {\n      delete (thrown as { cause?: unknown }).cause;\n    });'
+        }
+      ]
+    },
+    {
+      id: 'C9-thrown-retained',
+      arm: 'FC1',
+      describe: 'the boundary keeps every value it is handed in a module-private set',
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'export function capture(thrown: unknown, source: FailureSource): ReqError {',
+          to: 'const RETAINED = new Set<unknown>();\nexport function capture(thrown: unknown, source: FailureSource): ReqError {\n  RETAINED.add(thrown);'
+        }
+      ]
+    },
+    {
+      id: 'C9-registry-strong',
+      arm: 'FC1',
+      describe: 'membership is a strong set, which holds everything this library ever made',
+      edits: [
+        {
+          file: 'src/lib/v1/owned.ts',
+          from: 'const OURS = new WeakSet<object>();',
+          to: 'const OURS = new Set<object>();'
+        }
+      ]
+    },
+    {
+      id: 'C9-caller-frozen',
+      arm: 'FC1',
+      describe: "the boundary freezes the caller's object on the way past",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: 'export function capture(thrown: unknown, source: FailureSource): ReqError {',
+          to: 'export function capture(thrown: unknown, source: FailureSource): ReqError {\n  safely(() => Object.freeze(thrown));'
+        }
+      ]
+    },
+    {
+      id: 'C9-channel-any-code',
+      arm: 'FC1',
+      describe:
+        "a value of this library's with a code that is not this channel's is treated as this channel's",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: "  if (typeof code !== 'string' || !(REQ_ERROR_CODES as readonly string[]).includes(code)) {",
+          to: "  if (typeof code !== 'string') {"
+        }
+      ]
+    },
+    {
+      id: 'C9-original-behind-a-getter',
+      arm: 'FC1',
+      describe: "the copy carries the caller's value behind a getter",
+      edits: [
+        {
+          file: 'src/lib/v1/own.ts',
+          from: '    this.cause = fields.cause;\n',
+          to: "    this.cause = fields.cause;\n    const original = (fields as { original?: unknown }).original;\n    if (original !== undefined) Object.defineProperty(this, 'original', { get: () => original });\n"
+        },
+        {
+          file: 'src/lib/v1/own.ts',
+          from: '      cause?.truncated === true,\n    cause\n  });',
+          to: '      cause?.truncated === true,\n    cause,\n    original: thrown\n  } as never);'
+        }
+      ]
+    },
+    {
+      id: 'C9-minter-shadowed',
+      arm: 'FC1',
+      describe: "a module binds the minter's name to the function that only closes `stack`",
+      edits: [
+        {
+          file: 'src/lib/v1/normalize.ts',
+          from: "import { hardenOwned, ownedByLibrary, sealClass } from './owned.js';",
+          to: "import { hardenOwned, hardenOwned as ownedByLibrary, sealClass } from './owned.js';"
+        }
+      ]
+    },
+    {
+      id: 'C9-construct-reflectively',
+      arm: 'FC1',
+      describe: 'a refusal is constructed through `Reflect.construct`, unminted',
+      edits: [
+        {
+          file: 'src/lib/v1/normalize.ts',
+          from: "    throw ownedByLibrary(new InvalidDescriptorError('namespace', 'must be a string'));",
+          to: "    throw Reflect.construct(InvalidDescriptorError, ['namespace', 'must be a string']);"
+        }
+      ]
+    },
+    {
+      id: 'I-walk-skips-accessors',
+      arm: 'FC1',
+      describe: "FC1's walk does not reach an accessor's functions",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        visit(slot.get, `${path}.get ${String(key)}`);\n        visit(slot.set, `${path}.set ${String(key)}`);',
+          to: '        void slot;'
+        }
+      ]
+    },
+    {
+      id: 'I-walk-skips-prototypes',
+      arm: 'FC1',
+      describe:
+        "FC1's walk does not go into a prototype that is not the platform's or the library's",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    if (!INTRINSIC.has(prototype)) visit(prototype, `${path}.[[Prototype]]`);',
+          to: '    void prototype;'
+        }
+      ]
+    },
+    {
+      id: 'I-walk-skips-maps',
+      arm: 'FC1',
+      describe: "FC1's walk does not open a Map",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '      Map.prototype.forEach.call(value, (member: unknown, key: unknown) => {\n        visit(key, `${path} key`);\n        visit(member, `${path} entry`);\n      });',
+          to: '      void Map;'
+        }
+      ]
+    },
+    {
+      id: 'I-walk-skips-sets',
+      arm: 'FC1',
+      describe: "FC1's walk does not open a Set",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '      Set.prototype.forEach.call(value, (member: unknown) => visit(member, `${path} member`));',
+          to: '      void Set;'
+        }
+      ]
+    },
+    {
+      id: 'I-walk-forgives-keys',
+      arm: 'FC1',
+      describe: "FC1's walk passes over an object whose keys refuse to be read",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '      unread.push(`${path}: its keys`);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-walk-forgives-slots',
+      arm: 'FC1',
+      describe: "FC1's walk passes over a slot whose descriptor refuses to be read",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        unread.push(`${path}.${String(key)}`);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-walk-forgives-prototypes',
+      arm: 'FC1',
+      describe: "FC1's walk passes over a prototype that refuses to be read",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '      unread.push(`${path}: its prototype`);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-shape-by-position',
+      arm: 'FC1',
+      describe: "FC1's shape names an object by kind rather than by identity",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    ? identityOf(value)',
+          to: "    ? 'an object'"
+        }
+      ]
+    },
+    {
+      id: 'I-shape-no-prototype',
+      arm: 'FC1',
+      describe: "FC1's shape does not record a node's prototype",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        prototype: tokenOf(Reflect.getPrototypeOf(node)),',
+          to: "        prototype: '',"
+        }
+      ]
+    },
+    {
+      id: 'I-shape-no-contents',
+      arm: 'FC1',
+      describe: "FC1's shape does not record a collection's contents",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        contents\n      };',
+          to: '        contents: []\n      };'
+        }
+      ]
+    },
+    {
+      id: 'I-openings-allow-functions',
+      arm: 'FC1',
+      describe: "FC1's openings let a function through",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: "    if (typeof node === 'function') found.push(`${label}: a function reachable`);\n",
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-openings-allow-open',
+      arm: 'FC1',
+      describe: "FC1's openings let an open node through",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    if (!Object.isFrozen(node)) found.push(`${label}: a node still open`);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-openings-allow-accessors',
+      arm: 'FC1',
+      describe: "FC1's openings let an accessor through",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        found.push(`${label}: an accessor at ${String(key)}`);',
+          to: '        void label;'
+        }
+      ]
+    },
+    {
+      id: 'I-openings-allow-foreign',
+      arm: 'FC1',
+      describe: "FC1's openings let an Error of anybody's through",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    if (node instanceof Error && !isOwnedByLibrary(node))\n      found.push(`${label}: an Error this library did not mint`);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-collector-idle',
+      arm: 'FC1',
+      describe: 'FC1 asks the collector without collecting',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    collectGarbage();',
+          to: '    void collectGarbage;'
+        }
+      ]
+    },
+    {
+      id: 'I-kept-empty',
+      arm: 'FC1',
+      describe: "FC1's reading of what the library keeps reads nothing",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '          .map((entry) => entry.state);',
+          to: '          .map(() => undefined);'
+        }
+      ]
+    },
+    {
+      id: 'I-closed-always',
+      arm: 'FC1',
+      describe: "FC1's check that `stack` is closed answers yes to anything",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        return slot?.set === undefined && slot?.writable === false && after?.value === slot.value;',
+          to: '        return slot === slot && after === after;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-keeps-names',
+      arm: 'FC1',
+      describe: 'the scan reads a minter by the name it is called through, whatever is bound to it',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '            unread.push(`${at(node)}: \\`${node.text}\\` bound to something it may not be`);',
+          to: '            void node;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-allows-reflect',
+      arm: 'FC1',
+      describe: 'the scan lets a construction through `Reflect.construct` pass',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '        unread.push(`${at(node)}: a construction through \\`Reflect.construct\\``);',
+          to: '        void node;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-allows-computed-reflect',
+      arm: 'FC1',
+      describe: 'the scan lets `Reflect` read by a computed name pass',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '        unread.push(`${at(node)}: \\`Reflect\\` read by a computed name`);',
+          to: '        void node;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-allows-non-name-bases',
+      arm: 'FC1',
+      describe: 'the scan lets a class whose base is not a name pass',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '          unread.push(`${at(node)}: a class extending something that is not a name`);',
+          to: '          void node;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-allows-nameless',
+      arm: 'FC1',
+      describe: 'the scan lets a class with no name pass',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '          unread.push(`${at(node)}: a class with no name to be held by`);',
+          to: '          void node;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-one-root',
+      arm: 'FC1',
+      describe: 'the population reaches `Error` and no other platform class',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '      if (ERROR_ROOTS.has(each.extends) || reaching.has(each.extends)) {',
+          to: "      if (each.extends === 'Error' || reaching.has(each.extends)) {"
+        }
+      ]
+    },
+    {
+      id: 'I-scan-reads-the-callee-as-written',
+      arm: 'FC1',
+      describe: 'the site scan does not see through the parentheses around a constructor',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '      const callee = ts.isNewExpression(node) ? unparenthesised(node.expression) : undefined;',
+          to: '      const callee = ts.isNewExpression(node) ? node.expression : undefined;'
+        }
+      ]
+    },
+    {
+      id: 'I-scan-top-level-only',
+      arm: 'FC1',
+      describe: "the scans read the library's top level and not its components",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: "  (readdirSync(lib, { recursive: true, encoding: 'utf8' }) as string[])",
+          to: "  (readdirSync(lib, { recursive: false, encoding: 'utf8' }) as string[])"
+        }
+      ]
     }
   ]
 } satisfies Ledger;
