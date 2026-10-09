@@ -13,9 +13,10 @@
  * which classes are in it.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, posix, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parse as parseComponent } from 'svelte/compiler';
 import ts from 'typescript';
 
 import {
@@ -43,9 +44,14 @@ const lib = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../lib/v1
 
 /**
  * A parsed module: where it is, relative to the library, and its syntax tree —
- * and, for a component, its markup, which the tree does not hold.
+ * and, for a component, the lines its markup constructs anything on, which the
+ * tree does not hold, or that the markup could not be read.
  */
-export type Module = { module: string; file: ts.SourceFile; markup?: string };
+export type Module = {
+  module: string;
+  file: ts.SourceFile;
+  markup?: { readonly constructsOn: readonly number[] } | { readonly unreadable: true };
+};
 
 /** Source text parsed as TypeScript, under the name it is reported by. */
 export const parsedAs = (module: string, text: string): Module => ({
@@ -58,24 +64,40 @@ const blanked = (text: string): string => text.replace(/[^\n]/g, ' ');
 
 /**
  * A component, read as the scans read a module: its scripts parsed where they
- * stand in the file, and its markup — everything else, styles and comments
- * blanked — kept beside them, so that what runs in a template expression is
- * not a place the scans silently do not look ({@link whatTheScanCannotRead}).
+ * stand in the file, and every construction in its markup found by Svelte's own
+ * parser, so that what runs in a template expression is not a place the scans
+ * silently do not look ({@link whatTheScanCannotRead}).
+ *
+ * **The markup is the compiler's to read, not a pattern's.** It was read with
+ * `/\{[^{}]*\bnew\b[^{}]*\}/`, and a construction whose arguments held an object
+ * literal — `{new RelayConfigurationError('…', [], JSON.stringify({ bad: true }))}`
+ * — had a brace inside it and matched nothing: measured, every scan empty.
  */
 export const componentAs = (module: string, source: string): Module => {
   let scripts = blanked(source);
-  let markup = source;
   for (const block of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
     const body = block[1] ?? '';
     const at = (block.index ?? 0) + block[0].indexOf('>') + 1;
     scripts = scripts.slice(0, at) + body + scripts.slice(at + body.length);
   }
-  for (const pattern of [
-    /<script\b[^>]*>[\s\S]*?<\/script>/g,
-    /<style\b[^>]*>[\s\S]*?<\/style>/g,
-    /<!--[\s\S]*?-->/g
-  ])
-    markup = markup.replace(pattern, blanked);
+  let markup: NonNullable<Module['markup']>;
+  try {
+    const constructsAt: number[] = [];
+    const seen = new Set<object>();
+    const visit = (node: unknown): void => {
+      if (typeof node !== 'object' || node === null || seen.has(node)) return;
+      seen.add(node);
+      const { type, start } = node as { type?: unknown; start?: unknown };
+      if (type === 'NewExpression' && typeof start === 'number') constructsAt.push(start);
+      for (const child of Object.values(node)) visit(child);
+    };
+    visit(parseComponent(source, { modern: true }).fragment);
+    markup = {
+      constructsOn: constructsAt.map((at) => source.slice(0, at).split('\n').length)
+    };
+  } catch {
+    markup = { unreadable: true };
+  }
   return { ...parsedAs(module, scripts), markup };
 };
 
@@ -307,10 +329,16 @@ export const MINTERS = ['ownedByLibrary', 'sealOwned'];
  * was not on the list: an unminted refusal read as minted, landing and `WI23`
  * green. So the list is the other one now, the places a name stands without
  * binding anything — a member, a property, an export — and a minter's name
- * standing anywhere else as a declaration's name is refused unless it is the
- * plain import from `owned.js`, or the function in `owned.ts` itself. And a
- * construction in a component's markup, which the parsed scripts do not hold,
- * is refused rather than passed over.
+ * standing anywhere else as a declaration's name is refused, but for two: the
+ * function declared at the top of the library's own `owned.ts`, and an import
+ * of that name, unaliased, whose path resolves to that file. Both are read by
+ * what they are, not by how they are spelled: a nested `function
+ * ownedByLibrary` inside `owned.ts` read as a minter and left the landing green,
+ * and so did, to the scan, an import from another directory's `owned.js` that
+ * re-exports `hardenOwned` under the name — both measured. Since every other
+ * binding of the name is refused, and scope is lexical, every call through the
+ * name reaches one of those two. And a construction in a component's markup, which the parsed
+ * scripts do not hold, is refused rather than passed over.
  */
 export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules()): string[] => {
   const unread: string[] = [];
@@ -356,12 +384,17 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
             ts.isExportSpecifier(parent) ||
             ts.isEnumMember(parent));
         if (named && !bindsNothing) {
+          const specifier = ts.isImportSpecifier(parent)
+            ? parent.parent.parent.parent.moduleSpecifier
+            : undefined;
           const importedAsItself =
             ts.isImportSpecifier(parent) &&
             parent.propertyName === undefined &&
-            ts.isStringLiteral(parent.parent.parent.parent.moduleSpecifier) &&
-            parent.parent.parent.parent.moduleSpecifier.text === './owned.js';
-          const declaredAtHome = module === 'owned.ts' && ts.isFunctionDeclaration(parent);
+            specifier !== undefined &&
+            ts.isStringLiteral(specifier) &&
+            posix.normalize(posix.join(posix.dirname(module), specifier.text)) === 'owned.js';
+          const declaredAtHome =
+            module === 'owned.ts' && ts.isFunctionDeclaration(parent) && parent.parent === file;
           if (!importedAsItself && !declaredAtHome)
             unread.push(`${at(node)}: \`${node.text}\` bound to something it may not be`);
         }
@@ -369,10 +402,10 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
       ts.forEachChild(node, visit);
     };
     visit(file);
-    for (const expression of markup?.matchAll(/\{[^{}]*\bnew\b[^{}]*\}/g) ?? []) {
-      const line = (markup ?? '').slice(0, expression.index).split('\n').length;
+    if (markup !== undefined && 'unreadable' in markup)
+      unread.push(`${module}: a component whose markup the parser could not read`);
+    for (const line of markup !== undefined && 'constructsOn' in markup ? markup.constructsOn : [])
       unread.push(`${module}:${String(line)}: a construction in the markup, which no scan reads`);
-    }
   }
   return unread;
 };

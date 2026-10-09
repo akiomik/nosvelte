@@ -113,17 +113,81 @@ function thrownBy(run: () => void): unknown {
  * the question the arm ends on: once the arm has let go of all of it, is any of
  * it still held by anything ({@link collected})?
  *
- * **Every one, not a sample.** The collector was asked only about values made
- * for a second pass, and a library keeping the first value it saw at each door
- * — the first pass's — left the arm green: measured. A retention that picks
- * what it keeps is answered only by asking about everything handed in.
+ * **Every one, not a sample, and all of each.** The collector was asked only
+ * about values made for a second pass, and a library keeping the first value it
+ * saw at each door — the first pass's — left the arm green: measured. Then only
+ * the value handed in was noted, not what hangs off it, and a library keeping
+ * the caller's node past the depth bound, or the array a transport answered
+ * with, left it green again: measured. So everything a value handed in holds
+ * ({@link heldBy}) is noted, and every transport adapter is {@link noted}.
  */
 const handedIn: { label: string; ref: WeakRef<object> }[] = [];
 function theirOwn<T>(label: string, value: T): T {
-  if ((typeof value === 'object' || typeof value === 'function') && value !== null)
-    handedIn.push({ label, ref: new WeakRef(value) });
+  for (const node of heldBy(value)) handedIn.push({ label, ref: new WeakRef(node) });
   return value;
 }
+
+/**
+ * The objects a value holds by its own data: through every own data slot,
+ * names and symbols, and through a `Map`'s or a `Set`'s contents — not through
+ * an accessor's functions or a prototype, which are the platform's as often as
+ * the caller's (every `Error` here carries the realm's own `stack` accessor,
+ * which nothing ever lets go of). A read that is refused ends that branch.
+ */
+function heldBy(root: unknown): Set<object> {
+  const held = new Set<object>();
+  const visit = (value: unknown): void => {
+    if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return;
+    if (held.has(value)) return;
+    held.add(value);
+    let keys: (string | symbol)[];
+    try {
+      keys = Reflect.ownKeys(value);
+    } catch {
+      return;
+    }
+    for (const key of keys) {
+      try {
+        const slot = Reflect.getOwnPropertyDescriptor(value, key);
+        if (slot !== undefined && 'value' in slot) visit(slot.value);
+      } catch {
+        // A slot that refuses to be read holds nothing this can reach.
+      }
+    }
+    try {
+      Map.prototype.forEach.call(value, (member: unknown, key: unknown) => {
+        visit(key);
+        visit(member);
+      });
+    } catch {
+      // Not a `Map`.
+    }
+    try {
+      Set.prototype.forEach.call(value, (member: unknown) => visit(member));
+    } catch {
+      // Not a `Set`.
+    }
+  };
+  visit(root);
+  return held;
+}
+
+/**
+ * A transport adapter whose every answer, and everything it throws, is noted as
+ * handed in — the arrays it answers with included, which the arrangements build
+ * and a library could keep.
+ */
+const noted =
+  (transportKeys: TransportKeys): TransportKeys =>
+  (urls) => {
+    let answer: readonly string[];
+    try {
+      answer = transportKeys(urls);
+    } catch (thrown) {
+      throw theirOwn('what a transport threw', thrown);
+    }
+    return theirOwn('a transport’s answer', answer);
+  };
 
 /** The boundary, with what it is handed noted as handed in. */
 const capture = (thrown: unknown, source: FailureSource): ReqError =>
@@ -513,6 +577,12 @@ describe('the failure channel publishes a value this library made, never one it 
             await collected(refs),
             'the collector: an object nothing holds is gone, and one a Set holds is not'
           ).toEqual([true, false]);
+          const hanging = { hangs: 'off what is handed in' };
+          theirOwn('the noting’s control', { holds: [hanging] });
+          expect(
+            handedIn.some(({ ref }) => ref.deref() === hanging),
+            'the noting: what hangs off a value handed in is noted too'
+          ).toBe(true);
           retained.clear();
         }
       })();
@@ -1176,19 +1246,42 @@ describe('the failure channel publishes a value this library made, never one it 
           'expression.ts',
           'const minted = (function ownedByLibrary(value: Error): Error { return value; })(new Ranged());'
         );
+        // The two bindings the scan allows, read by what they are: the minter
+        // declared at the top of the library's `owned.ts`, and an import whose
+        // path resolves there — and, beside each, the spelling that only looks
+        // like it.
+        const allowed = [
+          parsedAs('owned.ts', 'export function ownedByLibrary<T>(value: T): T { return value; }'),
+          parsedAs('refusal.ts', "import { ownedByLibrary } from './owned.js';"),
+          parsedAs('components/descriptors.ts', "import { ownedByLibrary } from '../owned.js';")
+        ];
+        const lookalikes = [
+          parsedAs(
+            'owned.ts',
+            'export function extra(): Error {\n  function ownedByLibrary<T>(value: T): T { return value; }\n  return ownedByLibrary(new Ranged());\n}'
+          ),
+          parsedAs(
+            'other/owned.ts',
+            "export { hardenOwned as ownedByLibrary } from '../owned.js';"
+          ),
+          parsedAs('other/refusal.ts', "import { ownedByLibrary } from './owned.js';")
+        ];
         expect(
           [
-            whatTheScanCannotRead([probe, expression]).length,
+            whatTheScanCannotRead([probe]).length,
+            whatTheScanCannotRead([expression]).length,
+            whatTheScanCannotRead(allowed),
+            whatTheScanCannotRead(lookalikes).map((line) => line.split(':')[0]),
             errorClasses([probe]).map(({ name }) => name),
             constructionSites(new Set(['Ranged']), [probe]).map(({ wrapper }) => wrapper)
           ],
-          'the scans’ controls: a minter shadowed by an import and by a function expression, a non-name base, a nameless class and both spellings of Reflect.construct refused; a built-in base and a parenthesised construction read'
-        ).toEqual([6, ['Ranged'], ['ownedByLibrary']]);
+          'the scans’ controls: a minter shadowed by an import, a non-name base, a nameless class and both spellings of Reflect.construct refused; a function expression refused; the two allowed bindings read, and their lookalikes refused; a built-in base and a parenthesised construction read'
+        ).toEqual([5, 1, [], ['owned.ts', 'other/refusal.ts'], ['Ranged'], ['ownedByLibrary']]);
         const component = componentAs(
           'Probe.svelte',
           [
             '<div>',
-            '  {#if shown}{new Ranged()}{/if}',
+            '  {#if shown}{new Ranged({ nested: { braces: true } })}{/if}',
             '</div>',
             '<script lang="ts">',
             '  const made = ownedByLibrary(new Ranged());',
@@ -1297,7 +1390,7 @@ describe('the failure channel publishes a value this library made, never one it 
               createNostrContext({
                 relays: [...relays],
                 harness: HARNESS_DIVERGENCES,
-                transportKeys
+                transportKeys: noted(transportKeys)
               })
             );
             const refusal = provider.value.configurationError as Error | undefined;
@@ -1313,9 +1406,13 @@ describe('the failure channel publishes a value this library made, never one it 
           (urls) =>
             (urls.length === 1 ? [urls[0]] : answer()) as readonly string[];
         {
-          const nested = theirOwn('a transport’s answer', { deep: 'as the transport made it' });
-          const kept: unknown[] = theirOwn('a transport’s answer', ['wss://a.example', nested]);
+          const nested = { deep: 'as the transport made it' };
+          const kept: unknown[] = ['wss://a.example', nested];
           const { refusal } = refusedBy(() => kept as never);
+          expect(
+            handedIn.some(({ ref }) => ref.deref() === nested),
+            'the premise: what the transport answered, down to what hangs off it, is noted as handed in'
+          ).toBe(true);
           const answered = (refusal as unknown as { answered?: unknown } | undefined)?.answered;
           expect(
             [typeof answered, String(answered).includes('as the transport made it')],
@@ -1429,7 +1526,7 @@ describe('the failure channel publishes a value this library made, never one it 
             createNostrContext({
               relays: [...RELAYS],
               harness: HARNESS_DIVERGENCES,
-              transportKeys: answering
+              transportKeys: noted(answering)
             })
           );
           const gone = await collected(refs);
@@ -1533,9 +1630,9 @@ describe('the failure channel publishes a value this library made, never one it 
             (payload) => ({
               relays: ['wss://a.example'],
               harness: HARNESS_DIVERGENCES,
-              transportKeys: () => {
+              transportKeys: noted(() => {
                 throw payload();
-              }
+              })
             })
           ],
           [
@@ -1543,10 +1640,10 @@ describe('the failure channel publishes a value this library made, never one it 
             (payload) => ({
               relays: [...RELAYS],
               harness: HARNESS_DIVERGENCES,
-              transportKeys: (urls) => {
+              transportKeys: noted((urls) => {
                 if (urls.length > 1) throw payload();
                 return [urls[0] as string];
-              }
+              })
             })
           ]
         ];
@@ -1571,7 +1668,9 @@ describe('the failure channel publishes a value this library made, never one it 
         for (const [seam, options] of atTheSeam) {
           const refusedWith = (payload: () => unknown): Error | undefined => {
             try {
-              const provider = mount(() => createNostrContext(options(payload)));
+              const provider = mount(() =>
+                createNostrContext(options(() => theirOwn('a payload', payload())))
+              );
               const refusal = provider.value.configurationError as Error | undefined;
               provider.destroy();
               return refusal;
