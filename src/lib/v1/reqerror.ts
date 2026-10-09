@@ -215,14 +215,17 @@ export type CapturedReqError = Extract<
  * three-way check passed and `ReqError['code']` did not have it. There is one
  * source of truth now, and it is the union.
  *
- * **Ten, and the union is closed for v1 in the direction that matters.** A
- * member *removed* is what breaks a consumer's exhaustive `switch`, and that is
- * a major. A member *added* is a code an existing `switch` has no arm for, which
+ * **The union is closed for v1 in the direction that matters.** A member
+ * *removed* is what breaks a consumer's exhaustive `switch`, and that is a
+ * major. A member *added* is a code an existing `switch` has no arm for, which
  * is why one arrives only with the remedy that justifies it — the last was
+ * `transport-incompatible`, a target the transport cannot name, whose remedy is
+ * the transport's version rather than the descriptor; before it,
  * `missing-provider`, which separates "this request has no provider at all"
  * from the partial-descriptor refusal it used to be published as, and a
  * consumer's remedy for it is to wrap the tree in a provider. `REQ_ERROR_CODES`
- * is the count: nothing here restates it.
+ * is the count: nothing here restates it, and this paragraph said "Ten" for
+ * the rounds after the eleventh arrived.
  */
 export type ReqErrorCode = ReqError['code'];
 
