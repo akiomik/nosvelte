@@ -44,8 +44,8 @@ const lib = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../lib/v1
 
 /**
  * A parsed module: where it is, relative to the library, and its syntax tree —
- * and, for a component, the lines its markup constructs anything on, which the
- * tree does not hold, or that the markup could not be read.
+ * and, for a component, the lines everything outside its scripts constructs
+ * anything on, which the tree does not hold, or that it could not be read.
  */
 export type Module = {
   module: string;
@@ -64,14 +64,18 @@ const blanked = (text: string): string => text.replace(/[^\n]/g, ' ');
 
 /**
  * A component, read as the scans read a module: its scripts parsed where they
- * stand in the file, and every construction in its markup found by Svelte's own
- * parser, so that what runs in a template expression is not a place the scans
- * silently do not look ({@link whatTheScanCannotRead}).
+ * stand in the file, and everything else in it — the markup, and the
+ * `<svelte:options>` the compiler keeps beside it — read by Svelte's own parser
+ * for anything that constructs, so that what runs outside a script is not a
+ * place the scans silently do not look ({@link whatTheScanCannotRead}).
  *
- * **The markup is the compiler's to read, not a pattern's.** It was read with
- * `/\{[^{}]*\bnew\b[^{}]*\}/`, and a construction whose arguments held an object
- * literal — `{new RelayConfigurationError('…', [], JSON.stringify({ bad: true }))}`
- * — had a brace inside it and matched nothing: measured, every scan empty.
+ * **The component is the compiler's to read, all of it.** The markup was read
+ * with `/\{[^{}]*\bnew\b[^{}]*\}/`, and a construction whose arguments held an
+ * object literal had a brace inside it and matched nothing; then the parser's
+ * `fragment` alone was read, and a class built in `customElement`'s `extend`
+ * option, and `Reflect.construct` in an expression, each left the landing green —
+ * all measured. So every node outside the two scripts is visited, and a `new`
+ * or any read of `Reflect` there is a construction the scans refuse.
  */
 export const componentAs = (module: string, source: string): Module => {
   let scripts = blanked(source);
@@ -83,15 +87,20 @@ export const componentAs = (module: string, source: string): Module => {
   let markup: NonNullable<Module['markup']>;
   try {
     const constructsAt: number[] = [];
-    const seen = new Set<object>();
+    const tree = parseComponent(source, { modern: true });
+    // The scripts are the TypeScript parse's to read.
+    const seen = new Set<unknown>([tree.instance, tree.module]);
     const visit = (node: unknown): void => {
       if (typeof node !== 'object' || node === null || seen.has(node)) return;
       seen.add(node);
-      const { type, start } = node as { type?: unknown; start?: unknown };
-      if (type === 'NewExpression' && typeof start === 'number') constructsAt.push(start);
+      const { type, start, object } = node as { type?: unknown; start?: unknown; object?: unknown };
+      const reflective =
+        type === 'MemberExpression' && (object as { name?: unknown } | null)?.name === 'Reflect';
+      if ((type === 'NewExpression' || reflective) && typeof start === 'number')
+        constructsAt.push(start);
       for (const child of Object.values(node)) visit(child);
     };
-    visit(parseComponent(source, { modern: true }).fragment);
+    visit(tree);
     markup = {
       constructsOn: constructsAt.map((at) => source.slice(0, at).split('\n').length)
     };
@@ -392,6 +401,7 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
             parent.propertyName === undefined &&
             specifier !== undefined &&
             ts.isStringLiteral(specifier) &&
+            /^\.\.?\//.test(specifier.text) &&
             posix.normalize(posix.join(posix.dirname(module), specifier.text)) === 'owned.js';
           const declaredAtHome =
             module === 'owned.ts' && ts.isFunctionDeclaration(parent) && parent.parent === file;
@@ -405,7 +415,9 @@ export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules
     if (markup !== undefined && 'unreadable' in markup)
       unread.push(`${module}: a component whose markup the parser could not read`);
     for (const line of markup !== undefined && 'constructsOn' in markup ? markup.constructsOn : [])
-      unread.push(`${module}:${String(line)}: a construction in the markup, which no scan reads`);
+      unread.push(
+        `${module}:${String(line)}: a construction outside the scripts, which no scan reads`
+      );
   }
   return unread;
 };

@@ -22,6 +22,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { types } from 'node:util';
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 
@@ -136,39 +137,52 @@ function theirOwn<T>(label: string, value: T): T {
  */
 function heldBy(root: unknown): Set<object> {
   const held = new Set<object>();
-  const visit = (value: unknown): void => {
-    if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return;
-    if (held.has(value)) return;
+  // A worklist rather than recursion: a chain of twenty thousand ordinary
+  // objects overflowed the stack, the overflow was caught as a refused read,
+  // and the tail went unnoted without a word — measured.
+  const waiting: unknown[] = [root];
+  const add = (value: unknown): void => {
+    if ((typeof value === 'object' || typeof value === 'function') && value !== null)
+      waiting.push(value);
+  };
+  while (waiting.length > 0) {
+    const value = waiting.pop() as object;
+    if (held.has(value)) continue;
     held.add(value);
-    let keys: (string | symbol)[];
+    // **A proxy is noted and not opened.** Opening one runs its traps, and a
+    // trap can change the very value the boundary is about to be handed — the
+    // instrument altering its stimulus, measured. What it wraps is reachable
+    // only through it.
+    if (types.isProxy(value)) continue;
+    let keys: (string | symbol)[] = [];
     try {
       keys = Reflect.ownKeys(value);
     } catch {
-      return;
+      // Keys that refuse to be read hold nothing this can reach.
     }
     for (const key of keys) {
+      let slot: PropertyDescriptor | undefined;
       try {
-        const slot = Reflect.getOwnPropertyDescriptor(value, key);
-        if (slot !== undefined && 'value' in slot) visit(slot.value);
+        slot = Reflect.getOwnPropertyDescriptor(value, key);
       } catch {
         // A slot that refuses to be read holds nothing this can reach.
       }
+      if (slot !== undefined && 'value' in slot) add(slot.value);
     }
     try {
       Map.prototype.forEach.call(value, (member: unknown, key: unknown) => {
-        visit(key);
-        visit(member);
+        add(key);
+        add(member);
       });
     } catch {
       // Not a `Map`.
     }
     try {
-      Set.prototype.forEach.call(value, (member: unknown) => visit(member));
+      Set.prototype.forEach.call(value, add);
     } catch {
       // Not a `Set`.
     }
-  };
-  visit(root);
+  }
   return held;
 }
 
@@ -577,12 +591,47 @@ describe('the failure channel publishes a value this library made, never one it 
             await collected(refs),
             'the collector: an object nothing holds is gone, and one a Set holds is not'
           ).toEqual([true, false]);
+          const noted = (one: object): boolean => handedIn.some(({ ref }) => ref.deref() === one);
           const hanging = { hangs: 'off what is handed in' };
-          theirOwn('the noting’s control', { holds: [hanging] });
+          const asKey = { a: 'Map key' };
+          const asValue = { a: 'Map value' };
+          const asMember = { a: 'Set member' };
+          let tail: { next?: object } = {};
+          const chain = tail;
+          for (let link = 0; link < 20_000; link += 1) {
+            const next = {};
+            tail.next = next;
+            tail = next;
+          }
+          let trapped = 0;
+          const watched = new Proxy(
+            { inside: true },
+            {
+              ownKeys: (target): (string | symbol)[] => {
+                trapped += 1;
+                return Reflect.ownKeys(target);
+              }
+            }
+          );
+          theirOwn('the noting’s control', {
+            holds: [hanging],
+            map: new Map([[asKey, asValue]]),
+            set: new Set([asMember]),
+            chain,
+            watched
+          });
           expect(
-            handedIn.some(({ ref }) => ref.deref() === hanging),
-            'the noting: what hangs off a value handed in is noted too'
-          ).toBe(true);
+            [
+              noted(hanging),
+              noted(asKey),
+              noted(asValue),
+              noted(asMember),
+              noted(tail),
+              noted(watched),
+              trapped
+            ],
+            'the noting: what hangs off a value, a Map’s keys and values, a Set’s members and the end of a long chain are noted too; a proxy is noted and not opened'
+          ).toEqual([true, true, true, true, true, true, 0]);
           retained.clear();
         }
       })();
@@ -1264,7 +1313,8 @@ describe('the failure channel publishes a value this library made, never one it 
             'other/owned.ts',
             "export { hardenOwned as ownedByLibrary } from '../owned.js';"
           ),
-          parsedAs('other/refusal.ts', "import { ownedByLibrary } from './owned.js';")
+          parsedAs('other/refusal.ts', "import { ownedByLibrary } from './owned.js';"),
+          parsedAs('package.ts', "import { ownedByLibrary } from 'owned.js';")
         ];
         expect(
           [
@@ -1276,7 +1326,14 @@ describe('the failure channel publishes a value this library made, never one it 
             constructionSites(new Set(['Ranged']), [probe]).map(({ wrapper }) => wrapper)
           ],
           'the scans’ controls: a minter shadowed by an import, a non-name base, a nameless class and both spellings of Reflect.construct refused; a function expression refused; the two allowed bindings read, and their lookalikes refused; a built-in base and a parenthesised construction read'
-        ).toEqual([5, 1, [], ['owned.ts', 'other/refusal.ts'], ['Ranged'], ['ownedByLibrary']]);
+        ).toEqual([
+          5,
+          1,
+          [],
+          ['owned.ts', 'other/refusal.ts', 'package.ts'],
+          ['Ranged'],
+          ['ownedByLibrary']
+        ]);
         const component = componentAs(
           'Probe.svelte',
           [
@@ -1285,7 +1342,9 @@ describe('the failure channel publishes a value this library made, never one it 
             '</div>',
             '<script lang="ts">',
             '  const made = ownedByLibrary(new Ranged());',
-            '</script>'
+            '</script>',
+            '<p>{Reflect.construct(Ranged, [])}</p>',
+            '<svelte:options customElement={{ tag: "x-probe", extend: (Base) => class extends Base { static made = new Ranged(); } }} />'
           ].join('\n')
         );
         expect(
@@ -1295,10 +1354,14 @@ describe('the failure channel publishes a value this library made, never one it 
             ),
             whatTheScanCannotRead([component])
           ],
-          'the components’ control: a construction in a script, read at its own line; one in the markup, refused'
+          'the components’ control: a construction in a script, read at its own line; one in the markup, one through Reflect and one in an option, refused'
         ).toEqual([
           ['Probe.svelte:5 ownedByLibrary'],
-          ['Probe.svelte:2: a construction in the markup, which no scan reads']
+          [
+            'Probe.svelte:2: a construction outside the scripts, which no scan reads',
+            'Probe.svelte:7: a construction outside the scripts, which no scan reads',
+            'Probe.svelte:8: a construction outside the scripts, which no scan reads'
+          ]
         ]);
         expect(
           [
