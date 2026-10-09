@@ -921,8 +921,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/emitted.ts',
-          from: '      if (ours(property)) next(',
-          to: "      if (ours(property) && property.getName() === '\\0') next("
+          from: '        next(`.${property.getName()}`, checker.getTypeOfSymbol(property));',
+          to: "        if (property.getName() === '\\0') next(`.${property.getName()}`, checker.getTypeOfSymbol(property));"
         }
       ]
     },
@@ -1209,8 +1209,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/emitted.ts',
-          from: "  return paths.filter((path) => path.endsWith('.svelte') && modules.has(key(`${path}.ts`)));",
-          to: "  return paths.filter((path) => path.endsWith('.svelte') && modules.has(key(`${path}.ts`)) && path === '\\0');"
+          from: "): string[] => paths.filter((path) => path.endsWith('.svelte') && exists(`${path}.ts`));",
+          to: "): string[] => paths.filter((path) => path.endsWith('.svelte') && exists(`${path}.ts`) && path === '\\0');"
         }
       ]
     },
@@ -1269,8 +1269,55 @@ export default {
       ]
     },
     {
+      id: 'C10-mapped-event',
+      arm: 'RA1',
+      describe:
+        "a published class's static hands out an interface extending a mapped copy of `CustomEvent<typeof ReqFailure>`",
+      edits: [
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: "import { providerDisposed } from './own.js';",
+          to: "import { providerDisposed, ReqFailure } from './own.js';"
+        },
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: 'export class MissingProviderError extends Error {',
+          to: "type SnapshotEventCopy = {\n  [K in keyof CustomEvent<typeof ReqFailure>]: CustomEvent<typeof ReqFailure>[K];\n};\ninterface SnapshotEvent extends SnapshotEventCopy {}\n\nexport class MissingProviderError extends Error {\n  static event(): SnapshotEvent {\n    return new CustomEvent('snapshot', { detail: ReqFailure });\n  }"
+        }
+      ]
+    },
+    {
+      id: 'I-walk-interface-bases-skipped',
+      arm: 'RA1',
+      describe: 'the reachability walk follows what a class extends and not what an interface does',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '    if ((declared as ts.ObjectType).objectFlags & ts.ObjectFlags.ClassOrInterface)',
+          to: '    if ((declared as ts.ObjectType).objectFlags & ts.ObjectFlags.Class)'
+        }
+      ]
+    },
+    {
+      id: 'I-walk-mapped-members-skipped',
+      arm: 'RA1',
+      describe:
+        'the reachability walk reads a mapped type of the library only for the members the library declares',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '      if (mappedHere || ours(property))',
+          to: "      if ((mappedHere && property.getName() === '\\0') || ours(property))"
+        }
+      ]
+    }
+  ],
+  retired: [
+    {
       id: 'I-shadow-case-sensitive',
       arm: 'RA1',
+      reason:
+        "The shadow check no longer compares names: it asks the file system whether `X.svelte.ts` exists beside `X.svelte`, which is the file system's own matching, Unicode included. There is no comparison left to make case-sensitive.",
       describe: 'the shadowing check compares spellings, whatever the file system does with case',
       edits: [
         {
@@ -1279,9 +1326,7 @@ export default {
           to: "(caseSensitive || path !== '\\0' ? path : path.toLowerCase())"
         }
       ]
-    }
-  ],
-  retired: [
+    },
     {
       id: 'I-script-exports-unread',
       arm: 'RA1',
