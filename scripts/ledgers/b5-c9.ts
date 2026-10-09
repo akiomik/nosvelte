@@ -1270,8 +1270,141 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
-          from: "      if (type === 'NewExpression' && typeof start === 'number') constructsAt.push(start);",
-          to: '      void [type, start, constructsAt];'
+          from: '        constructsAt.push(start);',
+          to: '        void constructsAt;'
+        }
+      ]
+    },
+    {
+      id: 'C9-construct-in-options',
+      arm: 'FC1',
+      describe:
+        "a component constructs a refusal of this library's in a `<svelte:options>` option, unminted",
+      edits: [
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: "  import { useReq } from '../req.svelte.js';",
+          to: "  import { useReq } from '../req.svelte.js';\n  import { RelayConfigurationError } from '../scope.svelte.js';"
+        },
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: '<script lang="ts">\n  /**\n   * @license Apache-2.0',
+          to: '<svelte:options customElement={{ tag: "x-probe", extend: (Base) => class extends Base { static refusal = new RelayConfigurationError("invalid-relay-input", [], "library constructed this"); } }} />\n<script lang="ts">\n  /**\n   * @license Apache-2.0'
+        }
+      ]
+    },
+    {
+      id: 'C9-construct-reflectively-in-markup',
+      arm: 'FC1',
+      describe:
+        "a component constructs a refusal of this library's through `Reflect.construct` in its markup, unminted",
+      edits: [
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: "  import { useReq } from '../req.svelte.js';",
+          to: "  import { useReq } from '../req.svelte.js';\n  import { RelayConfigurationError } from '../scope.svelte.js';"
+        },
+        {
+          file: 'src/lib/v1/components/Text.svelte',
+          from: '<RequestOutlets {request}',
+          to: "<p>{String(Reflect.construct(RelayConfigurationError, ['invalid-relay-input', [], 'library constructed this']))}</p>\n<RequestOutlets {request}"
+        }
+      ]
+    },
+    {
+      id: 'I-component-fragment-only',
+      arm: 'FC1',
+      describe: "the component reader visits the markup's fragment and nothing beside it",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '    visit(tree);',
+          to: '    visit(tree.fragment);'
+        }
+      ]
+    },
+    {
+      id: 'I-markup-allows-reflect',
+      arm: 'FC1',
+      describe: 'the component reader lets `Reflect` through outside the scripts',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: "        type === 'MemberExpression' && (object as { name?: unknown } | null)?.name === 'Reflect';",
+          to: "        type === 'MemberExpression' && object === undefined;"
+        }
+      ]
+    },
+    {
+      id: 'I-import-bare-allowed',
+      arm: 'FC1',
+      describe:
+        'the scan allows an import whose specifier is a bare name that normalizes to `owned.js`',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/errorclasses.ts',
+          from: '            /^\\.\\.?\\//.test(specifier.text) &&\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-noting-opens-proxies',
+      arm: 'FC1',
+      describe: "FC1's noting opens a proxy, running its traps",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    if (types.isProxy(value)) continue;\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-noting-skips-map-keys',
+      arm: 'FC1',
+      describe: "FC1's noting does not note a Map's keys",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        add(key);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-noting-skips-map-values',
+      arm: 'FC1',
+      describe: "FC1's noting does not note a Map's values",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        add(member);\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-noting-skips-set-members',
+      arm: 'FC1',
+      describe: "FC1's noting does not note a Set's members",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '      Set.prototype.forEach.call(value, add);',
+          to: '      Set.prototype.forEach.call(value, () => undefined);'
+        }
+      ]
+    },
+    {
+      id: 'I-noting-bounded',
+      arm: 'FC1',
+      describe: "FC1's noting stops after ten thousand objects, as a recursion that overflowed did",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '    held.add(value);\n',
+          to: '    held.add(value);\n    if (held.size > 10_000) break;\n'
         }
       ]
     }
