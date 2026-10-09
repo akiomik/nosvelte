@@ -432,19 +432,27 @@ describe('the failure channel publishes a value this library made, never one it 
         holding.map.set('a', 2);
         expect(shapeOf(holding) === mapped, 'the shape: a write inside a Map').toBe(false);
 
+        // Each control answers to one branch and no other: an accessor with no
+        // functions, so the function branch cannot answer for it, and an
+        // `Error` whose `stack` is data, since the platform's is an accessor.
+        const notOurs = new Error('not ours');
+        Object.defineProperty(notOurs, 'stack', { value: 'a stack', writable: false });
         expect(
           [
-            openings(Object.freeze({ a: {} }), 'x').length > 0,
-            openings(
-              Object.freeze(Object.defineProperty({}, 'x', { get: () => 1, enumerable: true })),
-              'x'
-            ).length > 0,
-            openings(Object.freeze({ f: Object.freeze(() => 1) }), 'x').length > 0,
-            openings(Object.freeze(new Error('not ours')), 'x').length > 0,
-            openings(Object.freeze({ a: Object.freeze({}) }), 'x').length
+            openings(Object.freeze({ a: {} }), 'x'),
+            openings(Object.freeze(Object.defineProperty({}, 'y', { get: undefined })), 'x'),
+            openings(Object.freeze({ f: Object.freeze(() => 1) }), 'x'),
+            openings(Object.freeze(notOurs), 'x'),
+            openings(Object.freeze({ a: Object.freeze({}) }), 'x')
           ],
-          'openings: an open node, an accessor, a function, a foreign Error; and a closed graph has none'
-        ).toEqual([true, true, true, true, 0]);
+          'openings: an open node, an accessor, a function, a foreign Error, each by its own line; and a closed graph has none'
+        ).toEqual([
+          ['x: a node still open'],
+          ['x: an accessor at y'],
+          ['x: a function reachable'],
+          ['x: an Error this library did not mint'],
+          []
+        ]);
 
         const retained = new Set<object>();
         const refs = (() => {
