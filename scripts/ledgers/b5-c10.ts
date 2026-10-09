@@ -875,15 +875,16 @@ export default {
       ]
     },
     {
-      id: 'C10-opaque-fault-as-descriptor',
+      id: 'C10-opaque-fault-as-broken-accumulator',
       arm: 'RA1',
       requires: ['RX12'],
-      describe: 'a fault this library cannot attribute is attributed to the descriptor',
+      describe:
+        'the record narrowing names a fault this library cannot attribute as a broken accumulator',
       edits: [
         {
           file: 'src/lib/v1/own.ts',
-          from: "      throw capture(thrown, 'unspecified');",
-          to: "      throw capture(thrown, 'descriptor');"
+          from: "  // thing that notices a tenth code.\n  switch (value.code) {\n    case 'accumulator-contract':\n    case 'unspecified':\n      return value;",
+          to: "  // thing that notices a tenth code.\n  switch (value.code) {\n    case 'accumulator-contract':\n      return value;\n    case 'unspecified':\n      return accumulatorBroke(value);"
         }
       ]
     },
