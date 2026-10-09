@@ -465,7 +465,11 @@ describe('this library mints where it constructs, and closes before it freezes',
     // `RequestTransportIncompatibleError`, a class the spike did not have, in
     // `resolveTargets`. Counted per class against the spike's source, by the
     // same scan.
-    expect(sites.length, 'the sites the two minters cover').toBe(68);
+    // **Sixty-seven**: the per-relay transport seam refused an answer that is
+    // not an array and one of the wrong length at two `TransportIncompatibleError`
+    // sites, and refuses both at one now, judged from the one copy it takes of
+    // the answer.
+    expect(sites.length, 'the sites the two minters cover').toBe(67);
     // **And the population read from the other side**, because the scan above
     // matches a declared class *name*: `const Refusal = InvalidDescriptorError;
     // throw new Refusal(…)` is a real unminted refusal branch that leaves every
