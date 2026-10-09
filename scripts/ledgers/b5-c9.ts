@@ -55,18 +55,6 @@ export default {
       ]
     },
     {
-      id: 'C9-accumulator-door-keeps',
-      arm: 'FC1',
-      describe: "the accumulator's catch keeps the value the accumulator threw",
-      edits: [
-        {
-          file: 'src/lib/v1/useStreamedReq.svelte.ts',
-          from: "          const error = capture(thrown, 'unspecified');",
-          to: '          const error = thrown as ReqError;'
-        }
-      ]
-    },
-    {
       id: 'C9-writer-keeps',
       arm: 'FC1',
       requires: ['PB6'],
@@ -887,12 +875,18 @@ export default {
     {
       id: 'I-shape-by-position',
       arm: 'FC1',
-      describe: "FC1's shape names an object by kind rather than by identity",
+      describe:
+        "FC1's shape names an object by kind rather than by identity, a node and a token alike",
       edits: [
         {
           file: 'src/tests/contracts/engine/failure.test.ts',
           from: '    ? identityOf(value)',
           to: "    ? 'an object'"
+        },
+        {
+          file: 'src/tests/contracts/engine/failure.test.ts',
+          from: '        node: identityOf(node),',
+          to: "        node: 'a node',"
         }
       ]
     },
@@ -1099,6 +1093,22 @@ export default {
           to: "  (readdirSync(lib, { recursive: false, encoding: 'utf8' }) as string[])"
         }
       ]
+    }
+  ],
+  retired: [
+    {
+      id: 'C9-accumulator-door-keeps',
+      arm: 'FC1',
+      describe: "the accumulator's catch keeps the value the accumulator threw",
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: "          const error = capture(thrown, 'unspecified');",
+          to: '          const error = thrown as ReqError;'
+        }
+      ],
+      reason:
+        "Equivalent while the query function is wrapped in `rejectsWithOurs`: the catch hands what the accumulator threw to `noteFailure`, which copies it, and rethrows it through the query function's boundary, which copies it again; whichever of the two a surface reads — the record, or the rejection where an older attempt's record is dropped — nothing of the caller's is published or kept. The capture here only makes the record and the rejection one object. Killed at 07fa527, before the wrapper existed, and survived in the ledger's run at b72d34b; the falsifier is the wrapper removed, which `C9-query-function-unwrapped` holds."
     }
   ]
 } satisfies Ledger;
