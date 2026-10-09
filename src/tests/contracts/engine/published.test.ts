@@ -107,6 +107,7 @@ import {
   walkEach,
   writesThrough
 } from './helpers/declarations.js';
+import { againstEmitted, emittedDeclarations } from './helpers/emitted.js';
 import { breachesOf, type Discipline, type LiveInterface } from './helpers/publication.js';
 import {
   acceptAnyEvent,
@@ -2725,6 +2726,259 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       exceptionStated(exceptions);
     }
   );
+
+  // The spike's `LK17`–`LK20`, ported against declarations emitted in memory
+  // rather than by a shell `tsc` over a config the spike alone had: the same
+  // assertions, read off the same emit a consumer compiles against.
+  it('LE17: the Error classes a consumer catches are reachable from the entry, class and code', () => {
+    const entry = readFileSync(join(LIBRARY, 'public-entry.ts'), 'utf8');
+    const emittedText = [...emittedDeclarations().values()].join('\n');
+    const bodyOf = (name: string): string =>
+      new RegExp(`declare class ${name} extends [\\w.]+ \\{([\\s\\S]*?)\\n\\}`).exec(
+        emittedText
+      )?.[1] ?? '';
+    for (const [name, code] of [
+      ['MissingProviderError', 'missing-provider'],
+      ['MissingRandomnessError', 'missing-randomness'],
+      ['IncompleteResultError', 'incomplete-result']
+    ] as const) {
+      expect(entry, `${name} is exported from the entry`).toContain(`export { ${name} }`);
+      const body = bodyOf(name);
+      expect(body, `${name} is emitted as a class`).not.toBe('');
+      expect(body, `${name}'s code is a literal a consumer can branch on`).toMatch(
+        new RegExp(`^\\s+readonly code: ["']${code}["'];`, 'm')
+      );
+    }
+    expect(bodyOf('RelayConfigurationError'), 'the relay family keeps its union').toMatch(
+      /^\s+readonly code: RelayConfigurationErrorCode;/m
+    );
+    for (const published of [
+      'IncompleteResultError',
+      'MissingProviderError',
+      'MissingRandomnessError',
+      'RelayConfigurationError'
+    ]) {
+      const body = bodyOf(published);
+      expect(body, `${published} is emitted as a class at all`).not.toBe('');
+      for (const member of ['message', 'name', 'stack', 'cause'])
+        expect(body, `${member} is readonly on ${published}`).toMatch(
+          new RegExp(`^\\s+readonly ${member}[?]?: `, 'm')
+        );
+    }
+    const reqError =
+      /type ReqError = ([\s\S]*?)\n(?=export |declare |$)/.exec(emittedText)?.[1] ?? '';
+    expect(reqError, 'the union is emitted').not.toBe('');
+    for (const code of REQ_ERROR_CODES)
+      expect(reqError, `${code} is a member of the published union`).toMatch(
+        new RegExp(`code: ["']${code}["']`)
+      );
+    for (const [source, code] of [
+      ['descriptor', 'descriptor-unreadable'],
+      ['relay', 'relay-failed'],
+      ['unspecified', 'unspecified']
+    ] as const)
+      expect(
+        reqError.replace(/\s+/g, ' '),
+        `${source} is paired with ${code} in the published union`
+      ).toMatch(new RegExp(`source: ["']${source}["']; readonly code: ["']${code}["']`));
+  });
+
+  it('LE18: a consumer can branch on `code` and cannot write to what they are handed', () => {
+    const compile = (body: string): readonly string[] =>
+      againstEmitted(body).diagnostics.map((each) => `TS${String(each.code)}`);
+    expect(
+      compile(`
+        import type { ReqState, ReqError } from './public-entry.js';
+        export function branch(s: ReqState): string {
+          if (s.status !== 'error') return 'other';
+          switch (s.error.code) {
+            case 'descriptor-unreadable':
+              return s.error.source;
+            case 'unsupported-filter':
+              return s.error.field;
+            default:
+              return s.error.message;
+          }
+        }
+        export function anyOfThem(value: ReqError): string {
+          return value.code;
+        }
+      `),
+      'a consumer branches on `code` with no class and no cast'
+    ).toEqual([]);
+    for (const member of ['message', 'name', 'stack', 'cause'])
+      expect(
+        compile(`
+          import type { ReqState } from './public-entry.js';
+          export function write(s: ReqState): void {
+            if (s.status === 'error') {
+              (s.error as { ${member}?: unknown }) satisfies object;
+              s.error.${member} = undefined as never;
+            }
+          }
+        `),
+        `writing \`state.error.${member}\` is refused by the published type`
+      ).toContain('TS2540');
+    const emittedText = [...emittedDeclarations().values()].join('\n');
+    for (const [type, member] of [
+      ['ReqState', 'error'],
+      ['RefreshOutcome', 'error'],
+      ['Outlet', 'error'],
+      ['ReqDiagnostics', 'lastError'],
+      ['LegEnd', 'error']
+    ] as const) {
+      const declaration =
+        // `\\b` after the name, which the spike's emit did not need: here
+        // `ReqStateError` is emitted before `ReqState`, and shares its prefix.
+        new RegExp(`(?:type|interface) ${type}\\b[\\s\\S]*?\\n(?=export |declare |$)`).exec(
+          emittedText
+        )?.[0] ?? '';
+      expect(declaration, `${type} is emitted`).not.toBe('');
+      const lines = declaration
+        .split('\n')
+        .filter((line) => new RegExp(`\\b${member}[?]?:`).test(line));
+      expect(lines.length, `${type}.${member} is declared`).toBeGreaterThan(0);
+      for (const line of lines) {
+        if (/:\s*(undefined|never)\s*;/.test(line)) continue;
+        expect(line, `${type}.${member} is one of the channel's types`).toMatch(
+          /:\s*(ReqError|ReqStateError|IncompleteError|RefreshOutcomeError|ReqOutletError|ReqLastError|RelayLegError)\b/
+        );
+      }
+    }
+    for (const fixture of [
+      `import type { ReqState } from './public-entry.js';
+       export const f = (s: ReqState): string | undefined =>
+         s.status === 'error' ? s.error.code : undefined;`,
+      `import type { RefreshOutcome } from './public-entry.js';
+       export const f = (o: RefreshOutcome): string | undefined =>
+         o.kind === 'error' ? o.error.code : undefined;`,
+      `import type { ReqDiagnostics } from './public-entry.js';
+       export const f = (d: ReqDiagnostics): string | undefined => d.lastError?.code;`,
+      `import type { LegEnd } from './public-entry.js';
+       export const f = (l: LegEnd): string | undefined => l.error?.code;`
+    ])
+      expect(compile(fixture), 'a consumer reads `code` off every failure surface').toEqual([]);
+    for (const code of REQ_ERROR_CODES)
+      expect(
+        compile(`
+          import type { ReqError } from './public-entry.js';
+          export function write(value: ReqError): void {
+            if (value.code !== '${code}') return;
+            value.message = '[redacted]';
+          }
+        `),
+        `the ${code} variant refuses a write to \`message\``
+      ).toContain('TS2540');
+    expect(
+      compile(`
+        import type { ReqState } from './public-entry.js';
+        export function impossible(s: ReqState): string {
+          if (s.status === 'error' && s.error.code === 'incomplete-result') return 'x';
+          return 'y';
+        }
+      `),
+      'an error state carrying the partial answer’s code is not a state that exists'
+    ).toContain('TS2367');
+  }, 30_000);
+
+  it('LE19: a second copy of this package breaks `instanceof` and does not break `code`', async () => {
+    const first = await import('$lib/v1/engine.js');
+    const duplicate = '$lib/v1/engine.js?duplicate-install';
+    const second = (await import(/* @vite-ignore */ duplicate)) as {
+      IncompleteResultError: typeof first.IncompleteResultError;
+    };
+    expect(
+      second.IncompleteResultError,
+      'the second import really is a second class object'
+    ).not.toBe(first.IncompleteResultError);
+    const fromTheOtherCopy = new second.IncompleteResultError(['timeout']);
+    expect(
+      fromTheOtherCopy instanceof first.IncompleteResultError,
+      '`instanceof` is false across the two copies — this is the defect, not a bug in the arm'
+    ).toBe(false);
+    expect(fromTheOtherCopy.code, '`code` still answers').toBe('incomplete-result');
+    for (const [module, name, code] of [
+      ['context.svelte', 'MissingProviderError', 'missing-provider'],
+      ['attempt', 'MissingRandomnessError', 'missing-randomness']
+    ] as const) {
+      const copy = (await import(
+        /* @vite-ignore */ `$lib/v1/${module}.js?duplicate-install`
+      )) as Record<string, new () => { code?: unknown }>;
+      const Made = copy[name];
+      expect(Made, `${name} is in the second copy`).toBeDefined();
+      const built = new (Made as new () => { code?: unknown })();
+      expect(built.code, `${name}: \`code\` survives the second copy`).toBe(code);
+      expect(
+        (REQ_ERROR_CODES as readonly string[]).includes(String(built.code)),
+        `${name}: whether the request channel carries this code`
+      ).toBe(name === 'MissingProviderError');
+    }
+  }, 20_000);
+
+  it('LE20: each failure surface declares the codes its paths produce, and no others', () => {
+    const compile = (body: string): readonly string[] =>
+      againstEmitted(body).diagnostics.map((each) => `TS${String(each.code)}`);
+    const ALL = [
+      'incomplete-result',
+      'invalid-descriptor',
+      'unsupported-filter',
+      'accumulator-contract',
+      'descriptor-unreadable',
+      'relay-failed',
+      'unspecified',
+      'provider-disposed',
+      'missing-provider',
+      'relay-not-in-scope',
+      'transport-incompatible'
+    ] as const;
+    const TERMINAL = [
+      'invalid-descriptor',
+      'unsupported-filter',
+      'relay-not-in-scope',
+      'transport-incompatible',
+      'descriptor-unreadable',
+      'missing-provider',
+      'accumulator-contract',
+      'unspecified'
+    ];
+    const SURFACE_CODES: readonly { alias: string; codes: readonly string[] }[] = [
+      { alias: 'ReqStateError', codes: TERMINAL },
+      { alias: 'IncompleteError', codes: ['incomplete-result'] },
+      { alias: 'RefreshOutcomeError', codes: ['accumulator-contract', 'unspecified'] },
+      { alias: 'RelayLegError', codes: ['relay-failed'] },
+      { alias: 'ReqOutletError', codes: ['incomplete-result', ...TERMINAL] },
+      { alias: 'ReqLastError', codes: ['incomplete-result', ...TERMINAL] }
+    ];
+    for (const { alias, codes } of SURFACE_CODES) {
+      const arms = codes.map((code) => `      case '${code}': return '${code}';`).join('\n');
+      const absent = ALL.filter((code) => !codes.includes(code));
+      const negatives = absent
+        .map(
+          (code, at) => `
+          export function unreachable${String(at)}(value: ${alias}): boolean {
+            return value.code === '${code}';
+          }`
+        )
+        .join('\n');
+      expect(
+        compile(`
+          import type { ${alias} } from './public-entry.js';
+          export function exhaustive(value: ${alias}): string {
+            const code: ${alias}['code'] = value.code;
+            switch (code) {
+${arms}
+              default: {
+                const unreached: never = code;
+                return unreached;
+              }
+            }
+          }
+${negatives}
+        `),
+        `${alias} admits exactly the codes its paths produce, and no others`
+      ).toEqual(absent.map(() => 'TS2367'));
+    }
+  }, 60_000);
 
   // @contracts B5-C8
   it(
