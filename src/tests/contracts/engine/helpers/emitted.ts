@@ -118,8 +118,17 @@ const generatedOnly = (one: ts.Diagnostic): boolean => {
  * a rune module of its name passed the walk: measured. Refused rather than
  * resolved, since `./X.svelte.js` names the module at the same path.
  */
-export const shadowedOf = (paths: readonly string[]): string[] =>
-  paths.filter((path) => path.endsWith('.svelte') && paths.includes(`${path}.ts`));
+export const shadowedOf = (
+  paths: readonly string[],
+  caseSensitive: boolean = ts.sys.useCaseSensitiveFileNames
+): string[] => {
+  // As the file system compares names: on one that ignores case,
+  // `article.svelte.ts` shadows `Article.svelte`, and a comparison of
+  // spellings passed it, measured.
+  const key = (path: string): string => (caseSensitive ? path : path.toLowerCase());
+  const modules = new Set(paths.map(key));
+  return paths.filter((path) => path.endsWith('.svelte') && modules.has(key(`${path}.ts`)));
+};
 
 /** Every component of the library, and every module, by path. */
 export const libraryFiles = (): string[] =>
@@ -320,6 +329,16 @@ export function reachableFrom(
     }
     for (const parameter of (type as ts.InterfaceType).typeParameters ?? [])
       next(`<${parameter.symbol.getName()}>`, parameter);
+    // **And what a class or an interface extends**, as instantiated: a class
+    // of this library extending `CustomEvent<typeof ReqFailure>` hands out the
+    // constructor through `detail`, which the platform declares, and the walk
+    // that read only this library's members passed it, measured.
+    const declared =
+      (type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference
+        ? (type as ts.TypeReference).target
+        : type;
+    if ((declared as ts.ObjectType).objectFlags & ts.ObjectFlags.ClassOrInterface)
+      for (const base of checker.getBaseTypes(declared as ts.InterfaceType)) next('<base>', base);
     if ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)
       for (const argument of checker.getTypeArguments(type as ts.TypeReference))
         next('<>', argument);

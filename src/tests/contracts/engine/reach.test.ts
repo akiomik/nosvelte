@@ -901,6 +901,8 @@ describe('which failure code reaches which surface, and what a consumer compiles
             'export declare const Dispatching: import("svelte").SvelteComponent<object, { snapshot: CustomEvent<typeof ReqFailure> }>;',
             'export declare const Erased: import("svelte").SvelteComponent<object, { snapshot: CustomEvent<any> }>;',
             'export declare class Receiving { static take(this: typeof ReqFailure): void; }',
+            'export declare class Inheriting extends CustomEvent<typeof ReqFailure> {}',
+            'export declare class InheritingErased extends CustomEvent<any> {}',
             'export type Renamed = { readonly held: typeof rejection };'
           ].join('\n')
         );
@@ -966,10 +968,16 @@ describe('which failure code reaches which surface, and what a consumer compiles
             alone('Erased').some((line) => line.startsWith('any: __consumer__.ts:Erased')),
             alone('Receiving').some(
               (line) => line.startsWith('snapshot:') && line.includes('(this)')
+            ),
+            alone('Inheriting').some(
+              (line) => line.startsWith('snapshot:') && line.includes('<base>')
+            ),
+            alone('InheritingErased').some(
+              (line) => line.startsWith('any:') && line.includes('<base>')
             )
           ],
-          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, one a conditional return hides, a guard a component exports, a snapshot an event carries, the rejection set inside an alias, an event erased to any, and a snapshot as a receiver'
-        ).toEqual([true, true, true, true, true, true, true, true, true]);
+          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, one a conditional return hides, a guard a component exports, a snapshot an event carries, the rejection set inside an alias, an event erased to any, a snapshot as a receiver, and a snapshot and an any a class inherits'
+        ).toEqual([true, true, true, true, true, true, true, true, true, true, true]);
         // The premise: every published component was emitted as its own
         // declaration and reached from the index, not from a shim that types
         // any `.svelte` file the same way, nor from a module that shares its
@@ -977,10 +985,12 @@ describe('which failure code reaches which surface, and what a consumer compiles
         expect(
           [
             shadowedOf(['a/X.svelte', 'a/X.svelte.ts', 'a/Y.svelte', 'a/Z.svelte.ts']),
+            shadowedOf(['a/Article.svelte', 'a/article.svelte.ts'], false),
+            shadowedOf(['a/Article.svelte', 'a/article.svelte.ts'], true),
             shadowedOf(libraryFiles())
           ],
-          'no component shares a name with a module beside it (its control: a pair, a component alone, a module alone)'
-        ).toEqual([['a/X.svelte'], []]);
+          'no component shares a name with a module beside it (its control: a pair, a component alone, a module alone, and a pair in two cases, as each kind of file system compares them)'
+        ).toEqual([['a/X.svelte'], ['a/Article.svelte'], [], []]);
         expect(
           MAIN_SURFACE.components.filter(
             (component) =>
