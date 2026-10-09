@@ -20,6 +20,8 @@
  * shipped (`src/lib/v1/index.ts`), so `svelte-package`'s output is not what a
  * consumer installs today, and nothing here claims it.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
 
 import ts from 'typescript';
@@ -34,10 +36,61 @@ const CONSUMER = join(EMITTED, '__consumer__.ts');
 
 /**
  * The modules emitted: the published entry, the outlets its components render,
- * and the hook the entry's index adds beside it — `useReq`, whose return type
- * is a route to every failure surface and was not in this program at all.
+ * the hook the entry's index adds beside it — `useReq`, whose return type is a
+ * route to every failure surface — and the index itself, with every component
+ * it re-exports.
  */
-const ROOTS = ['public-entry.ts', 'components/outlets.ts', 'req.svelte.ts'];
+const ROOTS = ['public-entry.ts', 'components/outlets.ts', 'req.svelte.ts', 'index.ts'];
+
+/**
+ * `svelte2tsx`, resolved through `@sveltejs/package` — the copy the package
+ * build emits a component's declaration with, and not a dependency of this
+ * project's own.
+ */
+const fromPackage = createRequire(
+  createRequire(join(ROOT, 'package.json')).resolve('@sveltejs/package/package.json')
+);
+const { svelte2tsx } = fromPackage('svelte2tsx') as typeof import('svelte2tsx');
+
+/**
+ * A component, as the TypeScript `svelte-package` hands the compiler for it:
+ * `svelte2tsx`'s declaration mode, read where the compiler looks for
+ * `./X.svelte` — at `X.svelte.ts` — for a component of the library that has
+ * no module of that name. **A component is a value too**, and what it hands a
+ * consumer beyond its props — an event's detail, an export reached through
+ * `bind:this` — is in its declaration and nowhere in the outlet types: a
+ * dispatched event carrying the snapshot class passed every check that read
+ * the props, measured.
+ */
+function componentAt(path: string): string | undefined {
+  if (!path.startsWith(`${LIBRARY}/`) || !path.endsWith('.svelte.ts')) return undefined;
+  const component = path.slice(0, -'.ts'.length);
+  if (existsSync(path) || !existsSync(component)) return undefined;
+  // The options `emitDts` passes with the v4 shims, `noSvelteComponentTyped`
+  // among them — which the published typings leave out, so the bag is a
+  // variable rather than a literal the compiler checks for excess members.
+  const asPackaged = {
+    filename: component,
+    isTsFile: true,
+    mode: 'dts' as const,
+    noSvelteComponentTyped: true
+  };
+  return svelte2tsx(readFileSync(component, 'utf8'), asPackaged).code;
+}
+
+/** The helpers `svelte2tsx`'s output is written against. */
+const SHIMS = fromPackage.resolve('svelte2tsx/svelte-shims-v4.d.ts');
+
+/**
+ * The one diagnostic `svelte2tsx`'s declaration mode is known to leave in what
+ * it writes — an import of `SvelteComponent` it does not use — and nothing
+ * else of a component's is let through.
+ */
+const generatedOnly = (one: ts.Diagnostic): boolean =>
+  one.code === 6133 &&
+  one.file !== undefined &&
+  componentAt(resolve(one.file.fileName)) !== undefined &&
+  ts.flattenDiagnosticMessageText(one.messageText, '\n').startsWith("'SvelteComponent'");
 
 function projectOptions(): ts.CompilerOptions {
   const read = ts.readConfigFile(resolve(ROOT, 'tsconfig.json'), (path) => ts.sys.readFile(path));
@@ -66,17 +119,28 @@ export function emittedDeclarations(): ReadonlyMap<string, string> {
     .map((name) => resolve(ROOT, name))
     .filter((name) => ts.sys.fileExists(name));
   const host = ts.createCompilerHost(options);
+  const fileExists = host.fileExists.bind(host);
+  const readFile = host.readFile.bind(host);
+  const getSourceFile = host.getSourceFile.bind(host);
+  host.fileExists = (name) => fileExists(name) || componentAt(resolve(name)) !== undefined;
+  host.readFile = (name) => componentAt(resolve(name)) ?? readFile(name);
+  host.getSourceFile = (name, language) => {
+    const component = componentAt(resolve(name));
+    return component === undefined
+      ? getSourceFile(name, language)
+      : ts.createSourceFile(name, component, language, true, ts.ScriptKind.TS);
+  };
   const out = new Map<string, string>();
   host.writeFile = (name, text) => out.set(resolve(name), text);
   const program = ts.createProgram(
-    [...ROOTS.map((name) => join(LIBRARY, name)), ...ambient],
+    [...ROOTS.map((name) => join(LIBRARY, name)), SHIMS, ...ambient],
     options,
     host
   );
   const result = program.emit(undefined, undefined, undefined, true);
-  const reported = [...ts.getPreEmitDiagnostics(program), ...result.diagnostics].map((one) =>
-    ts.flattenDiagnosticMessageText(one.messageText, '\n')
-  );
+  const reported = [...ts.getPreEmitDiagnostics(program), ...result.diagnostics]
+    .filter((one) => !generatedOnly(one))
+    .map((one) => ts.flattenDiagnosticMessageText(one.messageText, '\n'));
   if (result.emitSkipped || reported.length > 0)
     throw new Error(
       `nosvelte test: the declarations did not emit cleanly:\n${reported.join('\n')}`
@@ -219,6 +283,8 @@ export function reachableFrom(
       unread.push(`${path}: ${checker.typeToString(type)}, a kind the walk does not open`);
       continue;
     }
+    for (const parameter of (type as ts.InterfaceType).typeParameters ?? [])
+      next(`<${parameter.symbol.getName()}>`, parameter);
     if ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)
       for (const argument of checker.getTypeArguments(type as ts.TypeReference))
         next('<>', argument);
@@ -230,6 +296,11 @@ export function reachableFrom(
       ['new()', type.getConstructSignatures()]
     ] as const)
       for (const signature of signatures) {
+        // A signature's own type parameters, read for their constraints and
+        // defaults even where the return hides them in a conditional — which
+        // `<T = X>(): T extends … ? T : never` did, measured.
+        for (const parameter of signature.getTypeParameters() ?? [])
+          next(`<${parameter.symbol.getName()}>`, parameter);
         next(kind, checker.getReturnTypeOfSignature(signature));
         for (const parameter of signature.getParameters())
           next(`(${parameter.getName()})`, checker.getTypeOfSymbol(parameter));

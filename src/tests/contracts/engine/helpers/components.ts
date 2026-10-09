@@ -4,8 +4,7 @@
  *
  * A component's props type, read off Svelte's own parse of the component:
  * shared by the arms that bind a published outlet type to the components that
- * take it (`PB13`, `RA1`). And what its scripts export, which a consumer
- * reaches beside the props.
+ * take it (`PB13`, `RA1`).
  */
 import { parse } from 'svelte/compiler';
 
@@ -163,24 +162,4 @@ export function propsTypeOf(source: string): string | undefined {
     declaration?.source?.value === './outlets.js'
     ? name
     : undefined;
-}
-
-/**
- * What a component's scripts export, as `script: statement` lines: from the
- * instance script, a value a consumer reaches through `bind:this`; from the
- * module script, one they import beside the component. Neither is in the
- * component's props, so neither is in its outlet type.
- */
-export function scriptExportsOf(source: string): string[] {
-  const parsed = parse(source, { modern: true });
-  return (
-    [
-      ['instance', parsed.instance],
-      ['module', parsed.module]
-    ] as const
-  ).flatMap(([label, script]) =>
-    ((script?.content as unknown as ScriptNode | undefined)?.body ?? [])
-      .filter((statement) => statement.type.startsWith('Export'))
-      .map((statement) => `${label}: ${statement.type}`)
-  );
 }

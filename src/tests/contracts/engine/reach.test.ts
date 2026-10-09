@@ -43,7 +43,7 @@ import { MAIN_SURFACE } from '$lib/v1/surface.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
 import Outlets from './fixtures/Outlets.svelte';
-import { propsTypeOf, scriptExportsOf } from './helpers/components.js';
+import { propsTypeOf } from './helpers/components.js';
 import { exportsOf } from './helpers/declarations.js';
 import { againstEmitted, EMITTED, reachableFrom } from './helpers/emitted.js';
 import {
@@ -867,47 +867,32 @@ describe('which failure code reaches which surface, and what a consumer compiles
             'useReq from ./req.svelte.js'
           ].sort()
         );
-        // **And a component gives out its props and nothing else**: an
-        // instance script's export is reached through `bind:this`, and a
-        // module script's beside the component, and neither is in the outlet
-        // type the walk reads.
-        expect(
-          scriptExportsOf(
-            '<script lang="ts">\n  export function recognise(): boolean { return true; }\n</script>\n'
-          ),
-          'the script reader’s control: an instance export is seen'
-        ).toEqual(['instance: ExportNamedDeclaration']);
-        expect(
-          MAIN_SURFACE.components.flatMap((component) =>
-            scriptExportsOf(
-              readFileSync(join(LIBRARY, 'components', `${component}.svelte`), 'utf8')
-            ).map((line) => `${component}: ${line}`)
-          ),
-          'no published component’s script exports anything'
-        ).toEqual([]);
       })();
 
       // **(3b) And everything reachable from what is given out**: every type a
-      // consumer reaches from the emitted entry, the hook and the outlets —
-      // through members, statics, signatures, returns, type arguments and
-      // union members — holds no recognition guard, no snapshot constructor
-      // and no type that is the rejection set under another name. The walk's
-      // control is a consumer holding each, one level down and behind a
-      // return.
+      // consumer reaches from the emitted index — the entry, the hook, and
+      // each component as its generated declaration has it, events and
+      // `bind:this` exports included — through members, statics, signatures,
+      // returns, type arguments, type parameters and union members, holds no
+      // recognition guard, no snapshot constructor and no type that is the
+      // rejection set under another name. The walk's control is a consumer
+      // holding each, one level down and behind a return.
       await (async (): Promise<void> => {
         const graph = againstEmitted(
           [
             'import type { RefreshRejection } from "./reqerror.js";',
             'import type { ReqFailure } from "./own.js";',
             'import type { ReqError } from "./public-entry.js";',
-            'import type { useReq } from "./req.svelte.js";',
-            'import type { Outlets } from "./components/outlets.js";',
-            'export type Walked = [typeof useReq, Outlets<object>];',
+            'import type * as Index from "./index.js";',
+            'export type Walked = typeof Index;',
             // Not exported, so the walk meets the set only where the control
             // hides it.
             'declare const rejection: RefreshRejection;',
             'export declare class Lookalike { static readonly tools: { recognises(value: unknown): value is ReqError; snapshot(): Promise<typeof ReqFailure> }; }',
             'export declare class Defaulted { static make<T = typeof ReqFailure>(): T; }',
+            'export declare class Conditional { static make<T = typeof ReqFailure>(): T extends new (...args: never[]) => unknown ? T : never; }',
+            'export declare const Exporting: import("svelte").Component<object, { recognises(value: unknown): value is ReqError }, "">;',
+            'export declare const Dispatching: import("svelte").SvelteComponent<object, { snapshot: CustomEvent<typeof ReqFailure> }>;',
             'export type Renamed = { readonly held: typeof rejection };'
           ].join('\n')
         );
@@ -949,26 +934,40 @@ describe('which failure code reaches which surface, and what a consumer compiles
         };
         // Each lookalike walked on its own, since a type the walk has met
         // once is not met again by another way.
-        const lookalike = breaches([consumer], ['Lookalike']).found;
-        const defaulted = breaches([consumer], ['Defaulted']).found;
-        const renamed = breaches([consumer], ['Renamed']).found;
+        const alone = (name: string): string[] => breaches([consumer], [name]).found;
+        const lookalike = alone('Lookalike');
         expect(
           [
             lookalike.some((line) => line.startsWith('guard: __consumer__.ts:Lookalike.tools')),
             lookalike.some((line) => line.startsWith('snapshot: __consumer__.ts:Lookalike.tools')),
-            defaulted.some((line) => line.startsWith('snapshot:') && line.includes('<default>')),
-            renamed.some((line) => line.startsWith('rejection: __consumer__.ts:Renamed'))
+            alone('Defaulted').some(
+              (line) => line.startsWith('snapshot:') && line.includes('<default>')
+            ),
+            alone('Conditional').some(
+              (line) => line.startsWith('snapshot:') && line.includes('<T><default>')
+            ),
+            alone('Exporting').some((line) => line.startsWith('guard: __consumer__.ts:Exporting')),
+            alone('Dispatching').some((line) =>
+              line.startsWith('snapshot: __consumer__.ts:Dispatching')
+            ),
+            alone('Renamed').some((line) => line.startsWith('rejection: __consumer__.ts:Renamed'))
           ],
-          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, and the rejection set inside an alias'
-        ).toEqual([true, true, true, true]);
-        const published = ['public-entry.d.ts', 'req.svelte.d.ts', 'components/outlets.d.ts'].map(
-          (name) => {
-            const file = program.getSourceFile(join(EMITTED, name));
-            if (file === undefined) throw new Error(`nosvelte test: ${name} is not in the program`);
-            return file;
-          }
-        );
-        const walked = breaches(published);
+          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, one a conditional return hides, a guard a component exports, a snapshot an event carries, and the rejection set inside an alias'
+        ).toEqual([true, true, true, true, true, true, true]);
+        // The premise: every published component was emitted as its own
+        // declaration and reached from the index, not from a shim that types
+        // any `.svelte` file the same way.
+        expect(
+          MAIN_SURFACE.components.filter(
+            (component) =>
+              program.getSourceFile(join(EMITTED, 'components', `${component}.svelte.d.ts`)) ===
+              undefined
+          ),
+          'the premise: each component’s generated declaration is in the walk’s program'
+        ).toEqual([]);
+        const index = program.getSourceFile(join(EMITTED, 'index.d.ts'));
+        if (index === undefined) throw new Error('nosvelte test: the index is not in the program');
+        const walked = breaches([index]);
         expect(walked.found, 'what the published declarations reach').toEqual([]);
         expect(walked.size, 'the premise: the walk reached the surface').toBeGreaterThan(200);
       })();
