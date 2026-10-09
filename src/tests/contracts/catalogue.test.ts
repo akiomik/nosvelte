@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { REQ_ERROR_CODES } from '$lib/v1/reqerror.js';
+
 import {
   asserts,
   backwardFaults,
@@ -33,6 +35,14 @@ import {
   TEST_ID,
   testEvidence
 } from './bridge.js';
+import {
+  HELD_BY,
+  INHERITED,
+  recordedMatrix,
+  ROW_ORDER,
+  SURFACES,
+  WITNESSES
+} from './engine/helpers/reachability.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TESTS_ROOT = resolve(HERE, '..');
@@ -667,5 +677,46 @@ describe('the production contract bridge', () => {
         ).toBe(false);
       }
     }
+  });
+
+  it('CAT43: the reachability matrix the record prints is the one the arms are checked against', () => {
+    // The spike's `CAT29`, reading the table with the Markdown parser rather
+    // than by splitting lines on `|`: the record's reference integrity and
+    // nothing more — that a cell is reachable belongs to the arm that drove it.
+    const { headers, rows } = recordedMatrix();
+    expect(
+      headers,
+      'the columns are the seven surfaces, spelled as the declaration spells them'
+    ).toEqual(['code', ...SURFACES]);
+    expect(rows.length, 'one row per code of the channel').toBe(REQ_ERROR_CODES.length);
+    expect(
+      rows.flat().filter((cell) => cell === ''),
+      'no blank cell: an empty one is an em dash, which is a claim'
+    ).toEqual([]);
+    expect(
+      rows.map(([row, ...cells]) => [
+        row,
+        ...cells.map((cell) => (cell === '—' ? undefined : cell))
+      ]),
+      'every row, in order, every cell, is the declaration’s'
+    ).toEqual(
+      ROW_ORDER.map((one) => [
+        `code \`${one}\``,
+        ...SURFACES.map((surface) => INHERITED[one][surface])
+      ])
+    );
+    expect(
+      [...WITNESSES].sort(),
+      'every witness the table names is held by a production arm'
+    ).toEqual(Object.keys(HELD_BY).sort());
+    const landed = collectFrom(join(TESTS_ROOT, PRODUCTION_ROOT_LEAF));
+    const arms = [...new Set(Object.values(HELD_BY).flat())].sort();
+    expect(
+      arms.filter((arm) => !(landed.files.get(arm) ?? '').endsWith('engine/reach.test.ts')),
+      'and every arm a cell is held by is declared beside the bridge it is checked by'
+    ).toEqual([]);
+    expect(arms.length, 'the premise: the cells are held by more than the landing').toBeGreaterThan(
+      4
+    );
   });
 });
