@@ -120,6 +120,24 @@ export const HELD_BY: Readonly<Record<string, readonly string[]>> = {
   NA4: ['RA1']
 };
 
+/**
+ * Surfaces a witness's arrangement leaves without a failure that its code's
+ * row does not leave empty: what tells two arrangements of one code apart
+ * when one holds a subset of the other's cells.
+ *
+ * **`RM4` is a client the caller disposed after an answer**, and `RM5` the same
+ * client disposed before one; both refuse `refresh()` with
+ * `invalid-descriptor`, and only `RM5` puts it on the state. Read as cells
+ * alone, `RM5`'s observation held `RM4`'s — an arm that dropped the "after an
+ * answer" arrangement and checked `RM4` against `RM5`'s stayed green — and so
+ * did an `RM4` whose state, slot and `lastError` carried `unspecified`, which
+ * the columns allow: measured, both. The arrangement's own fact is that the
+ * answer is kept and nothing but the rejection carries a failure.
+ */
+export const SILENT_AT: Readonly<Partial<Record<string, readonly Surface[]>>> = {
+  RM4: [STATE_ERROR, SLOT, LAST_ERROR]
+};
+
 /** The surfaces one witness holds, and its code: the cells that name it. */
 export function cellsOf(witness: string): { code: ReqErrorCode; surfaces: Surface[] } {
   const found: { code: ReqErrorCode; surface: Surface }[] = [];

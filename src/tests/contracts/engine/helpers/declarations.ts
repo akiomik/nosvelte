@@ -942,7 +942,11 @@ function judgeIn(prelude: string, writes: readonly string[]): WriteVerdict[] {
 /** A name a module exports, and how a consumer meets it. */
 export interface Exported {
   readonly name: string;
-  /** `class`: a constructor and an instance type; `value`: a function or constant; `type`: a type alone. */
+  /**
+   * `class`: a constructor and an instance type; `value`: anything else a
+   * consumer can hold at run time — a function, a constant, an enum, a
+   * namespace with a value in it; `type`: a type alone.
+   */
   readonly kind: 'type' | 'class' | 'value';
   /** The name of the symbol the export resolves to, through every alias: a renamed re-export says what it is. */
   readonly defines: string;
@@ -970,13 +974,19 @@ export function exportsOf(specifier: string): Exported[] {
   const module =
     imported === undefined ? undefined : checker.getSymbolAtLocation(imported.moduleSpecifier);
   if (module === undefined) throw new Error(`exportsOf: ${specifier} did not resolve`);
+  // The module read is a declarer too: a control fixture outside the library
+  // declares its own members, and reading only the library's dropped them.
+  const home = module.declarations?.[0]?.getSourceFile().fileName;
   return checker.getExportsOfModule(module).map((symbol) => {
     const resolved =
       symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+    // **Any value meaning makes it a value.** This read `Function | Variable`,
+    // and an `enum` or a `namespace` holding a guard came out as a type — read
+    // by neither the closed list of values nor the guard scan: measured.
     const kind: Exported['kind'] =
       resolved.flags & ts.SymbolFlags.Class
         ? 'class'
-        : resolved.flags & (ts.SymbolFlags.Function | ts.SymbolFlags.Variable)
+        : resolved.flags & ts.SymbolFlags.Value
           ? 'value'
           : 'type';
     const declaration = resolved.declarations?.[0];
@@ -987,8 +997,10 @@ export function exportsOf(specifier: string): Exported[] {
     // here inherits as a static — is not one this library gives out; the
     // callables read are the export itself and the members it declares.
     const declaredHere = (one: ts.Symbol): boolean =>
-      (one.declarations ?? []).some((each) =>
-        each.getSourceFile().fileName.startsWith(`${library}/`)
+      (one.declarations ?? []).some(
+        (each) =>
+          each.getSourceFile().fileName.startsWith(`${library}/`) ||
+          each.getSourceFile().fileName === home
       );
     let guards = false;
     if (kind !== 'type' && declaration !== undefined) {

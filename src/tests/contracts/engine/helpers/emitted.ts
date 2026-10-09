@@ -32,8 +32,12 @@ const SOURCE = resolve(ROOT, 'src');
 export const EMITTED = resolve(ROOT, '__nosvelte_emitted__');
 const CONSUMER = join(EMITTED, '__consumer__.ts');
 
-/** The modules emitted: the published entry and the outlets its components render. */
-const ROOTS = ['public-entry.ts', 'components/outlets.ts'];
+/**
+ * The modules emitted: the published entry, the outlets its components render,
+ * and the hook the entry's index adds beside it — `useReq`, whose return type
+ * is a route to every failure surface and was not in this program at all.
+ */
+const ROOTS = ['public-entry.ts', 'components/outlets.ts', 'req.svelte.ts'];
 
 function projectOptions(): ts.CompilerOptions {
   const read = ts.readConfigFile(resolve(ROOT, 'tsconfig.json'), (path) => ts.sys.readFile(path));
@@ -102,6 +106,128 @@ export interface Compiled {
   readonly diagnostics: readonly EmittedDiagnostic[];
   /** Files the program read from the repository's source: what the withholding refused, by name. */
   readonly reachedSource: readonly string[];
+}
+
+/** A type a consumer reaches from what a module exports, and the way there. */
+export interface Reached {
+  readonly path: string;
+  readonly type: ts.Type;
+}
+
+/** Types with nothing inside them to reach. */
+const LEAVES =
+  ts.TypeFlags.Any |
+  ts.TypeFlags.Unknown |
+  ts.TypeFlags.Never |
+  ts.TypeFlags.Void |
+  ts.TypeFlags.Undefined |
+  ts.TypeFlags.Null |
+  ts.TypeFlags.String |
+  ts.TypeFlags.Number |
+  ts.TypeFlags.Boolean |
+  ts.TypeFlags.BigInt |
+  ts.TypeFlags.ESSymbol |
+  ts.TypeFlags.StringLiteral |
+  ts.TypeFlags.NumberLiteral |
+  ts.TypeFlags.BooleanLiteral |
+  ts.TypeFlags.BigIntLiteral |
+  ts.TypeFlags.EnumLiteral |
+  ts.TypeFlags.UniqueESSymbol |
+  ts.TypeFlags.NonPrimitive |
+  ts.TypeFlags.TemplateLiteral |
+  ts.TypeFlags.StringMapping;
+
+/**
+ * Every type a consumer can reach from what `files` export, in `compiled`'s
+ * program: each export's value and its type, and from each type its union
+ * and intersection members, its type arguments, the properties declared in
+ * the emitted declarations or the consumer (a platform's `Error.isError` is
+ * not this library giving anything out), the parameters and returns of its
+ * call and construct signatures, and its index signatures.
+ *
+ * **What an export hands out is not only what it is.** A guard held as a
+ * member of a static object of a published class, or a snapshot constructor a
+ * method resolves to, is given out by an export whose own type has neither —
+ * and the scan that read the export and its direct members passed both:
+ * measured. A type this cannot open — a deferred conditional with no
+ * constraint — is in `unread` rather than skipped.
+ */
+export function reachableFrom(
+  compiled: Compiled,
+  files: readonly ts.SourceFile[]
+): { reached: Reached[]; unread: string[] } {
+  const { checker } = compiled;
+  const ours = (symbol: ts.Symbol): boolean =>
+    (symbol.declarations ?? []).some((declaration) =>
+      resolve(declaration.getSourceFile().fileName).startsWith(`${EMITTED}/`)
+    );
+  const queue: Reached[] = [];
+  const unread: string[] = [];
+  for (const file of files) {
+    const module = checker.getSymbolAtLocation(file);
+    if (module === undefined) {
+      unread.push(`${relative(EMITTED, file.fileName)}: not a module`);
+      continue;
+    }
+    for (const exported of checker.getExportsOfModule(module)) {
+      const resolved =
+        exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
+      const at = `${relative(EMITTED, file.fileName)}:${exported.getName()}`;
+      if (resolved.flags & ts.SymbolFlags.Value)
+        queue.push({ path: at, type: checker.getTypeOfSymbol(resolved) });
+      if (resolved.flags & ts.SymbolFlags.Type)
+        queue.push({ path: `${at} (type)`, type: checker.getDeclaredTypeOfSymbol(resolved) });
+    }
+  }
+  const seen = new Set<ts.Type>();
+  const reached: Reached[] = [];
+  while (queue.length > 0) {
+    const { path, type } = queue.shift() as Reached;
+    if (seen.has(type)) continue;
+    seen.add(type);
+    reached.push({ path, type });
+    if (seen.size > 50_000) throw new Error(`nosvelte test: the walk did not close, at ${path}`);
+    const next = (label: string, inner: ts.Type): void => {
+      queue.push({ path: `${path}${label}`, type: inner });
+    };
+    if (type.flags & LEAVES) continue;
+    if (type.isUnionOrIntersection()) {
+      type.types.forEach((member, at) => next(`|${String(at)}`, member));
+      continue;
+    }
+    if (type.flags & ts.TypeFlags.TypeParameter) {
+      const constraint = checker.getBaseConstraintOfType(type);
+      if (constraint !== undefined && constraint !== type) next('<constraint>', constraint);
+      continue;
+    }
+    if (type.flags & ts.TypeFlags.Instantiable) {
+      const constraint = checker.getBaseConstraintOfType(type);
+      if (constraint !== undefined && constraint !== type) next('<constraint>', constraint);
+      else unread.push(`${path}: ${checker.typeToString(type)}, deferred and unconstrained`);
+      continue;
+    }
+    if (!(type.flags & ts.TypeFlags.Object)) {
+      unread.push(`${path}: ${checker.typeToString(type)}, a kind the walk does not open`);
+      continue;
+    }
+    if ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)
+      for (const argument of checker.getTypeArguments(type as ts.TypeReference))
+        next('<>', argument);
+    for (const argument of type.aliasTypeArguments ?? []) next('<alias>', argument);
+    for (const property of checker.getPropertiesOfType(type))
+      if (ours(property)) next(`.${property.getName()}`, checker.getTypeOfSymbol(property));
+    for (const [kind, signatures] of [
+      ['()', type.getCallSignatures()],
+      ['new()', type.getConstructSignatures()]
+    ] as const)
+      for (const signature of signatures) {
+        next(kind, checker.getReturnTypeOfSignature(signature));
+        for (const parameter of signature.getParameters())
+          next(`(${parameter.getName()})`, checker.getTypeOfSymbol(parameter));
+      }
+    for (const info of checker.getIndexInfosOfType(type)) next('[]', info.type);
+  }
+  return { reached, unread };
 }
 
 const held = new Map<string, ts.SourceFile>();

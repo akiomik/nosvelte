@@ -20,6 +20,8 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
+import { render } from '@testing-library/svelte';
+import type Nostr from 'nostr-typedef';
 import type { RxNostr } from 'rx-nostr';
 import { createRxForwardReq } from 'rx-nostr';
 import { QueryClient } from 'tanstack-svelte-query-v6';
@@ -29,18 +31,21 @@ import WS from 'vitest-websocket-mock';
 
 import type { StreamAccumulator } from '$lib/v1/accumulate.js';
 import { createAttemptRegistry } from '$lib/v1/attempt.js';
-import { createNostrContext, setNostrContext } from '$lib/v1/context.svelte.js';
-import { deriveOutlet, type ReqState } from '$lib/v1/engine.js';
+import { createNostrContext, getNostrContext, setNostrContext } from '$lib/v1/context.svelte.js';
+import { deriveOutlet, type ReqHandle } from '$lib/v1/engine.js';
 import { captureFromRelay, recordedFailure, terminalFailure } from '$lib/v1/own.js';
 import { isOwnedByLibrary } from '$lib/v1/owned.js';
+import type { ReqDescriptor } from '$lib/v1/public-entry.js';
+import { useReq } from '$lib/v1/req.svelte.js';
 import { DOOR_OF, REQ_ERROR_CODES, type ReqError, type ReqErrorCode } from '$lib/v1/reqerror.js';
 import type { TransportKeys } from '$lib/v1/scope.svelte.js';
 import { MAIN_SURFACE } from '$lib/v1/surface.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
+import Outlets from './fixtures/Outlets.svelte';
 import { propsTypeOf } from './helpers/components.js';
 import { exportsOf } from './helpers/declarations.js';
-import { againstEmitted } from './helpers/emitted.js';
+import { againstEmitted, EMITTED, reachableFrom } from './helpers/emitted.js';
 import {
   cellsOf,
   codesAt,
@@ -48,6 +53,7 @@ import {
   INHERITED,
   recordedMatrix,
   ROW_ORDER,
+  SILENT_AT,
   type Surface,
   SURFACES,
   WITNESSES
@@ -55,8 +61,10 @@ import {
 import {
   acceptAnyEvent,
   createTestRelay,
+  fakeEvent,
   HARNESS_DIVERGENCES,
-  respondWithEose
+  respondWithEose,
+  respondWithEvent
 } from './helpers/relay.js';
 import { flush, mount } from './helpers/runes.svelte.js';
 
@@ -107,25 +115,44 @@ const settledCall = (call: Promise<unknown>): Promise<Settled> =>
 type Observed = Partial<Record<Surface, unknown>>;
 
 /**
+ * What the `error` outlet is handed when the request is rendered, by the
+ * component every published request component renders through: the argument a
+ * consumer's snippet holds, or `undefined` when it is not rendered.
+ *
+ * **Rendered, not derived.** The slot was read off `deriveOutlet`, which is
+ * what the component consults, and a component that consulted it and then
+ * withheld the snippet — for the partial answer, say — left the cell held while
+ * a consumer received nothing: measured.
+ */
+function renderedError(handle: ReqHandle): unknown {
+  let error: unknown;
+  const view = render(Outlets, {
+    props: {
+      request: handle,
+      single: false,
+      held: (outlet: string, argument: unknown) => {
+        if (outlet === 'error') error = (argument as { error?: unknown }).error;
+      }
+    }
+  });
+  flush();
+  view.unmount();
+  return error;
+}
+
+/**
  * Every surface, read off one handle, so the negative half is total. The two
  * `refresh()` surfaces are present only when the arm made a call: "undefined
  * because nobody asked" is not evidence that a code cannot get there.
  */
-function observe(
-  handle: {
-    readonly state: ReqState;
-    readonly diagnostics: { readonly lastError?: unknown; readonly legEnded?: unknown };
-  },
-  call?: Settled
-): Observed {
+function observe(handle: ReqHandle, call?: Settled): Observed {
   const state = handle.state as { status: string; error?: ReqError };
-  const slot = deriveOutlet(handle.state) as { error?: ReqError };
   const ended = handle.diagnostics.legEnded as { kind?: string; error?: ReqError } | undefined;
   const [stateError, stateIncomplete, outcome, rejects, errorSlot, lastError, legEnd] = SURFACES;
   return {
     [stateError]: state.status === 'error' ? state.error : undefined,
     [stateIncomplete]: state.status === 'incomplete' ? state.error : undefined,
-    [errorSlot]: slot.error,
+    [errorSlot]: renderedError(handle),
     [lastError]: handle.diagnostics.lastError,
     [legEnd]: ended?.kind === 'ended' ? ended.error : undefined,
     ...(call === undefined
@@ -155,6 +182,22 @@ beforeEach((context) => {
 });
 
 /**
+ * Every code an observation saw at a surface the record calls empty for it —
+ * the column rule, on its own for an arrangement that holds no witness's
+ * whole row.
+ */
+function forbiddenAt(observed: Observed): string[] {
+  return SURFACES.filter((surface) =>
+    Object.prototype.hasOwnProperty.call(observed, surface)
+  ).flatMap((surface) => {
+    const seen = codeOf(observed[surface]);
+    return seen !== undefined && INHERITED[seen as ReqErrorCode]?.[surface] === undefined
+      ? [`${String(seen)} at ${surface}, which the record calls empty`]
+      : [];
+  });
+}
+
+/**
  * Read an observation back against one inherited witness's cells, as a list of
  * what is wrong with it — empty when it holds them:
  *
@@ -165,7 +208,9 @@ beforeEach((context) => {
  *    carry it — two arms can split a row, and neither is the authority on the
  *    other's share;
  * 4. every code seen anywhere, the witness's or another, is one the record
- *    allows at that surface.
+ *    allows at that surface;
+ * 5. every surface the witness's arrangement leaves silent ({@link SILENT_AT})
+ *    was read and carries no failure at all.
  */
 function reaches(witness: string, observed: Observed): string[] {
   const wrong: string[] = [];
@@ -184,12 +229,17 @@ function reaches(witness: string, observed: Observed): string[] {
   }
   for (const surface of SURFACES) {
     if (!Object.prototype.hasOwnProperty.call(observed, surface)) continue;
-    const seen = codeOf(observed[surface]);
-    if (INHERITED[code][surface] === undefined && seen === code)
+    if (INHERITED[code][surface] === undefined && codeOf(observed[surface]) === code)
       wrong.push(`${witness}: ${surface} is an empty cell for ${code}, and carries it`);
-    if (seen !== undefined && INHERITED[seen as ReqErrorCode]?.[surface] === undefined)
-      wrong.push(`${witness}: ${String(seen)} at ${surface}, which the record calls empty`);
   }
+  wrong.push(...forbiddenAt(observed).map((line) => `${witness}: ${line}`));
+  for (const surface of SILENT_AT[witness] ?? [])
+    if (!Object.prototype.hasOwnProperty.call(observed, surface))
+      wrong.push(`${witness}: ${surface} was not read`);
+    else if (codeOf(observed[surface]) !== undefined)
+      wrong.push(
+        `${witness}: the arrangement publishes ${String(codeOf(observed[surface]))} at ${surface}, where it publishes nothing`
+      );
   if (wrong.length === 0) {
     const mine = observedBy.get(arm) ?? new Set<string>();
     mine.add(witness);
@@ -226,22 +276,44 @@ const ALIASES: Readonly<Partial<Record<Surface, string>>> = {
 };
 
 /**
+ * The two unions a class family's `code` is declared with, by their members —
+ * a name kept while its members widen is a different promise under the same
+ * spelling.
+ */
+const FAMILIES: Readonly<Record<string, readonly string[]>> = {
+  FailureCode: ['descriptor-unreadable', 'relay-failed', 'unspecified'],
+  RelayConfigurationErrorCode: [
+    'conflicting-capabilities',
+    'invalid-relay-input',
+    'non-idempotent-url',
+    'transport-incompatible',
+    'transport-key-mismatch'
+  ]
+};
+
+/** A class's `code` as a consumer reads it: the union it is annotated with, if any, and its members. */
+interface ClassCode {
+  readonly family?: string;
+  readonly literals: readonly string[];
+}
+
+/**
  * Each class this library owns and the `code` a consumer reads off it: a
- * literal, or one of the two unions the row names, which follow the class
- * family rather than the class.
+ * literal, or one of the two {@link FAMILIES}, which follow the class family
+ * rather than the class.
  */
 const CLASS_CODES: Readonly<Record<string, string>> = {
-  MissingRandomnessError: '"missing-randomness"',
-  AttemptAbandonedError: '"attempt-abandoned"',
-  AccumulatorContractError: '"accumulator-contract"',
-  MissingProviderError: '"missing-provider"',
-  MissingVerifierError: '"missing-verifier"',
-  IncompleteResultError: '"incomplete-result"',
-  UnsupportedFilterError: '"unsupported-filter"',
-  InvalidDescriptorError: '"invalid-descriptor"',
-  RelayNotInScopeError: '"relay-not-in-scope"',
-  RequestTransportIncompatibleError: '"transport-incompatible"',
-  ProviderDisposedError: '"provider-disposed"',
+  MissingRandomnessError: 'missing-randomness',
+  AttemptAbandonedError: 'attempt-abandoned',
+  AccumulatorContractError: 'accumulator-contract',
+  MissingProviderError: 'missing-provider',
+  MissingVerifierError: 'missing-verifier',
+  IncompleteResultError: 'incomplete-result',
+  UnsupportedFilterError: 'unsupported-filter',
+  InvalidDescriptorError: 'invalid-descriptor',
+  RelayNotInScopeError: 'relay-not-in-scope',
+  RequestTransportIncompatibleError: 'transport-incompatible',
+  ProviderDisposedError: 'provider-disposed',
   ReqFailure: 'FailureCode',
   RelayConfigurationError: 'RelayConfigurationErrorCode',
   InvalidRelayScopeError: 'RelayConfigurationErrorCode',
@@ -251,6 +323,11 @@ const CLASS_CODES: Readonly<Record<string, string>> = {
   TransportKeyMismatchError: 'RelayConfigurationErrorCode'
 };
 
+const classCodeOf = (declared: string): ClassCode => {
+  const family = FAMILIES[declared];
+  return family === undefined ? { literals: [declared] } : { family: declared, literals: family };
+};
+
 /** What the published entry gives out as values, by the name a consumer imports. */
 const PUBLISHED_VALUES = [
   'IncompleteResultError',
@@ -258,6 +335,17 @@ const PUBLISHED_VALUES = [
   'MissingRandomnessError',
   'RelayConfigurationError'
 ];
+
+/** Where each published hook and class is defined, relative to `src/lib/v1`. */
+const MODULE_OF: Readonly<Record<string, string>> = {
+  useReq: 'req.svelte.ts',
+  useRelayDiagnostics: 'diagnostics.svelte.ts',
+  useSend: 'send.svelte.ts',
+  IncompleteResultError: 'engine.ts',
+  MissingProviderError: 'context.svelte.ts',
+  MissingRandomnessError: 'attempt.ts',
+  RelayConfigurationError: 'scope.svelte.ts'
+};
 
 describe('which failure code reaches which surface, and what a consumer compiles against it', () => {
   // @contracts B5-C10
@@ -294,10 +382,15 @@ describe('which failure code reaches which surface, and what a consumer compiles
             reaches('RM1', { ...right, [outcome]: { code: 'relay-failed' } }).some((line) =>
               line.includes('which the record calls empty')
             ),
-            reaches('RM1', right).some((line) => line.includes('did not mint'))
+            reaches('RM1', right).some((line) => line.includes('did not mint')),
+            reaches('RM4', {
+              ...right,
+              [stateError]: { code: 'invalid-descriptor' },
+              [rejects]: { code: 'invalid-descriptor' }
+            }).some((line) => line.includes('where it publishes nothing'))
           ],
-          'the bridge refuses a borrowed arm, a wrong code, an empty cell carried, a code the record forbids, and a value nobody minted'
-        ).toEqual([true, true, true, true, true]);
+          'the bridge refuses a borrowed arm, a wrong code, an empty cell carried, a code the record forbids, a value nobody minted, and another arrangement of the same code'
+        ).toEqual([true, true, true, true, true, true]);
         observedBy.delete(arm);
         // The completeness reader: an arm that has driven nothing yet is
         // missing every witness it is listed for.
@@ -319,19 +412,26 @@ describe('which failure code reaches which surface, and what a consumer compiles
         // sees a guard however it is named; the population finds a class whose
         // base is an alias.
         const lookalikes = exportsOf('./helpers/fixtures/lookalikes.js');
+        const read = (name: string) => lookalikes.find((one) => one.name === name);
         expect(
           [
-            lookalikes.find(({ name }) => name === 'Snapshot')?.defines,
-            lookalikes.find(({ name }) => name === 'recognises')?.guards
+            read('Snapshot')?.defines,
+            read('recognises')?.guards,
+            [read('Recognise')?.kind, read('Recognise')?.guards],
+            read('FailureKind')?.kind
           ],
-          'the export reader: a renamed snapshot class, and a guard under another name'
-        ).toEqual(['ReqFailure', true]);
+          'the export reader: a renamed snapshot class, a guard under another name, a guard inside a namespace, and an enum as the value it is'
+        ).toEqual(['ReqFailure', true, ['value', true], 'value']);
+        const population = errorClassCodes([
+          resolve(ROOT, 'src/tests/contracts/engine/helpers/fixtures/lookalikes.ts')
+        ]).codes;
         expect(
-          errorClassCodes([
-            resolve(ROOT, 'src/tests/contracts/engine/helpers/fixtures/lookalikes.ts')
-          ]).codes['AliasedBase'],
-          'the population: an Error class whose base is spelled through an alias'
-        ).toBe('"aliased"');
+          [population['AliasedBase'], population['AnnotatedCode']],
+          'the population: an Error class whose base is spelled through an alias, and a code annotated with one, read for its members'
+        ).toEqual([
+          { literals: ['aliased'] },
+          { family: 'LookalikeCode', literals: ['one', 'two'] }
+        ]);
       })();
 
       // **(1) The channel's population**, one set read four ways: the matrix's
@@ -385,13 +485,15 @@ describe('which failure code reaches which surface, and what a consumer compiles
       // by an error on another line.
       await (async (): Promise<void> => {
         const lines: string[] = [
-          'import type { IncompleteCauses, IncompleteError, ReqDiagnostics, ReqError, ReqLastError, ReqOutletError, ReqState, ReqStateError, RefreshOutcome, RefreshOutcomeError, RelayLegError, LegEnd } from "./public-entry.js";',
+          `import type { IncompleteCauses, IncompleteError, ReqDiagnostics, ReqError, ReqHandle, ReqLastError, ReqOutletError, ReqPlan, ReqState, ReqStateError, RefreshOutcome, RefreshOutcomeError, RelayLegError, LegEnd, ${PUBLISHED_VALUES.join(', ')} } from "./public-entry.js";`,
           'import type { Outlets } from "./components/outlets.js";',
+          'import type { useReq } from "./req.svelte.js";',
           'type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;',
           'type Of<C extends ReqError["code"]> = Extract<ReqError, { readonly code: C }>;',
           'type ErrorOutletOf<P> = P extends { error?: infer S } ? (NonNullable<S> extends (...args: infer A) => unknown ? (A extends [infer First] ? (First extends { readonly error: infer E } ? E : "no error member") : "not one argument") : "not callable") : "no error outlet";',
           'type OutletChecked<P> = "error" extends keyof P ? Equal<ErrorOutletOf<P>, ReqOutletError> : true;',
-          'export type Unused = [IncompleteCauses, IncompleteError, ReqDiagnostics, ReqLastError, ReqOutletError, ReqState, ReqStateError, RefreshOutcome, RefreshOutcomeError, RelayLegError, LegEnd, Outlets<object>, Of<"unspecified">];'
+          'type HasError<P> = "error" extends keyof P ? true : false;',
+          `export type Unused = [IncompleteCauses, IncompleteError, ReqDiagnostics, ReqHandle, ReqLastError, ReqOutletError, ReqPlan, ReqState, ReqStateError, RefreshOutcome, RefreshOutcomeError, RelayLegError, LegEnd, Outlets<object>, Of<"unspecified">, typeof useReq, ${PUBLISHED_VALUES.join(', ')}];`
         ];
         const expected = new Map<number, { codes: number[]; label: string }>();
         const probe = (text: string, label: string, codes: number[] = []): void => {
@@ -449,6 +551,42 @@ describe('which failure code reaches which surface, and what a consumer compiles
           ],
           ['LegEnd error', 'LegEnd["error"]', 'RelayLegError | undefined']
         ];
+        // **And what the hook hands out is that handle, each member that type**:
+        // the aliases are the declarations a consumer reads, and the handle is
+        // what they are reached through — a handle whose `refresh` or
+        // `diagnostics` was declared wider kept every alias equal while a
+        // consumer's `useReq(…)` read the wider one: measured, both.
+        surfaceTypes.push(
+          ['useReq', 'typeof useReq', '(plan: () => ReqPlan) => ReqHandle'],
+          ['ReqHandle state', 'ReqHandle["state"]', 'ReqState'],
+          ['ReqHandle diagnostics', 'ReqHandle["diagnostics"]', 'ReqDiagnostics'],
+          ['ReqHandle refresh', 'ReqHandle["refresh"]', '() => Promise<RefreshOutcome>'],
+          [
+            'useReq state error',
+            'Extract<ReturnType<typeof useReq>["state"], { readonly status: "error" }>["error"]',
+            'ReqStateError'
+          ],
+          [
+            'useReq incomplete error',
+            'Extract<ReturnType<typeof useReq>["state"], { readonly status: "incomplete" }>["error"]',
+            'IncompleteError'
+          ],
+          [
+            'useReq refresh outcome error',
+            'Extract<Awaited<ReturnType<ReturnType<typeof useReq>["refresh"]>>, { readonly kind: "error" }>["error"]',
+            'RefreshOutcomeError'
+          ],
+          [
+            'useReq lastError',
+            'ReturnType<typeof useReq>["diagnostics"]["lastError"]',
+            'ReqLastError | undefined'
+          ],
+          [
+            'useReq legEnded error',
+            'NonNullable<ReturnType<typeof useReq>["diagnostics"]["legEnded"]>["error"]',
+            'RelayLegError | undefined'
+          ]
+        );
         for (const [label, declared, alias] of surfaceTypes)
           probe(
             `export const equal_${label.replace(/\W+/g, '_')}: Equal<${declared}, ${alias}> = true;`,
@@ -474,11 +612,19 @@ describe('which failure code reaches which surface, and what a consumer compiles
           'the premise: the components’ outlet types were read'
         ).toBeGreaterThan(5);
         lines[1] = `import type { Outlets, ${[...outletTypes].sort().join(', ')} } from "./components/outlets.js";`;
-        for (const props of [...outletTypes].sort())
+        // `OutletChecked` holds of props with no `error` outlet, so which
+        // have one is stated: every request component's, and not the
+        // provider's, which renders no request.
+        for (const props of [...outletTypes].sort()) {
           probe(
             `export const outlet_${props}: OutletChecked<${props}> = true;`,
             `${props}: its error outlet is handed a ReqOutletError`
           );
+          probe(
+            `export const has_${props}: HasError<${props}> = ${String(props !== 'NostrAppProps')};`,
+            `${props}: ${props === 'NostrAppProps' ? 'no' : 'an'} error outlet`
+          );
+        }
         // The probe's own control: `any` is not equal to an alias.
         probe(
           'export const equalAny: Equal<ReqStateError, any> = true;',
@@ -505,6 +651,33 @@ describe('which failure code reaches which surface, and what a consumer compiles
           'status error and code incomplete-result do not compare',
           [2367]
         );
+        // **One level down is the same channel**: a cause is a value of it —
+        // `accumulator-contract` carries the relay's there — so it is typed as
+        // the union, branched on as the top level is, and written to as little.
+        for (const code of REQ_ERROR_CODES)
+          probe(
+            `export const cause_${code.replace(/-/g, '_')}: Equal<Of<"${code}">["cause"], ReqError | undefined> = true;`,
+            `${code}'s cause is a ReqError or nothing`
+          );
+        probe(
+          'export function throughCause(state: ReqState): string { if (state.status !== "error" || state.error.cause === undefined) return ""; const cause = state.error.cause; switch (cause.code) { case "relay-failed": return cause.source; case "invalid-descriptor": return cause.field; default: return cause.message; } }',
+          'branching on a nested cause narrows to its members'
+        );
+        for (const alias of Object.values(ALIASES))
+          for (const member of ['message', 'name', 'stack', 'cause', 'code'])
+            probe(
+              `export function nested_${alias}_${member}(error: ${alias}): void { if (error.cause !== undefined) error.cause.${member} = undefined as never; }`,
+              `${alias}'s cause: ${member} is read-only`,
+              [2540]
+            );
+        // **And the classes a consumer catches** are written to as little.
+        for (const published of PUBLISHED_VALUES)
+          for (const member of ['message', 'name', 'stack', 'cause', 'code'])
+            probe(
+              `export function caught_${published}_${member}(error: ${published}): void { error.${member} = undefined as never; }`,
+              `${published}: ${member} is read-only`,
+              [2540]
+            );
 
         // **Structural**: a plain object of each variant's shape is a value of
         // the channel, so a nominal brand added to a variant is a break here.
@@ -550,6 +723,14 @@ describe('which failure code reaches which surface, and what a consumer compiles
           compiled.reachedSource,
           'the consumer compiled against the declarations alone'
         ).toEqual([]);
+        // Exactly the codes, in order — a subset would let a probe that must
+        // compile clean pass beside an error, and its control says so.
+        const sameCodes = (found: readonly number[], codes: readonly number[]): boolean =>
+          JSON.stringify(found) === JSON.stringify(codes);
+        expect(
+          [sameCodes([2367, 2322], [2367]), sameCodes([], [2540]), sameCodes([2540], [2540])],
+          'the per-line comparison is exact: an extra code and a missing one are each a difference'
+        ).toEqual([false, false, true]);
         const byLine = new Map<number, number[]>();
         for (const one of compiled.diagnostics)
           byLine.set(one.line, [...(byLine.get(one.line) ?? []), one.code]);
@@ -565,7 +746,7 @@ describe('which failure code reaches which surface, and what a consumer compiles
             );
         for (const [line, { codes, label }] of expected) {
           const found = byLine.get(line) ?? [];
-          if (JSON.stringify(found) !== JSON.stringify(codes))
+          if (!sameCodes(found, codes))
             failures.push(
               `${label}: expected [${codes.join(', ')}], compiled [${found.join(', ')}]`
             );
@@ -578,6 +759,7 @@ describe('which failure code reaches which surface, and what a consumer compiles
       // index that re-exports it.
       await (async (): Promise<void> => {
         for (const specifier of ['$lib/v1/public-entry.js', '$lib/v1/index.js']) {
+          const index = specifier === '$lib/v1/index.js';
           const exported = exportsOf(specifier);
           const names = exported.map(({ name }) => name);
           const defined = exported.map(({ defines }) => defines);
@@ -587,32 +769,135 @@ describe('which failure code reaches which surface, and what a consumer compiles
             ),
             `${specifier}: no snapshot class, no rejection alias and no recognition guard, under any name`
           ).toEqual([]);
-          // **Closed, as values**: a recogniser that answers `boolean` has no
-          // predicate to find, so what may be given out at all is listed —
-          // the hooks, the components, and the classes a consumer catches.
-          const allowed = new Set<string>([
-            ...MAIN_SURFACE.hooks,
-            ...MAIN_SURFACE.components,
-            ...PUBLISHED_VALUES
-          ]);
+          // **Closed, as values, by name and by what each name is**: a
+          // recogniser that answers `boolean` has no predicate to find, so what
+          // may be given out at all is listed — and listed with the module that
+          // defines it, since a name the entry does not use (a component's, on
+          // the entry that has none) took a snapshot class or a recogniser under
+          // it and passed a list of names: measured.
+          const given = (name: string): string[] =>
+            MAIN_SURFACE.components.includes(name as never)
+              ? [name, 'value']
+              : [
+                  name,
+                  PUBLISHED_VALUES.includes(name) ? 'class' : 'value',
+                  name,
+                  MODULE_OF[name] ?? '<unlisted>'
+                ];
           expect(
             exported
-              .filter(({ kind, name }) => kind !== 'type' && !allowed.has(name))
-              .map(({ name }) => name),
-            `${specifier}: a value given out that is not a hook, a component or a published class`
-          ).toEqual([]);
-          const classes = exported
-            .filter(({ kind }) => kind === 'class')
-            .map(({ defines }) => defines);
-          if (specifier === '$lib/v1/public-entry.js')
-            expect([...classes].sort(), 'the classes the entry publishes').toEqual(
-              [...PUBLISHED_VALUES].sort()
-            );
+              .filter(({ kind }) => kind !== 'type')
+              .map((one) =>
+                MAIN_SURFACE.components.includes(one.name as never)
+                  ? [one.name, one.kind]
+                  : [one.name, one.kind, one.defines, one.module]
+              )
+              .sort(),
+            `${specifier}: the values given out are the hooks, the components and the published classes, each defined where it is`
+          ).toEqual(
+            [
+              ...MAIN_SURFACE.hooks.filter((hook) => index || hook !== 'useReq'),
+              ...(index ? MAIN_SURFACE.components : []),
+              ...PUBLISHED_VALUES
+            ]
+              .map(given)
+              .sort()
+          );
+          // **And closed as types**, each under its own name: a new alias of
+          // a set the row keeps internal is a new name, and it was published
+          // under one and passed: measured.
+          expect(
+            exported
+              .filter(({ kind }) => kind === 'type')
+              .map(({ name, defines }) => (name === defines ? name : `${name} as ${defines}`))
+              .sort(),
+            `${specifier}: the types given out are the surface's, each under its own name`
+          ).toEqual(MAIN_SURFACE.types.filter((name) => !PUBLISHED_VALUES.includes(name)).sort());
           expect(
             exported.filter(({ guards }) => guards).map(({ name }) => name),
             `${specifier}: no exported callable answers a type predicate`
           ).toEqual([]);
         }
+      })();
+
+      // **(3b) And everything reachable from what is given out**: every type a
+      // consumer reaches from the emitted entry, the hook and the outlets —
+      // through members, statics, signatures, returns, type arguments and
+      // union members — holds no recognition guard, no snapshot constructor
+      // and no type that is the rejection set under another name. The walk's
+      // control is a consumer holding each, one level down and behind a
+      // return.
+      await (async (): Promise<void> => {
+        const graph = againstEmitted(
+          [
+            'import type { RefreshRejection } from "./reqerror.js";',
+            'import type { ReqFailure } from "./own.js";',
+            'import type { ReqError } from "./public-entry.js";',
+            'import type { useReq } from "./req.svelte.js";',
+            'import type { Outlets } from "./components/outlets.js";',
+            'export type Walked = [typeof useReq, Outlets<object>];',
+            // Not exported, so the walk meets the set only where the control
+            // hides it.
+            'declare const rejection: RefreshRejection;',
+            'export declare class Lookalike { static readonly tools: { recognises(value: unknown): value is ReqError; snapshot(): Promise<typeof ReqFailure> }; }',
+            'export type Renamed = { readonly held: typeof rejection };'
+          ].join('\n')
+        );
+        expect(
+          [graph.diagnostics, graph.reachedSource],
+          'the walk’s program compiles, against the declarations alone'
+        ).toEqual([[], []]);
+        const { checker, program, consumer } = graph;
+        const declared = consumer.statements.find(ts.isVariableStatement)?.declarationList
+          .declarations[0];
+        if (declared === undefined) throw new Error('nosvelte test: no rejection to compare to');
+        const rejection = checker.getTypeAtLocation(declared.name);
+        const ownedSnapshot = (type: ts.Type): boolean =>
+          (type.getSymbol()?.declarations ?? []).some(
+            (declaration) =>
+              ts.isClassDeclaration(declaration) &&
+              declaration.name?.text === 'ReqFailure' &&
+              resolve(declaration.getSourceFile().fileName) === join(EMITTED, 'own.d.ts')
+          );
+        const breaches = (files: readonly ts.SourceFile[]) => {
+          const { reached, unread } = reachableFrom(graph, files);
+          const found: string[] = [...unread.map((line) => `unread: ${line}`)];
+          for (const { path, type } of reached) {
+            if (
+              type
+                .getCallSignatures()
+                .some((signature) => checker.getTypePredicateOfSignature(signature) !== undefined)
+            )
+              found.push(`guard: ${path}`);
+            if (ownedSnapshot(type)) found.push(`snapshot: ${path}`);
+            if (
+              !(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never)) &&
+              checker.isTypeAssignableTo(type, rejection) &&
+              checker.isTypeAssignableTo(rejection, type)
+            )
+              found.push(`rejection: ${path}`);
+          }
+          return { found, size: reached.length };
+        };
+        const control = breaches([consumer]).found;
+        expect(
+          [
+            control.some((line) => line.startsWith('guard: __consumer__.ts:Lookalike.tools')),
+            control.some((line) => line.startsWith('snapshot: __consumer__.ts:Lookalike.tools')),
+            control.some((line) => line.startsWith('rejection: __consumer__.ts:Renamed'))
+          ],
+          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, and the rejection set inside an alias'
+        ).toEqual([true, true, true]);
+        const published = ['public-entry.d.ts', 'req.svelte.d.ts', 'components/outlets.d.ts'].map(
+          (name) => {
+            const file = program.getSourceFile(join(EMITTED, name));
+            if (file === undefined) throw new Error(`nosvelte test: ${name} is not in the program`);
+            return file;
+          }
+        );
+        const walked = breaches(published);
+        expect(walked.found, 'what the published declarations reach').toEqual([]);
+        expect(walked.size, 'the premise: the walk reached the surface').toBeGreaterThan(200);
       })();
 
       // **(4) Every class this library owns carries a `code`**: a literal, the
@@ -622,10 +907,20 @@ describe('which failure code reaches which surface, and what a consumer compiles
       await (async (): Promise<void> => {
         const found = errorClassCodes();
         expect(found.unread, 'a class declaration the population could not read').toEqual([]);
-        expect(found.codes, 'each class and the code a consumer reads off it').toEqual(CLASS_CODES);
+        expect(found.codes, 'each class and the code a consumer reads off it').toEqual(
+          Object.fromEntries(
+            Object.entries(CLASS_CODES).map(([name, declared]) => [name, classCodeOf(declared)])
+          )
+        );
       })();
 
-      // **(5) The runtime half: every row driven, every surface read.**
+      // **(5) The runtime half: every row driven, every surface read** —
+      // through `useReq`, the hook a consumer calls, wherever a provider can
+      // arrange the path, and through the engine's own seams only where v1
+      // publishes none: a client the caller disposed, and an accumulator. The
+      // published hook is a wrapper of its own, and one that caught a rejection
+      // and resolved instead held every engine cell here while a consumer was
+      // handed something else: measured.
       await (async (): Promise<void> => {
         const check = (witness: string, observed: Observed): void => {
           failures.push(...reaches(witness, observed));
@@ -647,17 +942,73 @@ describe('which failure code reaches which surface, and what a consumer compiles
           );
           return { rxNostr, server, held };
         };
-
-        // RM1: a descriptor refusal.
-        {
-          const { held } = plain('rm1', {
-            filters: [{ search: 'unsupported' } as unknown as { kinds: number[] }]
+        const requested = (name: string, descriptor: Partial<ReqDescriptor> = {}) =>
+          mount(() =>
+            useReq(() => ({
+              kind: 'request',
+              descriptor: {
+                namespace: `ra1-${name}`,
+                filters: [{ kinds: [1] }],
+                settleTimeoutMs: 300,
+                ...descriptor
+              }
+            }))
+          );
+        const providing = (
+          name: string,
+          descriptor: Partial<ReqDescriptor> = {},
+          options: { transportKeys?: TransportKeys; environment?: 'server' } = {}
+        ) => {
+          const url = nextUrl();
+          const server = new WS(url, { jsonProtocol: true });
+          const provider = mount(() => {
+            const built = createNostrContext({
+              relays: [url],
+              harness: HARNESS_DIVERGENCES,
+              verifyEvent: acceptAnyEvent,
+              ...options
+            });
+            setNostrContext(built);
+            return built;
           });
-          await settle(120);
-          check('RM1', observe(held.value, await settledCall(held.value.refresh())));
+          return { url, server, provider, held: requested(name, descriptor) };
+        };
+
+        // RM26 first: no provider above the hook. The context this suite
+        // backs `getContext` with is one map for the file, so "first" is the
+        // arrangement, and it is checked rather than assumed.
+        {
+          let premise: unknown;
+          try {
+            getNostrContext();
+          } catch (thrown) {
+            premise = thrown;
+          }
+          expect(codeOf(premise), 'the premise: no provider has been set in this file yet').toBe(
+            'missing-provider'
+          );
+          const held = requested('rm26');
+          await settle(150);
+          check('RM26', observe(held.value, await settledCall(held.value.refresh())));
           held.destroy();
         }
-        // RM5 and RM4: a client the caller disposed, before mount and after an answer.
+        // RM1: a descriptor refusal, on a browser's provider and on a
+        // server's, where the refusal is published by a path of its own.
+        for (const environment of [undefined, 'server'] as const) {
+          const { server, provider, held } = providing(
+            `rm1-${environment ?? 'browser'}`,
+            { filters: [{ search: 'unsupported' } as unknown as Nostr.Filter] },
+            environment === undefined ? {} : { environment }
+          );
+          await settle(120);
+          check('RM1', observe(held.value, await settledCall(held.value.refresh())));
+          if (server.messages.length > 0)
+            failures.push(`RM1 (${environment ?? 'browser'}): a refused request reached the relay`);
+          held.destroy();
+          provider.destroy();
+        }
+        // RM5 and RM4: a client the caller disposed, before mount and after an
+        // answer — the engine's seam, which v1 does not publish.
         {
           const { rxNostr } = createTestRelay(nextUrl());
           rxNostr.dispose();
@@ -681,22 +1032,26 @@ describe('which failure code reaches which surface, and what a consumer compiles
         }
         // RM11: a descriptor this library could not read.
         {
-          const { held } = plain('rm11', {
+          const { provider, held } = providing('rm11', {
             filters: [
               {
                 get kinds(): number[] {
                   throw new Error('the caller’s filter getter blew up');
                 }
-              } as unknown as { kinds: number[] }
+              } as unknown as Nostr.Filter
             ]
           });
           await settle(150);
           check('RM11', observe(held.value, await settledCall(held.value.refresh())));
           held.destroy();
+          provider.destroy();
         }
-        // RM3 and RM10: a relay giving out under a shipping accumulator.
+        // RM3 and RM10: a relay giving out under the provider's accumulator.
         {
-          const { server, held } = plain('rm3', { live: true, retain: 'unbounded' });
+          const { server, provider, held } = providing('rm3', {
+            live: true,
+            retain: 'unbounded'
+          });
           respondWithEose(server, await waitForReq(server));
           await settle(120);
           server.error({ code: 1006, reason: 'gone', wasClean: false });
@@ -705,16 +1060,22 @@ describe('which failure code reaches which surface, and what a consumer compiles
           check('RM3', observed);
           check('RM10', observed);
           held.destroy();
+          provider.destroy();
         }
-        // RM9: an accumulator that re-throws the leg end.
+        // RM9: an accumulator that re-throws the leg end — named as the
+        // contract violation, with the relay's own value underneath.
         {
+          const rethrown: unknown[] = [];
           const hostile: StreamAccumulator =
             ({ initialValue, reducer, streamFn }) =>
             async (context) => {
               const stream = await streamFn(context);
               let folded = initialValue;
               for await (const chunk of stream) {
-                if (chunk.type === 'legEnded' && chunk.reason !== undefined) throw chunk.reason;
+                if (chunk.type === 'legEnded' && chunk.reason !== undefined) {
+                  rethrown.push(chunk.reason);
+                  throw chunk.reason;
+                }
                 folded = reducer(folded, chunk);
               }
               return folded;
@@ -728,7 +1089,19 @@ describe('which failure code reaches which surface, and what a consumer compiles
           await settle(120);
           server.error({ code: 1006, reason: 'gone', wasClean: false });
           await settle(250);
-          check('RM9', observe(held.value, await settledCall(held.value.refresh())));
+          const observed = observe(held.value, await settledCall(held.value.refresh()));
+          check('RM9', observed);
+          // The value under each, by identity: a fresh one carrying the same
+          // code would drop the relay's own name, stack and cause.
+          const [stateError, , outcome, , slot, lastError] = SURFACES;
+          const unheld = [stateError, outcome, slot, lastError].filter(
+            (surface) =>
+              !rethrown.includes((observed[surface] as { cause?: unknown } | undefined)?.cause)
+          );
+          if (rethrown.length === 0 || unheld.length > 0)
+            failures.push(
+              `RM9: ${unheld.join(', ')} do not carry the value the accumulator re-threw on their cause`
+            );
           held.destroy();
         }
         // RM12: a fault this library cannot attribute.
@@ -748,45 +1121,50 @@ describe('which failure code reaches which surface, and what a consumer compiles
           check('RM12', observe(held.value, await settledCall(held.value.refresh())));
           held.destroy();
         }
-        // RM26: no provider and nothing of its own.
+        // **And over an answer it keeps**: a refresh that fails after one that
+        // succeeded leaves the answer on the state, and the failure on the
+        // outcome and on `lastError` — a settled state does not hide it.
         {
-          const held = mount(() =>
-            useStreamedReq(() => ({
-              namespace: 'ra1-rm26',
-              filters: [{ kinds: [1] }],
-              reqIdBase: 'ra1-rm26',
-              settleTimeoutMs: 300
-            }))
-          );
-          await settle(150);
-          check('RM26', observe(held.value, await settledCall(held.value.refresh())));
+          let fail = false;
+          const later: StreamAccumulator =
+            ({ initialValue, reducer, streamFn }) =>
+            async (context) => {
+              if (fail) throw new Error('the second attempt gave out before its stream');
+              let folded = initialValue;
+              for await (const chunk of await streamFn(context)) folded = reducer(folded, chunk);
+              return folded;
+            };
+          const { server, held } = plain('retained', { accumulator: later });
+          const id = await waitForReq(server);
+          respondWithEvent(server, id, fakeEvent({ kind: 1 }));
+          respondWithEose(server, id);
+          await settle(200);
+          fail = true;
+          const call = await settledCall(held.value.refresh());
+          await settle(100);
+          const observed = observe(held.value, call);
+          const [, , outcome, , slot, lastError] = SURFACES;
+          const state = held.value.state;
+          expect(
+            [
+              state.status,
+              state.status === 'loading' ? 0 : state.events.length,
+              codeOf(observed[outcome]),
+              codeOf(observed[lastError]),
+              isOwnedByLibrary(observed[lastError]),
+              observed[slot]
+            ],
+            'a failed refresh over a kept answer: the answer stays, the failure is on the outcome and on lastError'
+          ).toEqual(['settled', 1, 'unspecified', 'unspecified', true, undefined]);
+          failures.push(...forbiddenAt(observed).map((line) => `over a kept answer: ${line}`));
           held.destroy();
         }
         // RM27 and RM28: a relay the provider cannot read, refused on the state
         // and on `refresh()`.
         {
-          const mine = nextUrl();
           const theirs = nextUrl();
-          const server = new WS(mine, { jsonProtocol: true });
           const unreachable = new WS(theirs, { jsonProtocol: true });
-          const provider = mount(() => {
-            const built = createNostrContext({
-              relays: [mine],
-              harness: HARNESS_DIVERGENCES,
-              verifyEvent: acceptAnyEvent
-            });
-            setNostrContext(built);
-            return built;
-          });
-          const held = mount(() =>
-            useStreamedReq(() => ({
-              namespace: 'ra1-rm27',
-              filters: [{ kinds: [1] }],
-              relays: [theirs],
-              reqIdBase: 'ra1-rm27',
-              settleTimeoutMs: 300
-            }))
-          );
+          const { server, provider, held } = providing('rm27', { relays: [theirs] });
           await settle(200);
           const observed = observe(held.value, await settledCall(held.value.refresh()));
           check('RM27', observed);
@@ -798,32 +1176,12 @@ describe('which failure code reaches which surface, and what a consumer compiles
         }
         // NA4: a target the provider's transport cannot name.
         {
-          const relay = nextUrl();
           const UNNAMEABLE = 'wss://unnameable.example';
-          new WS(relay, { jsonProtocol: true });
           const transportKeys: TransportKeys = (urls) => {
             if ((urls[0] ?? '').startsWith(UNNAMEABLE)) throw new Error('cannot name this one');
             return [...urls];
           };
-          const provider = mount(() => {
-            const built = createNostrContext({
-              relays: [relay],
-              harness: HARNESS_DIVERGENCES,
-              verifyEvent: acceptAnyEvent,
-              transportKeys
-            });
-            setNostrContext(built);
-            return built;
-          });
-          const held = mount(() =>
-            useStreamedReq(() => ({
-              namespace: 'ra1-na4',
-              filters: [{ kinds: [1] }],
-              relays: [UNNAMEABLE],
-              reqIdBase: 'ra1-na4',
-              settleTimeoutMs: 300
-            }))
-          );
+          const { provider, held } = providing('na4', { relays: [UNNAMEABLE] }, { transportKeys });
           await settle(200);
           check('NA4', observe(held.value, await settledCall(held.value.refresh())));
           held.destroy();
@@ -831,25 +1189,7 @@ describe('which failure code reaches which surface, and what a consumer compiles
         }
         // RM8: a provider destroyed with a call in flight, and a call after.
         {
-          const url = nextUrl();
-          const server = new WS(url, { jsonProtocol: true });
-          const provider = mount(() => {
-            const built = createNostrContext({
-              relays: [url],
-              harness: HARNESS_DIVERGENCES,
-              verifyEvent: acceptAnyEvent
-            });
-            setNostrContext(built);
-            return built;
-          });
-          const held = mount(() =>
-            useStreamedReq(() => ({
-              namespace: 'ra1-rm8',
-              filters: [{ kinds: [1] }],
-              reqIdBase: 'ra1-rm8',
-              settleTimeoutMs: 5_000
-            }))
-          );
+          const { server, provider, held } = providing('rm8', { settleTimeoutMs: 5_000 });
           respondWithEose(server, await waitForReq(server));
           await settle(140);
           const inFlight = settledCall(held.value.refresh());
@@ -969,15 +1309,20 @@ describe('which failure code reaches which surface, and what a consumer compiles
           }
           const args = arguments_[defines] ?? [];
           const made = new Two(...args);
+          // **The code each copy is promised to carry**, not only the code
+          // they agree on: a wrong code written in the class is in both.
+          const declared = CLASS_CODES[defines] ?? '';
+          const promised = FAMILIES[declared] === undefined ? declared : args[0];
           expect(
             [
               One === Two,
               made instanceof Two,
               made instanceof One,
-              (made as { code?: unknown }).code
+              (made as { code?: unknown }).code,
+              (new One(...args) as { code?: unknown }).code
             ],
-            `${defines}: two copies, the second's instance not the first's, the code the same`
-          ).toEqual([false, true, false, (new One(...args) as { code?: unknown }).code]);
+            `${defines}: two copies, the second's instance not the first's, and each carrying its code`
+          ).toEqual([false, true, false, promised, promised]);
         }
         expect(defining.length, 'the premise: the entry publishes classes').toBe(
           PUBLISHED_VALUES.length
@@ -1059,13 +1404,15 @@ describe('which failure code reaches which surface, and what a consumer compiles
             if (!codesAt(surface).includes(made as ReqErrorCode))
               failures.push(`${code} narrowed to ${made}, which ${surface} cannot carry`);
         }
+        // The relay's value itself on the cause, by identity — a fresh value
+        // with the same code drops its name, its stack and its own cause.
         const fromRelay = shaped('relay-failed');
         const named = terminalFailure(fromRelay) as { cause?: unknown };
         const recorded = recordedFailure(fromRelay) as { cause?: unknown };
         expect(
-          [codeOf(named.cause), codeOf(recorded.cause)],
-          'a relay’s failure named as the contract violation keeps the relay’s value on its cause'
-        ).toEqual(['relay-failed', 'relay-failed']);
+          [named.cause === fromRelay, recorded.cause === fromRelay],
+          'a relay’s failure named as the contract violation keeps the relay’s own value on its cause'
+        ).toEqual([true, true]);
         const inside = shaped('accumulator-contract');
         expect(
           [terminalFailure(inside) === inside, recordedFailure(inside) === inside],
@@ -1244,8 +1591,8 @@ describe('the spike’s reachability witnesses', () => {
     // **Read, not built and discarded**: the spike made this observation and
     // dropped it with `void`, so the clause it stood for had no assertion.
     expect(
-      SURFACES.filter(
-        (surface) => codeOf({ ...before, ...observe(held.value, settled) }[surface]) !== undefined
+      [before, observe(held.value, settled)].flatMap((observed) =>
+        SURFACES.filter((surface) => codeOf(observed[surface]) !== undefined)
       ),
       'no surface carries a failure, before the release or after it'
     ).toEqual([]);
@@ -1524,10 +1871,11 @@ describe('the spike’s reachability witnesses', () => {
 /**
  * Every class in the library whose instances are `Error`s, found by the
  * checker rather than by how its base is spelled, and the type of the `code`
- * a consumer reads off an instance: a literal's text, or the alias's name.
+ * a consumer reads off an instance: the alias it is annotated with, if any,
+ * and the literals it resolves to.
  */
 function errorClassCodes(extra: readonly string[] = []): {
-  codes: Record<string, string>;
+  codes: Record<string, ClassCode>;
   unread: string[];
 } {
   const files = [
@@ -1540,7 +1888,7 @@ function errorClassCodes(extra: readonly string[] = []): {
   const options = ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT).options;
   const program = ts.createProgram(files, { ...options, noEmit: true });
   const checker = program.getTypeChecker();
-  const codes: Record<string, string> = {};
+  const codes: Record<string, ClassCode> = {};
   const unread: string[] = [];
   for (const file of program.getSourceFiles()) {
     if (!file.fileName.startsWith(LIBRARY) && !extra.includes(file.fileName)) continue;
@@ -1574,10 +1922,21 @@ function errorClassCodes(extra: readonly string[] = []): {
                 ts.isTypeReferenceNode(declaration.type)
                   ? declaration.type.typeName.getText()
                   : undefined;
+              // **The members, and not only the alias's name**: an alias
+              // widened to `string` kept its spelling on every class it
+              // annotates, and a check that read the spelling passed it.
               const type = checker.getTypeOfSymbol(code);
+              const literals = (type.isUnion() ? type.types : [type])
+                .map((one) =>
+                  one.isStringLiteral() ? one.value : `<${checker.typeToString(one)}>`
+                )
+                .sort();
+              // Keyed by name, so a second class of one name is reported
+              // rather than written over the first.
+              if (codes[symbol.getName()] !== undefined)
+                unread.push(`${symbol.getName()}: two classes of this name`);
               codes[symbol.getName()] =
-                annotated ??
-                (type.isStringLiteral() ? JSON.stringify(type.value) : checker.typeToString(type));
+                annotated === undefined ? { literals } : { family: annotated, literals };
             }
           }
         }
