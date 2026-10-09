@@ -214,8 +214,14 @@ export function saidWithBounds(
  * semantic member and its contract at the same time. That is what a literal
  * union costs, and it is paid deliberately: the alternative is an open type that
  * promises a consumer nothing.
+ *
+ * **Read off the published variants rather than declared beside them**, for the
+ * reason `ReqErrorCode` is: a consumer switches on the `source` the variants in
+ * `ReqError` declare, and an alias written out here could stay three while a
+ * variant said four. Derived, a source added to a variant is a key `CODE_OF`
+ * does not have, which does not compile.
  */
-export type FailureSource = 'descriptor' | 'relay' | 'unspecified';
+export type FailureSource = CapturedReqError['source'];
 
 /**
  * The `code` a consumer branches on, as a literal union.
@@ -224,7 +230,7 @@ export type FailureSource = 'descriptor' | 'relay' | 'unspecified';
  * branches on the literal, and `readonly code: string` promises them nothing —
  * measured in the emitted declarations, which carried exactly that.
  */
-export type FailureCode = 'descriptor-unreadable' | 'relay-failed' | 'unspecified';
+export type FailureCode = CapturedReqError['code'];
 
 const CODE_OF: Readonly<Record<FailureSource, FailureCode>> = Object.freeze({
   descriptor: 'descriptor-unreadable',

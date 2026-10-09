@@ -13,7 +13,7 @@
  * which classes are in it.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
@@ -38,9 +38,32 @@ import {
   TransportKeyMismatchError
 } from '$lib/v1/scope.svelte.js';
 
-/** The library's own modules: `src/lib/v1`, its top level. */
+/** The library's own modules: `src/lib/v1`, and every directory under it. */
 const lib = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../lib/v1');
-const sourceOf = (name: string): string => readFileSync(join(lib, name), 'utf8');
+
+/** A parsed module: where it is, relative to the library, and its syntax tree. */
+export type Module = { module: string; file: ts.SourceFile };
+
+/** Source text parsed as TypeScript, under the name it is reported by. */
+export const parsedAs = (module: string, text: string): Module => ({
+  module,
+  file: ts.createSourceFile(module, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+});
+
+/**
+ * A component's scripts, where they stand in the file: everything outside a
+ * `<script>` block is blanked to spaces, newlines kept, so a line a site is
+ * reported at is the component's own line.
+ */
+const scriptsOf = (source: string): string => {
+  let text = source.replace(/[^\n]/g, ' ');
+  for (const block of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
+    const body = block[1] ?? '';
+    const at = (block.index ?? 0) + block[0].indexOf('>') + 1;
+    text = text.slice(0, at) + body + text.slice(at + body.length);
+  }
+  return text;
+};
 
 /**
  * Every class in this library whose instances are `Error`s — parsed, not
@@ -62,19 +85,15 @@ const sourceOf = (name: string): string => readFileSync(join(lib, name), 'utf8')
  * `extends`. A class that reaches `Error` is in it, whatever it is called and
  * however it is written.
  */
-const parsedModules = (): { module: string; file: ts.SourceFile }[] =>
-  readdirSync(lib)
-    .filter((name) => name.endsWith('.ts'))
-    .map((module) => ({
-      module,
-      file: ts.createSourceFile(
-        module,
-        sourceOf(module),
-        ts.ScriptTarget.Latest,
-        true,
-        ts.ScriptKind.TS
-      )
-    }));
+export const parsedModules = (): Module[] =>
+  (readdirSync(lib, { recursive: true, encoding: 'utf8' }) as string[])
+    .map((name) => join(lib, name))
+    .filter((path) => path.endsWith('.ts') || path.endsWith('.svelte'))
+    .sort()
+    .map((path) => {
+      const source = readFileSync(path, 'utf8');
+      return parsedAs(relative(lib, path), path.endsWith('.svelte') ? scriptsOf(source) : source);
+    });
 
 /** The name a class is reachable by: its own, or the binding it is assigned to. */
 const classNameOf = (node: ts.ClassLikeDeclaration): string | undefined => {
@@ -96,9 +115,26 @@ const extendedNameOf = (node: ts.ClassLikeDeclaration): string | undefined => {
   return undefined;
 };
 
-export const errorClasses = (): { module: string; name: string }[] => {
+/**
+ * The platform's own `Error` classes: a class reaching any of them is an
+ * `Error`, so `extends RangeError` is in the population as `extends Error` is.
+ */
+const ERROR_ROOTS = new Set([
+  'Error',
+  'AggregateError',
+  'EvalError',
+  'RangeError',
+  'ReferenceError',
+  'SyntaxError',
+  'TypeError',
+  'URIError'
+]);
+
+export const errorClasses = (
+  modules: readonly Module[] = parsedModules()
+): { module: string; name: string }[] => {
   const declared: { module: string; name: string; extends: string | undefined }[] = [];
-  for (const { module, file } of parsedModules()) {
+  for (const { module, file } of modules) {
     const visit = (node: ts.Node): void => {
       if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
         const name = classNameOf(node);
@@ -115,7 +151,7 @@ export const errorClasses = (): { module: string; name: string }[] => {
     changed = false;
     for (const each of declared) {
       if (reaching.has(each.name) || each.extends === undefined) continue;
-      if (each.extends === 'Error' || reaching.has(each.extends)) {
+      if (ERROR_ROOTS.has(each.extends) || reaching.has(each.extends)) {
         reaching.add(each.name);
         changed = true;
       }
@@ -125,6 +161,10 @@ export const errorClasses = (): { module: string; name: string }[] => {
     .filter((each) => reaching.has(each.name))
     .map(({ module, name }) => ({ module, name }));
 };
+
+/** An expression with the parentheses around it taken off: `new (X)()` constructs `X`. */
+const unparenthesised = (expression: ts.Expression): ts.Expression =>
+  ts.isParenthesizedExpression(expression) ? unparenthesised(expression.expression) : expression;
 
 /**
  * Every `new X(...)` of one of those classes inside the library, with the call
@@ -137,26 +177,27 @@ export const errorClasses = (): { module: string; name: string }[] => {
  * reading where the object goes the moment it exists.
  */
 export const constructionSites = (
-  population: ReadonlySet<string>
+  population: ReadonlySet<string>,
+  modules: readonly Module[] = parsedModules()
 ): { where: string; name: string; wrapper: string | undefined }[] => {
   const sites: { where: string; name: string; wrapper: string | undefined }[] = [];
-  for (const { module, file } of parsedModules()) {
+  for (const { module, file } of modules) {
     const visit = (node: ts.Node): void => {
-      if (
-        ts.isNewExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        population.has(node.expression.text)
-      ) {
-        const parent = node.parent as ts.Node | undefined;
+      const callee = ts.isNewExpression(node) ? unparenthesised(node.expression) : undefined;
+      if (callee !== undefined && ts.isIdentifier(callee) && population.has(callee.text)) {
+        // The construction as an argument, past any parentheses around it.
+        let argument: ts.Node = node;
+        while (ts.isParenthesizedExpression(argument.parent)) argument = argument.parent;
+        const parent = argument.parent as ts.Node | undefined;
         const wrapper =
           parent !== undefined &&
           ts.isCallExpression(parent) &&
           ts.isIdentifier(parent.expression) &&
-          parent.arguments[0] === node
+          parent.arguments[0] === argument
             ? parent.expression.text
             : undefined;
         const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
-        sites.push({ where: `${module}:${line + 1}`, name: node.expression.text, wrapper });
+        sites.push({ where: `${module}:${line + 1}`, name: callee.text, wrapper });
       }
       ts.forEachChild(node, visit);
     };
@@ -180,17 +221,18 @@ export const constructionSites = (
  * as not one. A new alias is neither, so it fails, and the fix is either to
  * mint it or to say what it is.
  */
-export const everyConstructorCalled = (): { where: string; callee: string }[] => {
+export const everyConstructorCalled = (
+  modules: readonly Module[] = parsedModules()
+): { where: string; callee: string }[] => {
   const called: { where: string; callee: string }[] = [];
-  for (const { module, file } of parsedModules()) {
+  for (const { module, file } of modules) {
     const visit = (node: ts.Node): void => {
       if (ts.isNewExpression(node)) {
         const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
+        const callee = unparenthesised(node.expression);
         called.push({
           where: `${module}:${line + 1}`,
-          callee: ts.isIdentifier(node.expression)
-            ? node.expression.text
-            : node.expression.getText(file)
+          callee: ts.isIdentifier(callee) ? callee.text : callee.getText(file)
         });
       }
       ts.forEachChild(node, visit);
@@ -231,6 +273,79 @@ export const NOT_AN_ERROR_CLASS = [
 export const MINTERS = ['ownedByLibrary', 'sealOwned'];
 
 /**
+ * What the scans above cannot vouch for, as a failing line each.
+ *
+ * **They read spellings, and spellings walked past them.** A minter is
+ * recognised by the name it is called through, so `import { hardenOwned as
+ * ownedByLibrary }` made an unminted construction read as minted, and
+ * `Reflect.construct(InvalidDescriptorError, …)` is a construction with no `new`
+ * in it — measured, each left the landing green. And a class whose `extends` is
+ * not a name — `extends (Error)`, `extends mixin(Error)` — or that has no name to
+ * be held by, `export default class extends Error`, is not in the population the
+ * scan builds. Each is refused here rather than read, so the next spelling is a
+ * decision rather than a site the scan does not see.
+ */
+export const whatTheScanCannotRead = (modules: readonly Module[] = parsedModules()): string[] => {
+  const unread: string[] = [];
+  for (const { module, file } of modules) {
+    const at = (node: ts.Node): string =>
+      `${module}:${file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1}`;
+    const visit = (node: ts.Node): void => {
+      if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+        const clause = node.heritageClauses?.find(
+          (each) => each.token === ts.SyntaxKind.ExtendsKeyword
+        );
+        if (clause !== undefined && extendedNameOf(node) === undefined)
+          unread.push(`${at(node)}: a class extending something that is not a name`);
+        if (clause !== undefined && classNameOf(node) === undefined)
+          unread.push(`${at(node)}: a class with no name to be held by`);
+      }
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'Reflect' &&
+        node.name.text === 'construct'
+      )
+        unread.push(`${at(node)}: a construction through \`Reflect.construct\``);
+      if (
+        ts.isElementAccessExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'Reflect'
+      )
+        unread.push(`${at(node)}: \`Reflect\` read by a computed name`);
+      if (ts.isIdentifier(node) && MINTERS.includes(node.text)) {
+        const parent = node.parent as ts.Node | undefined;
+        const declares =
+          parent !== undefined &&
+          (ts.isImportSpecifier(parent) ||
+            ts.isNamespaceImport(parent) ||
+            ts.isImportClause(parent) ||
+            ((ts.isVariableDeclaration(parent) ||
+              ts.isFunctionDeclaration(parent) ||
+              ts.isParameter(parent) ||
+              ts.isBindingElement(parent) ||
+              ts.isClassDeclaration(parent)) &&
+              parent.name === node));
+        if (declares) {
+          const importedAsItself =
+            ts.isImportSpecifier(parent) &&
+            parent.name === node &&
+            parent.propertyName === undefined &&
+            ts.isStringLiteral(parent.parent.parent.parent.moduleSpecifier) &&
+            parent.parent.parent.parent.moduleSpecifier.text === './owned.js';
+          const declaredAtHome = module === 'owned.ts' && ts.isFunctionDeclaration(parent);
+          if (!importedAsItself && !declaredAtHome)
+            unread.push(`${at(node)}: \`${node.text}\` bound to something it may not be`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+  }
+  return unread;
+};
+
+/**
  * One instance of each class, built the way a **consumer** would.
  *
  * Written out on purpose, and required below to cover the parsed population
@@ -238,15 +353,12 @@ export const MINTERS = ['ownedByLibrary', 'sealOwned'];
  * would pass, and what the run time then has to say about the result — rather
  * than a member that quietly falls outside a scan.
  *
- * **It no longer covers the population on its own, and that is a second
- * decision rather than a gap.** `InternalFailureError` left when
- * `internal-failure` was split into the four remedies it had been carrying;
- * `MissingVerifierError` arrived as the wiring half of that split and is
- * constructible here because it is on the published entry, and
- * `ProviderDisposedError` arrived as the disposed-provider half and is **not
- * exported at all**. A class a consumer cannot name cannot be built the way a
- * consumer would, so it is listed in {@link libraryOnly} instead — with the
- * run-time reading of "cannot name" beside it.
+ * **In v1 it covers the population on its own.** The spike's did not:
+ * `ProviderDisposedError` was not exported from its module there, so a consumer
+ * could not build one and it was listed in {@link libraryOnly} instead. v1
+ * exports it from `own.ts` — not from the published entry, which carries none of
+ * these constructors but the four `PB8` reads — so it is built here like the
+ * rest, and {@link libraryOnly} is empty.
  */
 export const asAConsumerWould: Readonly<Record<string, () => Error>> = {
   MissingRandomnessError: () => new MissingRandomnessError(),
