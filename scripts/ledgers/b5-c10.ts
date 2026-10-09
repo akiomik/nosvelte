@@ -1086,8 +1086,79 @@ export default {
       ]
     },
     {
+      id: 'C10-component-event',
+      arm: 'RA1',
+      describe: 'a published component dispatches a typed event whose detail is the snapshot class',
+      edits: [
+        {
+          file: 'src/lib/v1/components/Article.svelte',
+          from: "  import { useReq } from '../req.svelte.js';\n  import { article } from './descriptors.js';\n  import type { ArticleProps } from './outlets.js';\n  import RequestOutlets from './RequestOutlets.svelte';\n\n  let { namespace, pubkey, identifier, children, loading, error, nodata }: ArticleProps = $props();",
+          to: "  import { createEventDispatcher, onMount } from 'svelte';\n  import { ReqFailure } from '../own.js';\n  import { useReq } from '../req.svelte.js';\n  import { article } from './descriptors.js';\n  import type { ArticleProps } from './outlets.js';\n  import RequestOutlets from './RequestOutlets.svelte';\n\n  let { namespace, pubkey, identifier, children, loading, error, nodata }: ArticleProps = $props();\n\n  const dispatch = createEventDispatcher<{ snapshot: typeof ReqFailure }>();\n  onMount(() => dispatch('snapshot', ReqFailure));"
+        }
+      ]
+    },
+    {
+      id: 'C10-conditional-default-snapshot',
+      arm: 'RA1',
+      describe:
+        "a published class's static method hands out the snapshot class through a type parameter's default, behind a conditional return",
+      edits: [
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: "import { providerDisposed } from './own.js';",
+          to: "import { providerDisposed, ReqFailure } from './own.js';"
+        },
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: '  /**\n   * The three members `Error` gives this class, re-declared as `readonly`.',
+          to: '  static snapshot<T = typeof ReqFailure>(): T extends new (...args: any[]) => any ? T : never {\n    return ReqFailure as unknown as T extends new (...args: any[]) => any ? T : never;\n  }\n  /**\n   * The three members `Error` gives this class, re-declared as `readonly`.'
+        }
+      ]
+    },
+    {
+      id: 'I-components-unemitted',
+      arm: 'RA1',
+      describe:
+        'the emit types every component through the `.svelte` shim instead of its generated declaration',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '  if (existsSync(path) || !existsSync(component)) return undefined;',
+          to: '  if (existsSync(path) || existsSync(component)) return undefined;'
+        }
+      ]
+    },
+    {
+      id: 'I-walk-signature-parameters-skipped',
+      arm: 'RA1',
+      describe: "the reachability walk does not read a signature's own type parameters",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '        for (const parameter of signature.getTypeParameters() ?? [])\n          next(`<${parameter.symbol.getName()}>`, parameter);',
+          to: "        for (const parameter of signature.getTypeParameters() ?? [])\n          if (String(parameter) === '\\0') next(`<${parameter.symbol.getName()}>`, parameter);"
+        }
+      ]
+    },
+    {
+      id: 'I-walk-type-arguments-skipped',
+      arm: 'RA1',
+      describe: "the reachability walk does not follow a type reference's arguments",
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: "        next('<>', argument);",
+          to: "        if (String(argument) === '\\0') next('<>', argument);"
+        }
+      ]
+    }
+  ],
+  retired: [
+    {
       id: 'I-script-exports-unread',
       arm: 'RA1',
+      reason:
+        'The script reader was removed: what a component hands out beyond its props is read off its generated declaration, whose `Exports` and `Events` type arguments the reachability walk follows; `C10-component-instance-export` and `C10-component-event` are killed there.',
       describe: 'the component reader finds no export in any script',
       edits: [
         {
