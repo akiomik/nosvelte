@@ -1209,8 +1209,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/engine/helpers/emitted.ts',
-          from: "  paths.filter((path) => path.endsWith('.svelte') && paths.includes(`${path}.ts`));",
-          to: "  paths.filter((path) => path.endsWith('.svelte') && paths.includes(`${path}.ts`) && path === '\\0');"
+          from: "  return paths.filter((path) => path.endsWith('.svelte') && modules.has(key(`${path}.ts`)));",
+          to: "  return paths.filter((path) => path.endsWith('.svelte') && modules.has(key(`${path}.ts`)) && path === '\\0');"
         }
       ]
     },
@@ -1235,6 +1235,48 @@ export default {
           file: 'src/tests/contracts/engine/helpers/emitted.ts',
           from: '        if (signature.thisParameter !== undefined)',
           to: "        if (signature.thisParameter !== undefined && String(signature) === '\\0')"
+        }
+      ]
+    },
+    {
+      id: 'C10-inherited-event',
+      arm: 'RA1',
+      describe:
+        "a published class's static hands out an event class that inherits `CustomEvent<typeof ReqFailure>`, whose `detail` the platform declares",
+      edits: [
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: "import { providerDisposed } from './own.js';",
+          to: "import { providerDisposed, ReqFailure } from './own.js';"
+        },
+        {
+          file: 'src/lib/v1/context.svelte.ts',
+          from: 'export class MissingProviderError extends Error {\n',
+          to: "class SnapshotEvent extends CustomEvent<typeof ReqFailure> {\n  constructor() {\n    super('snapshot', { detail: ReqFailure });\n  }\n}\n\nexport class MissingProviderError extends Error {\n  static event(): SnapshotEvent {\n    return new SnapshotEvent();\n  }\n"
+        }
+      ]
+    },
+    {
+      id: 'I-walk-bases-skipped',
+      arm: 'RA1',
+      describe: 'the reachability walk does not follow what a class or an interface extends',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: "for (const base of checker.getBaseTypes(declared as ts.InterfaceType)) next('<base>', base);",
+          to: "for (const base of checker.getBaseTypes(declared as ts.InterfaceType)) if (String(base) === '\\0') next('<base>', base);"
+        }
+      ]
+    },
+    {
+      id: 'I-shadow-case-sensitive',
+      arm: 'RA1',
+      describe: 'the shadowing check compares spellings, whatever the file system does with case',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/helpers/emitted.ts',
+          from: '(caseSensitive ? path : path.toLowerCase())',
+          to: "(caseSensitive || path !== '\\0' ? path : path.toLowerCase())"
         }
       ]
     }
