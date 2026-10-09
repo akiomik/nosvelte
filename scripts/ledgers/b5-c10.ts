@@ -43,15 +43,15 @@ export default {
   },
   entries: [
     {
-      id: 'C10-state-alias-drops-a-code',
+      id: 'C10-state-alias-widened',
       arm: 'RA1',
       requires: ['LE20'],
-      describe: '`ReqStateError` drops `transport-incompatible`, which reaches `state.error`',
+      describe: '`ReqStateError` admits `incomplete-result`, which never reaches the error state',
       edits: [
         {
           file: 'src/lib/v1/reqerror.ts',
-          from: "export type ReqStateError = Extract<\n  ReqError,\n  {\n    readonly code:\n      | 'invalid-descriptor'\n      | 'unsupported-filter'\n      | 'relay-not-in-scope'\n      | 'transport-incompatible'\n",
-          to: "export type ReqStateError = Extract<\n  ReqError,\n  {\n    readonly code:\n      | 'invalid-descriptor'\n      | 'unsupported-filter'\n      | 'relay-not-in-scope'\n"
+          from: "export type ReqStateError = Extract<\n  ReqError,\n  {\n    readonly code:\n      | 'invalid-descriptor'\n",
+          to: "export type ReqStateError = Extract<\n  ReqError,\n  {\n    readonly code:\n      | 'incomplete-result'\n      | 'invalid-descriptor'\n"
         }
       ]
     },
@@ -83,15 +83,15 @@ export default {
       ]
     },
     {
-      id: 'C10-last-error-alias-narrowed',
+      id: 'C10-last-error-alias-widened',
       arm: 'RA1',
       requires: ['LE20'],
-      describe: '`ReqLastError` drops the partial answer, which `lastError` carries',
+      describe: "`ReqLastError` admits `relay-failed`, which reaches only the leg's end",
       edits: [
         {
           file: 'src/lib/v1/reqerror.ts',
           from: 'export type ReqLastError = ReqStateError | IncompleteError;',
-          to: 'export type ReqLastError = ReqStateError;'
+          to: 'export type ReqLastError = ReqStateError | IncompleteError | RelayLegError;'
         }
       ]
     },
@@ -108,14 +108,14 @@ export default {
       ]
     },
     {
-      id: 'C10-last-error-declared-narrower',
+      id: 'C10-last-error-declared-wider',
       arm: 'RA1',
-      describe: '`ReqDiagnostics.lastError` is declared without the partial answer it carries',
+      describe: '`ReqDiagnostics.lastError` is declared as any `Error`',
       edits: [
         {
           file: 'src/lib/v1/engine.ts',
           from: '  readonly lastError: ReqLastError | undefined;',
-          to: '  readonly lastError: ReqStateError | undefined;'
+          to: '  readonly lastError: ReqLastError | Error | undefined;'
         }
       ]
     },
@@ -284,7 +284,7 @@ export default {
         {
           file: 'src/lib/v1/engine.ts',
           from: '      entryError ??\n',
-          to: ''
+          to: '      (entryError && undefined) ??\n'
         }
       ]
     },
@@ -363,8 +363,8 @@ export default {
       edits: [
         {
           file: 'src/lib/v1/own.ts',
-          from: "    case 'missing-provider':\n    case 'incomplete-result':\n    case 'provider-disposed':\n      // **`provider-disposed` is a rejection, not a record.**",
-          to: "    case 'missing-provider':\n      return value as never;\n    case 'incomplete-result':\n    case 'provider-disposed':\n      // **`provider-disposed` is a rejection, not a record.**"
+          from: 'export function recordedFailure(value: ReqError): RefreshOutcomeError {',
+          to: "export function recordedFailure(value: ReqError): RefreshOutcomeError {\n  if (String(value.code) === 'missing-provider') return value as unknown as RefreshOutcomeError;"
         }
       ]
     },
@@ -387,8 +387,8 @@ export default {
       edits: [
         {
           file: 'src/lib/v1/scope.svelte.ts',
-          from: 'new RelayNotInScopeError(resolution.name, resolution.relay !== undefined, scope.urls)',
-          to: "new InvalidDescriptorError('relays', 'is not in scope')"
+          from: '        throw ownedByLibrary(\n          new RelayNotInScopeError(resolution.name, resolution.relay !== undefined, scope.urls)\n        );',
+          to: "        void RelayNotInScopeError;\n        throw ownedByLibrary(new InvalidDescriptorError('relays', 'is not in scope'));"
         }
       ]
     },
