@@ -1078,14 +1078,16 @@ function isRelayUrl(value: string): boolean {
  * whose entries can be read, and `undefined` when it is not one or refuses to be
  * read.
  *
- * **Every judgement and every refusal is made from the copy, and nothing reads
- * the answer twice.** The checks used to read it and the refusal read it again:
- * an answer whose iterator gave a valid name the first time and an object of the
- * transport's the second came out frozen inside `TransportKeyMismatchError.actual`
- * with the object itself still live — measured — and an index getter that threw
- * was read outside the guard around the call, so the transport's own `Error`
- * reached the provider uncaptured, at both seams. A refusal of an answer that
- * cannot be read renders it, which is a string, and keeps nothing of it.
+ * **Every judgement, the comparison and the refusal of an answer that could be
+ * read are made from the copy.** The checks used to read it and the refusal
+ * read it again: an answer whose iterator gave a valid name the first time and
+ * an object of the transport's the second came out frozen inside
+ * `TransportKeyMismatchError.actual` with the object itself still live —
+ * measured — and an index getter that threw was read outside the guard around
+ * the call, so the transport's own `Error` reached the provider uncaptured, at
+ * both seams. An answer that cannot be read at all is the one thing read twice:
+ * it is already refused, and its refusal renders it again, so what that read
+ * returns this time can only change the words, and the refusal keeps a string.
  */
 function listed(answer: unknown): unknown[] | undefined {
   try {
