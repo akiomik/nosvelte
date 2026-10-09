@@ -40,7 +40,7 @@ import type { TransportCapability } from './lease.js';
 import { callerTransport } from './lease.js';
 import type { NormalizedDescriptor, Retention } from './normalize.js';
 import { InvalidDescriptorError, normalizeDescriptor, relayMessage } from './normalize.js';
-import { capture, providerDisposed, safely, terminalFailure } from './own.js';
+import { capture, providerDisposed, rejectsWithOurs, safely, terminalFailure } from './own.js';
 import { ownedByLibrary, sealInterface } from './owned.js';
 import type { ReqStateError } from './reqerror.js';
 import { isRelayNotInScope } from './reqerror.js';
@@ -1815,9 +1815,20 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * it contradicted two sentences in this file that say `lastRejection` is gone
    * and that nothing is written during a derivation and read from a getter. So
    * it is gone, and this is a function of the query's state alone.
+   *
+   * **Derived once per state, because the value it is not true of is the one it
+   * exists for.** Every rejection of the query function is this library's now
+   * ({@link rejectsWithOurs}), and the one left is the query library's own: a
+   * cancellation that does not revert, which query-core writes to `error`
+   * without the query function throwing it. A function called by each reader
+   * copied that once per read, so `state.error` was a different object every
+   * time it was read and never `diagnostics.lastError`. A `$derived` is
+   * recomputed whenever the query's status or error moves — error, success,
+   * error with the same object is three states, not a key — so it cannot go
+   * stale the way the memo did, and every reader of one state is handed one
+   * value.
    */
-  const rejectedWith = (): ReqStateError | undefined =>
-    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined;
+  const rejectedWith = (): ReqStateError | undefined => queryRejection;
 
   /**
    * The plan the query is running under, as opposed to the one this moment
@@ -2257,7 +2268,9 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // enabled — which is the difference between this and the `enabled` option
       // `A4` keeps out of a consumer's reach.
       ...(deferred ? { enabled: false } : {}),
-      queryFn: async (context: unknown) => {
+      // **Whatever it rejects with is this library's**, including what it throws
+      // before the `try` below that records a failure: see {@link rejectsWithOurs}.
+      queryFn: rejectsWithOurs(async (context: unknown) => {
         if (rejection !== undefined) throw rejection;
         // The provider went away before the request could be planned. Thrown
         // *here* rather than where it was noticed, because the options factory
@@ -2745,7 +2758,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
             )
           );
         }
-      }
+      })
     };
   };
 
@@ -2754,6 +2767,10 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
   // request at all: the provider built one and nothing installed it. See
   // {@link UseStreamedReqOpts.client}.
   const query = createQuery(queryOptions, ownedClient);
+  // What the query rejected with, derived once per state: {@link rejectedWith}.
+  const queryRejection = $derived(
+    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined
+  );
 
   // **Read once here so that it is read at all.** The query library notifies a
   // subscriber only about properties that subscriber has *touched* — the first
