@@ -83,14 +83,49 @@ const SHIMS = fromPackage.resolve('svelte2tsx/svelte-shims-v4.d.ts');
 
 /**
  * The one diagnostic `svelte2tsx`'s declaration mode is known to leave in what
- * it writes — an import of `SvelteComponent` it does not use — and nothing
- * else of a component's is let through.
+ * it writes — its own first statement, `import { SvelteComponent } from
+ * "svelte"` at the very start of the file, which it does not use — and
+ * nothing else of a component's is let through. Read by where it stands, not
+ * by what it says: a component's own unused `SvelteComponent` says the same
+ * thing and was let through by a filter on the message, measured.
  */
-const generatedOnly = (one: ts.Diagnostic): boolean =>
-  one.code === 6133 &&
-  one.file !== undefined &&
-  componentAt(resolve(one.file.fileName)) !== undefined &&
-  ts.flattenDiagnosticMessageText(one.messageText, '\n').startsWith("'SvelteComponent'");
+const generatedOnly = (one: ts.Diagnostic): boolean => {
+  if (one.code !== 6133 || one.file === undefined || one.start === undefined) return false;
+  if (componentAt(resolve(one.file.fileName)) === undefined) return false;
+  const [first] = one.file.statements;
+  if (first === undefined || first.getStart() !== 0 || !ts.isImportDeclaration(first)) return false;
+  const bindings = first.importClause?.namedBindings;
+  const [only] = bindings !== undefined && ts.isNamedImports(bindings) ? bindings.elements : [];
+  return (
+    ts.isStringLiteral(first.moduleSpecifier) &&
+    first.moduleSpecifier.text === 'svelte' &&
+    first.importClause?.name === undefined &&
+    bindings !== undefined &&
+    ts.isNamedImports(bindings) &&
+    bindings.elements.length === 1 &&
+    only !== undefined &&
+    only.propertyName === undefined &&
+    only.name.text === 'SvelteComponent' &&
+    one.start < first.getEnd()
+  );
+};
+
+/**
+ * Components that share a name with a module beside them — `X.svelte` and
+ * `X.svelte.ts` — among `paths`. The compiler looks for `./X.svelte` at
+ * `X.svelte.ts`, so for such a pair the declaration emitted under the
+ * component's name is the module's, and a component exporting a guard beside
+ * a rune module of its name passed the walk: measured. Refused rather than
+ * resolved, since `./X.svelte.js` names the module at the same path.
+ */
+export const shadowedOf = (paths: readonly string[]): string[] =>
+  paths.filter((path) => path.endsWith('.svelte') && paths.includes(`${path}.ts`));
+
+/** Every component of the library, and every module, by path. */
+export const libraryFiles = (): string[] =>
+  ts.sys
+    .readDirectory(LIBRARY, ['.svelte', '.ts'], undefined, undefined)
+    .map((one) => resolve(one));
 
 function projectOptions(): ts.CompilerOptions {
   const read = ts.readConfigFile(resolve(ROOT, 'tsconfig.json'), (path) => ts.sys.readFile(path));
@@ -301,6 +336,10 @@ export function reachableFrom(
         // `<T = X>(): T extends … ? T : never` did, measured.
         for (const parameter of signature.getTypeParameters() ?? [])
           next(`<${parameter.symbol.getName()}>`, parameter);
+        // And its receiver, which is not among its parameters: a consumer
+        // reads it back with `ThisParameterType`, measured.
+        if (signature.thisParameter !== undefined)
+          next('(this)', checker.getTypeOfSymbol(signature.thisParameter));
         next(kind, checker.getReturnTypeOfSignature(signature));
         for (const parameter of signature.getParameters())
           next(`(${parameter.getName()})`, checker.getTypeOfSymbol(parameter));

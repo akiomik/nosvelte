@@ -45,7 +45,13 @@ import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 import Outlets from './fixtures/Outlets.svelte';
 import { propsTypeOf } from './helpers/components.js';
 import { exportsOf } from './helpers/declarations.js';
-import { againstEmitted, EMITTED, reachableFrom } from './helpers/emitted.js';
+import {
+  againstEmitted,
+  EMITTED,
+  libraryFiles,
+  reachableFrom,
+  shadowedOf
+} from './helpers/emitted.js';
 import {
   cellsOf,
   codesAt,
@@ -893,6 +899,8 @@ describe('which failure code reaches which surface, and what a consumer compiles
             'export declare class Conditional { static make<T = typeof ReqFailure>(): T extends new (...args: never[]) => unknown ? T : never; }',
             'export declare const Exporting: import("svelte").Component<object, { recognises(value: unknown): value is ReqError }, "">;',
             'export declare const Dispatching: import("svelte").SvelteComponent<object, { snapshot: CustomEvent<typeof ReqFailure> }>;',
+            'export declare const Erased: import("svelte").SvelteComponent<object, { snapshot: CustomEvent<any> }>;',
+            'export declare class Receiving { static take(this: typeof ReqFailure): void; }',
             'export type Renamed = { readonly held: typeof rejection };'
           ].join('\n')
         );
@@ -923,6 +931,10 @@ describe('which failure code reaches which surface, and what a consumer compiles
             )
               found.push(`guard: ${path}`);
             if (ownedSnapshot(type)) found.push(`snapshot: ${path}`);
+            // **An `any` is where the walk goes blind**: whatever stood there
+            // is gone from the type — an event dispatched untyped carries the
+            // snapshot class as `CustomEvent<any>` — so none may be reached.
+            if (type.flags & ts.TypeFlags.Any) found.push(`any: ${path}`);
             if (
               !(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never)) &&
               checker.isTypeAssignableTo(type, rejection) &&
@@ -950,13 +962,25 @@ describe('which failure code reaches which surface, and what a consumer compiles
             alone('Dispatching').some((line) =>
               line.startsWith('snapshot: __consumer__.ts:Dispatching')
             ),
-            alone('Renamed').some((line) => line.startsWith('rejection: __consumer__.ts:Renamed'))
+            alone('Renamed').some((line) => line.startsWith('rejection: __consumer__.ts:Renamed')),
+            alone('Erased').some((line) => line.startsWith('any: __consumer__.ts:Erased')),
+            alone('Receiving').some(
+              (line) => line.startsWith('snapshot:') && line.includes('(this)')
+            )
           ],
-          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, one a conditional return hides, a guard a component exports, a snapshot an event carries, and the rejection set inside an alias'
-        ).toEqual([true, true, true, true, true, true, true]);
+          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, one a conditional return hides, a guard a component exports, a snapshot an event carries, the rejection set inside an alias, an event erased to any, and a snapshot as a receiver'
+        ).toEqual([true, true, true, true, true, true, true, true, true]);
         // The premise: every published component was emitted as its own
         // declaration and reached from the index, not from a shim that types
-        // any `.svelte` file the same way.
+        // any `.svelte` file the same way, nor from a module that shares its
+        // name.
+        expect(
+          [
+            shadowedOf(['a/X.svelte', 'a/X.svelte.ts', 'a/Y.svelte', 'a/Z.svelte.ts']),
+            shadowedOf(libraryFiles())
+          ],
+          'no component shares a name with a module beside it (its control: a pair, a component alone, a module alone)'
+        ).toEqual([['a/X.svelte'], []]);
         expect(
           MAIN_SURFACE.components.filter(
             (component) =>
