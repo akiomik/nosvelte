@@ -35,9 +35,11 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
+import { runInNewContext } from 'node:vm';
 
 import { render } from '@testing-library/svelte';
 import type { RxNostr } from 'rx-nostr';
+import { Observable } from 'rxjs';
 import { parse } from 'svelte/compiler';
 import { QueryClient } from 'tanstack-svelte-query-v6';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,15 +62,20 @@ import { useRelayDiagnostics } from '$lib/v1/diagnostics.svelte.js';
 import { IncompleteResultError, type ReqHandle } from '$lib/v1/engine.js';
 import { beginAttempt, emptyEventSet, noteFailure } from '$lib/v1/eventset.js';
 import * as Entry from '$lib/v1/index.js';
-import { UnsupportedFilterError } from '$lib/v1/key.js';
-import { InvalidDescriptorError } from '$lib/v1/normalize.js';
+import { UnsupportedFilterError, validateFilter } from '$lib/v1/key.js';
+import { InvalidDescriptorError, MAX_RENDERED, type ReadonlyFilter } from '$lib/v1/normalize.js';
 import { capture, ProviderDisposedError, ReqFailure } from '$lib/v1/own.js';
+import { isOwnedByLibrary, ownedByLibrary } from '$lib/v1/owned.js';
 import { useReq } from '$lib/v1/req.svelte.js';
 import {
+  type CapturedReqError,
+  DOOR_OF,
   isRelayNotInScope,
   type RefreshRejection,
   RelayNotInScopeError,
   REQ_ERROR_CODES,
+  type ReqError,
+  type ReqErrorCode,
   RequestTransportIncompatibleError
 } from '$lib/v1/reqerror.js';
 import {
@@ -152,6 +159,51 @@ async function nextEventOf(server: WS, id: string): Promise<unknown[]> {
     const message = await nextOf(server, 'EVENT');
     if ((message[1] as { id?: unknown } | undefined)?.id === id) return message;
   }
+}
+
+/**
+ * The half of `capture`'s pass-through that is about the **value's code**.
+ *
+ * **It was `isReqError`, a published recognition guard, and it is gone.** Three
+ * arms below read that guard, and each was reading it for something different —
+ * one for "the published value is of this channel", one for "which of
+ * `capture`'s two tests does this row reach", one for "the premise: a foreign
+ * value that gets past the shape test". Only the middle one was ever about the
+ * predicate itself, and what decides a pass-through now is a private
+ * `isChannelValue` whose whole test, on a value ownership has already accepted,
+ * is the discriminant. So this is that test and nothing more: the same list the
+ * library derives its own answer from, asked the same way.
+ *
+ * It is deliberately **not** a re-implementation of the deleted guard. A guard
+ * and a union were two hand-written descriptions of one shape, which is the
+ * defect that removed it; writing a second one here would move that defect into
+ * the suite. Where an arm wanted the members a code requires, it asserts them by
+ * name — see `PO10` — and where it wanted provenance it asks
+ * {@link isOwnedByLibrary}, which is the question the library actually asks.
+ */
+const carriesAChannelCode = (value: unknown): boolean =>
+  (REQ_ERROR_CODES as readonly string[]).includes(
+    (value as { code?: unknown } | null | undefined)?.code as string
+  );
+
+/**
+ * What a call threw, as a value.
+ *
+ * **A premise that has to be a value *this library constructed at its own
+ * site*.** Ownership is no longer a property of the class — a consumer can build
+ * one of those — so there is no expression a test can write that produces an
+ * owned value: the mint is at the throw site, inside the library. A boundary
+ * that refuses is where one comes from, and a call that returns instead of
+ * throwing is a broken premise rather than an empty result, so it says so here
+ * instead of leaving the arm below reading `undefined`.
+ */
+function thrownBy(run: () => void): unknown {
+  try {
+    run();
+  } catch (thrown) {
+    return thrown;
+  }
+  throw new Error('the premise: this boundary was expected to refuse, and it returned');
 }
 
 /**
@@ -2086,6 +2138,727 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
     second.destroy();
   });
 
+  it('PB10: a leg ended by the transport publishes a value this library made', async () => {
+    // **The door `PO3` cannot reach, and it took a wrapped producer to reach
+    // it.** `PO3` ends its leg by disposing the provider; killing the socket
+    // does the same thing — measured, and the reason came back
+    // `code: 'internal-failure'`, because rx-nostr marks the relay terminal and
+    // the machine's own "every relay in scope stopped" path names the reason.
+    // Both are values *this library* constructed and froze in their own
+    // constructor, so an implementation that published the reason **without
+    // capturing it** publishes the same object and every arm stays green.
+    //
+    // The other caller of the same end is the subscription's `error` handler,
+    // where a **foreign** object arrives. Measured by a reviewer against the
+    // ledger: the entry that removes the capture there killed nothing, because
+    // no arm drove that door — an observable edit with no witness. Nothing on
+    // the wire reaches it, so the producer is wrapped, exactly as `P58` wraps
+    // one to separate this library's release from the dependency's.
+    const { rxNostr, server } = createTestRelay(nextUrl());
+    const theirReason = { relay: 'wss://gone.example', why: 'the transport gave out' };
+    let failForward: ((reason: unknown) => void) | undefined;
+    const use = rxNostr.use.bind(rxNostr);
+    (rxNostr as { use: typeof rxNostr.use }).use = ((...args: Parameters<typeof use>) => {
+      const source = use(...args);
+      // The **forward** leg is the first `use` of a live request, and only that
+      // one is wrapped: erroring the backward one would end the backlog instead,
+      // which is a different contract and a different published value.
+      if (failForward !== undefined) return source;
+      const failable = new Observable((subscriber) => {
+        const inner = source.subscribe({
+          next: (packet) => subscriber.next(packet),
+          error: (reason: unknown) => subscriber.error(reason),
+          complete: () => subscriber.complete()
+        });
+        failForward = (reason) => subscriber.error(reason);
+        return () => inner.unsubscribe();
+      });
+      return failable as ReturnType<typeof use>;
+    }) as typeof rxNostr.use;
+
+    const { value: handle, destroy } = mount(() =>
+      useStreamedReq(() => ({
+        verifyEvent: acceptAnyEvent,
+        attempts,
+        rxNostr,
+        client,
+        namespace: 'po10',
+        filters: [{ kinds: [1] }],
+        live: true,
+        retain: 'unbounded',
+        reqIdBase: 'po10',
+        settleTimeoutMs: 300
+      }))
+    );
+
+    const req = await waitForReq(server);
+    respondWithEose(server, req);
+    await settle(120);
+
+    expect(failForward, 'the forward leg was opened and is wrapped').toBeDefined();
+    // A plain object with no prototype of ours, so "it is not what we were
+    // handed" is a claim the identity check below can decide.
+    failForward?.(theirReason);
+    await settle(200);
+
+    const ended = handle.diagnostics.legEnded;
+    // The premise, asserted: with no end this arm walks nothing, and a failure
+    // that never reached the machine looks exactly like a machine that ignores
+    // them.
+    expect(ended?.kind, 'the transport ended the leg').toBe('ended');
+    const reason = ended?.error;
+    expect(reason, 'and it named a reason').toBeDefined();
+
+    // **It is not their object**, which is the whole of what this door owes.
+    expect(reason as unknown, 'the transport’s own object is not published').not.toBe(theirReason);
+    // And what is published is one of ours, classified at the door it arrived
+    // at. A forwarded foreign value has none of these.
+    //
+    // **"Of this channel" is asked in two halves now, and it used to be one call
+    // to `isReqError`.** That guard is gone from the library — it was a second
+    // hand-written description of the union, and it was wrong three times — so
+    // the question it was standing in for is asked directly: *who made this*,
+    // which is the library's own question and the one this arm's title is about,
+    // and *does it carry every member its code requires*, which is what a
+    // consumer holding it can read. The first half is strictly stronger than
+    // what the guard answered: `isReqError` was shape alone, and a forwarded
+    // foreign object that happens to carry the fields passed it.
+    expect(isOwnedByLibrary(reason), 'the published value is one this library made').toBe(true);
+    expect(reason, 'and it carries every member its code requires').toMatchObject({
+      name: 'ReqFailure',
+      message: expect.any(String),
+      thrownName: expect.any(String),
+      truncated: expect.any(Boolean),
+      source: 'relay',
+      code: 'relay-failed'
+    });
+    expect(carriesAChannelCode(reason), 'with a code this channel can publish').toBe(true);
+    expect(
+      DOOR_OF[(reason as { code: ReqErrorCode }).code],
+      'and the door the code belongs to is the one it arrived at'
+    ).toBe('relay');
+    expect(reason?.code, 'classified at the door it arrived at').toBe('relay-failed');
+    expect(
+      (reason as CapturedReqError | undefined)?.source,
+      'the source is the relay, not the writer’s position'
+    ).toBe('relay');
+    // Frozen, because the leg end is republished from the cache on every read of
+    // `diagnostics` — the same reason `PO3` walks the record around it.
+    expect(Object.isFrozen(reason), 'and it is ours to freeze').toBe(true);
+    // Writing to their object afterwards changes nothing published.
+    theirReason.why = 'REWRITTEN';
+    expect(
+      handle.diagnostics.legEnded?.error?.message,
+      'nothing of theirs is reachable'
+    ).not.toContain('REWRITTEN');
+
+    destroy();
+  });
+
+  it('PB6: no writer publishes the value it was handed, at every site that captures one', async () => {
+    // **One hostile class, every site that captures — and the claim is the
+    // opposite of what it was.** This arm used to read "an Error that refuses to
+    // be frozen is published as itself": the boundary kept the caller's object,
+    // so an unfreezable one went out unfrozen and the record carried that as a
+    // price. Three rounds of defending somebody else's object ended with a bare
+    // `Array.isArray` on a revoked `Proxy` throwing out of the boundary, and the
+    // design changed: the failure channel publishes a value this library made,
+    // and nothing of the caller's is kept, frozen, or reachable.
+    //
+    // The sites are enumerated rather than represented by one of them.
+    const refusing = (message: string): Error =>
+      new Proxy(new Error(message), { preventExtensions: (): boolean => false });
+
+    // (1) the descriptor boundary's `catch`, reached through a filter's getter.
+    const throughDescriptor = refusing('thrown at the descriptor boundary');
+    const { rxNostr: descriptorRx } = createTestRelay(nextUrl());
+    const refused = mount(() =>
+      useStreamedReq(() => ({
+        verifyEvent: acceptAnyEvent,
+        attempts,
+        rxNostr: descriptorRx,
+        client,
+        namespace: 'po6a',
+        filters: [
+          {
+            get kinds(): number[] {
+              throw throughDescriptor;
+            }
+          } as unknown as { kinds: number[] }
+        ],
+        reqIdBase: 'po6a'
+      }))
+    );
+    await settle(120);
+    const refusedState = refused.value.state as { status: string; error?: Error };
+    expect(refusedState.status).toBe('error');
+    expect(refusedState.error, 'not the caller’s object').not.toBe(throughDescriptor);
+    expect(refusedState.error?.message).toBe('thrown at the descriptor boundary');
+    expect(Object.isFrozen(refusedState.error), 'ours, so the freeze always lands').toBe(true);
+    expect(Object.isExtensible(throughDescriptor), 'and theirs is untouched').toBe(true);
+    refused.destroy();
+
+    // (2) the query function's `catch` around the accumulator — `PO4`'s path,
+    // with a value that fights back.
+    const throughAccumulator = refusing('thrown by the accumulator');
+    const accumulator: StreamAccumulator = () => async () => {
+      throw throughAccumulator;
+    };
+    const { rxNostr: accumulatorRx } = createTestRelay(nextUrl());
+    const failed = mount(() =>
+      useStreamedReq(() => ({
+        verifyEvent: acceptAnyEvent,
+        attempts,
+        rxNostr: accumulatorRx,
+        client,
+        namespace: 'po6b',
+        filters: [{ kinds: [1] }],
+        reqIdBase: 'po6b',
+        settleTimeoutMs: 300,
+        accumulator
+      }))
+    );
+    await settle(200);
+    const failedState = failed.value.state as { status: string; error?: Error };
+    expect(failedState.status, 'the failure is recorded at all').toBe('error');
+    expect(failedState.error).not.toBe(throughAccumulator);
+    expect(failedState.error?.message).toBe('thrown by the accumulator');
+    expect(failed.value.diagnostics.lastError, 'one object on both surfaces').toBe(
+      failedState.error
+    );
+    expect(Object.isFrozen(failedState.error)).toBe(true);
+    failed.destroy();
+
+    // (3) the writer itself, which a port calls directly.
+    //
+    // **The cast is the claim, not a way around it.** `noteFailure`'s parameter
+    // is typed by what the failure channel hands *out* — the structural union
+    // every variant of which carries a literal `code` — and what a port hands
+    // *in* is whatever was thrown at it. The two lines below are what says the
+    // door is still total over that: a hostile `Proxy` arrives, and what is
+    // recorded is a value this library derived rather than the object.
+    const throughWriter = refusing('handed to the writer');
+    const attemptId = attempts.mint();
+    const written = noteFailure(
+      beginAttempt(emptyEventSet, attemptId),
+      attemptId,
+      throughWriter as unknown as ReqError
+    );
+    expect(written.failure?.error, 'recorded, not replaced by a TypeError').toBeInstanceOf(Error);
+    expect(written.failure?.error).not.toBe(throughWriter);
+    expect(written.failure?.error.message).toBe('handed to the writer');
+    expect(Object.isExtensible(throughWriter), 'and theirs is untouched here too').toBe(true);
+
+    // **The control, without which "not theirs" is satisfied by a boundary that
+    // publishes nothing at all.** An ordinary Error goes the same way — copied,
+    // frozen, its words kept — and the caller's object is still theirs.
+    const ordinary = new Error('an Error that does not fight back');
+    const plainAttempt = attempts.mint();
+    const plainlyWritten = noteFailure(
+      beginAttempt(emptyEventSet, plainAttempt),
+      plainAttempt,
+      ordinary as unknown as ReqError
+    );
+    expect(plainlyWritten.failure?.error.message).toBe('an Error that does not fight back');
+    expect(Object.isFrozen(plainlyWritten.failure?.error), 'the freeze does run').toBe(true);
+    expect(Object.isFrozen(ordinary), 'on ours, not on theirs').toBe(false);
+
+    // **And the site this arm cannot reach**, said rather than left out: the
+    // transport's leg-end reason (`machine.ts`) goes through the same boundary,
+    // and what a mock relay can put on that channel is a socket error rather
+    // than an object of this test's choosing. `E24` holds the record it lands
+    // in; the boundary it passes through is the one the three above measure.
+  });
+
+  it('PB8: a failure a consumer constructed is foreign, whatever it says about itself', async () => {
+    // **The door in the wall.** `ReqFailure` is on the published entry, and its
+    // constructor used to call the ownership registrar — so a consumer could
+    // build one, hand it to a filter getter, and have `capture` recognise it as
+    // this library's and publish it unchanged. A reviewer measured it against
+    // the packed build: `published === forged`, `published.cause === theirGraph`,
+    // and later writes to that graph visible through the published Error.
+    //
+    // The registrar moved to the internal factory. Everything the factory is
+    // handed has been derived here, so registering it says something about *that
+    // object* rather than about the class — and a `ReqFailure` a consumer built
+    // is what it is: a foreign value, captured like any other.
+    //
+    // **And the population was one class, which is how the same door stayed
+    // open.** The correction was applied to the instance a reviewer named:
+    // `ReqFailure` stopped minting and the four classes on the published entry
+    // went on minting in their constructors, so `new
+    // RelayConfigurationError('duplicate-relay', [], 'a message I chose')` was
+    // still a value this registry called ours and `capture` still passed it
+    // through — their `code`, their `message`, their live graph on `cause`,
+    // measured end to end through the hook. So the population is read off the
+    // entry: whatever a consumer can construct, this arm covers.
+    const constructible = Object.entries(Entry).filter(
+      ([, exported]) =>
+        typeof exported === 'function' &&
+        (exported as { prototype?: unknown }).prototype instanceof Error
+    );
+    // How each one is built by somebody who is not this library. The table is
+    // required to cover the population exactly, so a class added to the entry
+    // has to be decided here rather than quietly falling outside.
+    const asAConsumerWould: Readonly<Record<string, () => Error>> = {
+      IncompleteResultError: () => new Entry.IncompleteResultError(['timeout']),
+      MissingProviderError: () => new Entry.MissingProviderError(),
+      MissingRandomnessError: () => new Entry.MissingRandomnessError(),
+      RelayConfigurationError: () =>
+        new Entry.RelayConfigurationError(
+          'invalid-relay-input',
+          ['wss://theirs.example/'],
+          'a message I chose'
+        )
+    };
+    expect(
+      constructible.map(([name]) => name).sort(),
+      'every class the entry hands a consumer is built below'
+    ).toEqual(Object.keys(asAConsumerWould).sort());
+    // Pinned rather than `> 0`: `ReqFailure` left this list when the class came
+    // off the entry, and a sixth arriving is a decision.
+    //
+    // **Four, and it was five for a round.** `MissingVerifierError` was added to
+    // the entry when `internal-failure` was split, and taken off again when a
+    // reviewer measured that a consumer cannot catch it as a class: it is thrown
+    // inside the query function, so what they receive is a copy with
+    // `code: 'unspecified'` and the class name in `thrownName` — `LC4` asserts
+    // exactly that. This pin is what made both moves visible.
+    expect(constructible.length, 'four, and the count is the claim').toBe(4);
+
+    for (const [name] of constructible) {
+      const built = (asAConsumerWould[name] as () => Error)();
+      const capturedTheirs = capture(built, 'descriptor');
+      expect(capturedTheirs, `${name}: what a consumer built is not what we made`).not.toBe(built);
+      expect(capturedTheirs, `${name}: copied at the door it arrived at`).toMatchObject({
+        source: 'descriptor',
+        code: 'descriptor-unreadable',
+        thrownName: built.name
+      });
+      // **Which of `capture`'s two tests each row actually reaches.** A value
+      // passes through only when it is *ours* **and** on this channel, so two
+      // of these four are refused twice over — their `code` is not a
+      // `ReqErrorCode` — while `IncompleteResultError` and
+      // `MissingProviderError` carry codes that are. Those two rows are where
+      // the ownership question stands alone, and without this line "covered"
+      // would be four rows of which most measure the channel's code test
+      // instead. `MissingProviderError` joined them when a request built with
+      // no provider stopped refusing as a descriptor fault and started refusing
+      // as what it is.
+      //
+      // **Asked of the code alone, and it used to go through `isReqError`.** The
+      // second of `capture`'s two tests is `isChannelValue`, and on a value
+      // ownership has already accepted its whole content is the discriminant —
+      // so that is what separates the rows, and the partition it draws is the
+      // same one.
+      expect(
+        carriesAChannelCode(built),
+        `${name}: whether the channel’s own code test alone would let it by`
+      ).toBe(name === 'IncompleteResultError' || name === 'MissingProviderError');
+    }
+    // **The library's own value, at a door it did not come from.** The four
+    // above are consumer-constructed and every one of them is copied, so the
+    // arm was silent on the other half: a `MissingProviderError` this library
+    // minted, arriving at the descriptor door. It is ours and it carries a
+    // channel code, so only the door stops it, and while the code's door was
+    // `descriptor` it did not — `capture` handed it straight back, so a value
+    // meaning "no provider above this request" was publishable on a request
+    // that has one.
+    //
+    // **This is one row of a ten-row rule, and this arm is not the rule.** It
+    // is written as a member of `PO8`'s population — a value at the wrong door —
+    // and `PO12` is what holds every row. An adversarial pass moved
+    // `provider-disposed` to `descriptor` after this case was added and the
+    // whole suite stayed green, which is what `PO12` exists for. It is also a
+    // mapping witness rather than an arrangement: the end-to-end entrance a
+    // consumer could reach is narrower than the mechanism, and `reqerror.ts`'s
+    // own row is where that is written down.
+    const mintedElsewhere = ownedByLibrary(new Entry.MissingProviderError());
+    expect(carriesAChannelCode(mintedElsewhere), 'the premise: it is ours and on the channel').toBe(
+      true
+    );
+    const throughTheWrongDoor = capture(mintedElsewhere, 'descriptor') as { code?: string };
+    expect(throughTheWrongDoor, 'not handed through at a door it did not arrive at').not.toBe(
+      mintedElsewhere
+    );
+    expect(throughTheWrongDoor.code, 'and re-derived to the door it did arrive at').toBe(
+      'descriptor-unreadable'
+    );
+
+    // **A well-formed foreign value, which the four above only produce by
+    // accident.** A consumer who wants past the channel's code test writes the
+    // whole shape: the fields are theirs, and nothing but the registry can tell
+    // the difference.
+    //
+    // **It is a plain object, and that is a finding rather than a convenience.**
+    // It used to be `new RelayConfigurationError('unspecified' as …, [], '…')`,
+    // against a published guard that read `code` and nothing else; the guard
+    // grew to decide the whole union, and then it was deleted, because a guard
+    // and a union are two hand-written descriptions of one shape. So the field
+    // list below is no longer what any check reads — it is written out to keep
+    // the impostor as *good* as a consumer can make it, and the claim is that
+    // making it good changes nothing.
+    const wellFormed = Object.assign(new Error('a refusal I wrote myself'), {
+      code: 'unspecified',
+      thrownName: 'Error',
+      truncated: false,
+      source: 'unspecified'
+    });
+    expect(
+      carriesAChannelCode(wellFormed),
+      'the premise: it carries a code this channel publishes'
+    ).toBe(true);
+    expect(capture(wellFormed, 'relay'), 'and it is still not ours').not.toBe(wellFormed);
+    // **The half that moved, and it moved from the shape test to the registry.**
+    // A published class wearing a channel `code` used to be refused by the
+    // predicate — it could not carry `thrownName`, `truncated` and an agreeing
+    // `source` — and there is no predicate now, so this object *does* satisfy
+    // the code test that `capture` applies. What refuses it is that a consumer
+    // built it: the well-formed foreign value and the class-shaped one are the
+    // same finding now, and it is attribution, not shape. `WR23` is what holds
+    // the premise that no constructor mints.
+    const classShaped = new Entry.RelayConfigurationError(
+      'unspecified' as RelayConfigurationErrorCode,
+      [],
+      'a refusal I wrote myself'
+    );
+    expect(
+      carriesAChannelCode(classShaped),
+      'the premise: a published class can be made to wear a channel code'
+    ).toBe(true);
+    expect(
+      isOwnedByLibrary(classShaped),
+      'and the only thing left that refuses it is that a consumer made it'
+    ).toBe(false);
+    expect(capture(classShaped, 'relay'), 'so it is copied like any other foreign value').not.toBe(
+      classShaped
+    );
+    expect(capture(classShaped, 'relay'), 'at the door it arrived at').toMatchObject({
+      source: 'relay',
+      code: 'relay-failed',
+      thrownName: 'RelayConfigurationError'
+    });
+
+    const theirGraph = { mutable: 1 };
+    const forged = new ReqFailure({
+      thrownName: 'Error',
+      message: 'x'.repeat(10_000),
+      source: 'relay',
+      truncated: false,
+      cause: theirGraph as unknown as CapturedReqError
+    });
+
+    // **Thrown at the door it claims to have come from**, which is the
+    // arrangement that makes the forgery observable on its own. The first
+    // version used a value whose `source` differed from the door, and the
+    // re-capture rule — a snapshot at a *different* door is re-derived — rescued
+    // it: the ledger's `ours-is-decided-by-a-forgeable-read` stopped killing
+    // this arm, which is how the gap was found. With the two agreeing, only the
+    // membership question decides, and a forgeable one publishes their object.
+    const atItsOwnDoor = new ReqFailure({
+      thrownName: 'Error',
+      message: 'forged at the door it names',
+      source: 'descriptor',
+      truncated: false,
+      cause: theirGraph as unknown as CapturedReqError
+    });
+    const atOwnDoor = capture(atItsOwnDoor, 'descriptor') as ReqFailure;
+    expect(atOwnDoor, 'a consumer-built failure is not ours, whatever it says').not.toBe(
+      atItsOwnDoor
+    );
+    expect(atOwnDoor.cause, 'and their graph is not on it').not.toBe(theirGraph);
+
+    const captured = capture(forged, 'descriptor') as ReqFailure;
+    expect(captured, 'not theirs, however it was constructed').not.toBe(forged);
+    expect(captured.cause, 'and their graph is not on it').not.toBe(theirGraph);
+    // Every field is re-derived: the source is where it arrived, the message is
+    // bounded, and `truncated` reports the cut they said had not happened.
+    expect(captured.source).toBe('descriptor');
+    expect(captured.code).toBe('descriptor-unreadable');
+    expect(captured.message.length).toBeLessThan(MAX_RENDERED + 20);
+    expect(captured.truncated, 'the flag is ours to derive').toBe(true);
+    // Their object is untouched, like any other value handed to this boundary.
+    expect(Object.isFrozen(theirGraph)).toBe(false);
+    theirGraph.mutable = 2;
+    expect((captured.cause as { message?: string } | undefined)?.message).not.toContain('2');
+
+    // **And through the published hook**, which is where the reviewer's
+    // counterexample was driven: a forged failure thrown from a filter getter
+    // reaches the failure channel as a value this library derived.
+    const { rxNostr } = createTestRelay(nextUrl());
+    const published = mount(() =>
+      useStreamedReq(() => ({
+        verifyEvent: acceptAnyEvent,
+        attempts,
+        rxNostr,
+        client,
+        namespace: 'po8',
+        filters: [
+          {
+            get kinds(): number[] {
+              throw forged;
+            }
+          } as unknown as { kinds: number[] }
+        ],
+        reqIdBase: 'po8'
+      }))
+    );
+    await settle(120);
+    const state = published.value.state as { status: string; error?: ReqFailure };
+    expect(state.status).toBe('error');
+    expect(state.error, 'the forged object is not what a consumer holds').not.toBe(forged);
+    expect(state.error?.cause).not.toBe(theirGraph);
+    expect(state.error?.source, 'the door it really came in by').toBe('descriptor');
+    published.destroy();
+  });
+
+  it('PB7: what a captured failure promises, on the values that used to break it', async () => {
+    // **The six things the snapshot design owes**, each read on a value that
+    // defeated the design before it. The boundary used to keep the caller's
+    // `Error` and defend it; every round of defence found the next unguarded
+    // read, and the last one — a bare `Array.isArray` while walking `cause` —
+    // was made to throw by a **revoked `Proxy`**, out of the one function whose
+    // whole promise is that it does not. Nothing of the caller's is kept now,
+    // so most of these hold by construction rather than by guarding.
+    const hostile = (): unknown => {
+      const revocable = Proxy.revocable({}, {});
+      revocable.revoke();
+      return revocable.proxy;
+    };
+
+    // (1) **Capturing never throws**, whatever it is handed — including the
+    // reviewer's counterexample: a revoked proxy *inside* `cause`.
+    const throwingGetter = new Error('its own name refuses');
+    Object.defineProperty(throwingGetter, 'name', {
+      get(): string {
+        throw new TypeError('the name getter refuses');
+      }
+    });
+    //
+    // **And what comes back is read, per value and at every door.** This loop
+    // ran eleven values through `not.toThrow()` and then read three of the
+    // *other* section's outputs, so a `capture` that answered `undefined` for
+    // the symbol — or for any of the eleven — satisfied every line of it: the
+    // only thing eleven rows measured was that nothing was raised. Each row
+    // carries what the snapshot must call the thing that was thrown, which is
+    // the one field that differs between them.
+    const values: readonly [string, unknown, string][] = [
+      [
+        'an Error whose cause is a revoked proxy',
+        new Error('outer', { cause: hostile() }),
+        'Error'
+      ],
+      [
+        'an Error whose cause is an object holding an Error',
+        new Error('outer', { cause: { deeper: new Error('inner') } }),
+        'Error'
+      ],
+      ['a revoked proxy', hostile(), 'a thrown object'],
+      [
+        'an Error from another realm',
+        runInNewContext('new Error("thrown in another realm")'),
+        'Error'
+      ],
+      [
+        'a proxy that lies about its prototype',
+        new Proxy(
+          { message: 'not really an Error' },
+          { getPrototypeOf: (): object => Error.prototype }
+        ),
+        'a thrown object'
+      ],
+      ['an Error whose name getter throws', throwingGetter, 'a thrown object'],
+      // **An empty `name`, which is the boundary nothing stood on.** `nameOf`
+      // takes the read when it is a string *and* `length > 0`, and that `> 0`
+      // could be `>= 0` with the whole spike suite green — found by shifting
+      // every comparison in the library by one. Shifted, the published name is
+      // the empty string: a consumer branching on it sees a value that names
+      // nothing, where the contract is that what a boundary publishes always
+      // says what it was.
+      [
+        'an Error whose name is empty',
+        Object.assign(new Error('nameless'), { name: '' }),
+        'a thrown object'
+      ],
+      ['an object with no prototype', Object.create(null), 'a thrown object'],
+      ['a symbol', Symbol('nope'), 'a thrown symbol'],
+      ['a bigint', 1n, 'a thrown bigint'],
+      ['undefined', undefined, 'a thrown undefined'],
+      ['null', null, 'a thrown object']
+    ];
+    // **`code` is a total function of `source`, which is what the published type
+    // says and what one expression in `own.ts` decides.** `CapturedReqError`
+    // pairs the two in the type — a consumer who narrowed on one has narrowed on
+    // the other — so the pair is read at every door for every value: nothing
+    // about the thrown value may reach `code`, and nothing about the door may
+    // reach `thrownName`.
+    const doors = [
+      ['descriptor', 'descriptor-unreadable'],
+      ['relay', 'relay-failed'],
+      ['unspecified', 'unspecified']
+    ] as const;
+    for (const [what, value, thrownName] of values) {
+      for (const [source, code] of doors) {
+        let captured: ReqError | undefined;
+        expect(() => {
+          captured = capture(value, source);
+        }, `${what} at ${source}: capturing never throws`).not.toThrow();
+        expect(captured, `${what} at ${source}: and what it answers with`).toMatchObject({
+          source,
+          code,
+          thrownName
+        });
+      }
+    }
+
+    // (2) **What it was handed comes back untouched**: not frozen, not
+    // extended, its `cause` graph as the caller left it. The previous design
+    // could not give this — it froze what it published, and what it published
+    // was theirs.
+    const shared = { hijack: 'not yet' };
+    const theirs = new Error('carries a cause', { cause: shared });
+    const captured = capture(theirs, 'unspecified') as ReqFailure;
+    expect(Object.isFrozen(theirs), 'their Error').toBe(false);
+    expect(Object.isFrozen(shared), 'and what it points at').toBe(false);
+    expect(captured, 'and what we publish is not theirs').not.toBe(theirs);
+    expect(Object.isFrozen(captured), 'ours, and frozen').toBe(true);
+
+    // (3) **Writing to their graph afterwards changes nothing published.**
+    shared.hijack = 'HIJACKED';
+    theirs.message = 'rewritten';
+    expect(captured.message).toBe('carries a cause');
+    expect(captured.cause?.message).toContain('not yet');
+    expect(captured.cause?.message).not.toContain('HIJACKED');
+
+    // (4) **The bounds are deterministic and `truncated` says which way** — for
+    // every bound, which it did not: the message came back from a helper that
+    // dropped the fact of its own cut, so a 10 000-character message was
+    // published at 207 characters with `truncated: false`. Measured by a
+    // reviewer; the flag is derived where the cutting happens now.
+    const longMessage = capture(new Error('x'.repeat(10_000)), 'relay') as ReqFailure;
+    // **The number, not the constant.** This read `toBeLessThan(MAX_RENDERED +
+    // 20)`, which is satisfied by any bound at all — widening `MAX_RENDERED` to
+    // 512 leaves it green while both surviving records say 200, and a reviewer
+    // found no arm anywhere that pins either bound. `0004` and `0005` publish
+    // **200 UTF-16 units plus a `… (cut)` marker, so at most 207**, and a port
+    // cannot infer that from a name. So the length is asserted as the figure the
+    // records give, and the constant is asserted to be the figure they name.
+    expect(MAX_RENDERED, 'the bound the records publish').toBe(200);
+    expect(longMessage.message.length, 'the retained prefix plus the marker').toBe(207);
+    expect(longMessage.message.endsWith('… (cut)'), 'and the cut is visible in the text').toBe(
+      true
+    );
+    expect(longMessage.truncated, 'a cut message says so').toBe(true);
+    const longName = new Error('short enough');
+    Object.defineProperty(longName, 'name', { value: 'N'.repeat(10_000) });
+    expect((capture(longName, 'relay') as ReqFailure).truncated, 'a cut name too').toBe(true);
+    expect(
+      (capture(new Error('short enough'), 'relay') as ReqFailure).truncated,
+      'and nothing cut says so'
+    ).toBe(false);
+    // (4) **The bounds are deterministic and `truncated` says which way.**
+    const deep = new Error('1', {
+      cause: new Error('2', { cause: new Error('3', { cause: new Error('4') }) })
+    });
+    const deepSnapshot = capture(deep, 'unspecified') as ReqFailure;
+    expect(deepSnapshot.cause?.cause?.message).toBe('3');
+    expect(deepSnapshot.cause?.cause?.cause, 'past the bound is not copied').toBeUndefined();
+    expect(deepSnapshot.truncated, 'and the cut is published').toBe(true);
+    const shallow = capture(new Error('1', { cause: new Error('2') }), 'unspecified') as ReqFailure;
+    expect(shallow.truncated, 'a chain inside the bound is whole').toBe(false);
+    expect(capture(new Error('x'.repeat(10_000)), 'unspecified').message.length).toBeLessThan(
+      MAX_RENDERED + 20
+    );
+
+    // (5b) **And a snapshot re-captured at a *different* door is re-derived.**
+    // A consumer holds these objects: given the `ReqFailure` from a relay
+    // failure, throwing it back from a filter getter published
+    // `code: 'relay-failed'` for a request that never reached a relay —
+    // measured by a reviewer, and it is the memo defect below wearing the
+    // ownership pass-through instead of a `WeakMap`. `source` is a claim about
+    // where **this** failure arrived.
+    const fromRelay = capture(new Error('the relay gave out'), 'relay') as ReqFailure;
+    const rethrown = capture(fromRelay, 'descriptor') as ReqFailure;
+    expect(rethrown, 'a different door is a different failure').not.toBe(fromRelay);
+    expect(rethrown.source).toBe('descriptor');
+    expect(rethrown.code).toBe('descriptor-unreadable');
+    expect(rethrown.message, 'carrying what it said').toBe('the relay gave out');
+    expect(capture(fromRelay, 'relay'), 'the same door is the same failure').toBe(fromRelay);
+
+    // (5) **Capturing twice is capturing once — for the *snapshot*, not for the
+    // thrown object.** The published path applies the boundary twice (the query
+    // function owns what was thrown, the writer owns the result), and a snapshot
+    // handed back is returned unchanged, which is what keeps
+    // `state.error === diagnostics.lastError` one object.
+    //
+    // **What was there instead, and why it is gone**: a module-level `WeakMap`
+    // keyed on the thrown value, which made `source` a fact about where an
+    // object was *first* seen. A reviewer measured it — `capture(e,
+    // 'descriptor')` then `capture(e, 'relay')` returned the first snapshot,
+    // still saying `descriptor`, for a failure that came from a relay — and a
+    // caller who re-throws one Error from two attempts got the older message.
+    // Occurrence identity belongs to the record, not to the caller's object.
+    expect(capture(captured, 'unspecified'), 'a snapshot is not re-captured').toBe(captured);
+    const again = capture(theirs, 'relay') as ReqFailure;
+    expect(again, 'a second occurrence is a second snapshot').not.toBe(captured);
+    expect(again.source, 'and it is the source it actually arrived at').toBe('relay');
+    expect(again.message, 'carrying what the value says *now*').toBe('rewritten');
+
+    // (6) **What this library made passes through**, keeping the `code` a
+    // consumer branches on — and *made* is the whole of the rule now, where this
+    // arm used to write it as *is an instance of*. The premise below was
+    // `new UnsupportedFilterError('search')`, built here: the class minted
+    // membership in its own constructor, so a value a consumer built answered
+    // the ownership question in their favour, and the same door let a forged
+    // `RelayConfigurationError` out unchanged with their live graph on `cause`
+    // (`owned.ts` carries the measurement). The registrar left the constructors;
+    // the library mints at its own construction sites, and this premise has to
+    // come from one of them.
+    //
+    // So `ours` is thrown by the boundary that builds it. `validateFilter` is
+    // that boundary for this class, and its throw is `PO5`'s refusal read one
+    // level down from the hook.
+    const ours = thrownBy(() => validateFilter({ search: 'unsupported' } as ReadonlyFilter));
+    expect(ours, 'the premise: the library refused, and this is what it threw').toBeInstanceOf(
+      UnsupportedFilterError
+    );
+    expect(capture(ours, 'unspecified'), 'ours is published as itself').toBe(ours);
+    expect(Object.isFrozen(ours), 'and frozen on the way out').toBe(true);
+    // **Both edges, because "ours passes through" is only half a rule.** A value
+    // of the same class a *consumer* constructed is foreign: it is copied, it
+    // arrives at the door it was handed to, and the `code` it claimed for itself
+    // does not survive — which is the point, since none of its fields was
+    // derived here.
+    const theirsOfOurClass = new UnsupportedFilterError('search');
+    expect(
+      capture(theirsOfOurClass, 'unspecified'),
+      'an instance a consumer built is not one this library made'
+    ).not.toBe(theirsOfOurClass);
+    expect(capture(theirsOfOurClass, 'descriptor')).toMatchObject({
+      source: 'descriptor',
+      code: 'descriptor-unreadable',
+      thrownName: 'UnsupportedFilterError'
+    });
+    // A `Proxy` *wrapping* one of ours is not ours — what a consumer would hold
+    // is the wrapper — so it is captured like any other foreign value.
+    const wrapped = new Proxy(ours as object, {});
+    expect(capture(wrapped, 'unspecified'), 'a wrapper is not ours').not.toBe(wrapped);
+
+    // (7) **The classification a consumer reads without `instanceof`**, and the
+    // vocabulary is the production surface's rather than this spike's catch
+    // sites: `accumulator` was a seam 0004 does not publish and `writer` was a
+    // place inside the library, so a published union — hard to remove a member
+    // from — named two things a consumer is never standing at.
+    expect(captured.source).toBe('unspecified');
+    expect(captured.code).toBe('unspecified');
+    expect(captured.thrownName).toBe('Error');
+    expect(capture(hostile(), 'relay')).toMatchObject({
+      source: 'relay',
+      code: 'relay-failed'
+    });
+    expect(capture(hostile(), 'descriptor')).toMatchObject({ code: 'descriptor-unreadable' });
+  });
+
   it(
     'LE16: every member of every published type is readonly, to the depth a consumer can reach',
     {
@@ -4016,4 +4789,139 @@ describe('what a request publishes is the consumer’s to hold and nobody else�
       ).toEqual([2349]);
     }
   );
+});
+
+describe('the door a code belongs to, over the whole table', () => {
+  it('PB12: every code is handed through at its own door and re-derived at the others', () => {
+    // **`PO8` closed one row of a ten-row table, and an adversarial pass ran the
+    // sibling.** The rule `B5-C6` states is that a value this library minted is
+    // handed back unchanged only at the door it arrived at, and `DOOR_OF` is the
+    // whole of "arrived at" — so the rule has ten instances and the suite
+    // witnessed one. Measured on the commit before this arm:
+    // `DOOR_OF['provider-disposed'] = 'descriptor'` — the same one-word edit
+    // `PO8` catches for `missing-provider` — left **95 files and 1002 arms
+    // green**, and a consumer holding the `refresh()` rejection `RM8` hands them
+    // could have thrown it back from a descriptor getter and had a request under
+    // a live provider publish "provider disposed".
+    //
+    // **The table below is written out rather than read from `DOOR_OF`**, and
+    // that is the point of it: `RM7` looks like this check and is not, because
+    // its fixture builds each value with `source: DOOR_OF[code]` — the oracle
+    // comes from the thing under test, so the fixture moves with the mutation
+    // and no `DOOR_OF` edit can ever be seen there.
+    const DOORS: Readonly<Record<ReqErrorCode, 'descriptor' | 'relay' | 'unspecified'>> = {
+      'invalid-descriptor': 'descriptor',
+      'unsupported-filter': 'descriptor',
+      'relay-not-in-scope': 'descriptor',
+      'transport-incompatible': 'descriptor',
+      'descriptor-unreadable': 'descriptor',
+      'relay-failed': 'relay',
+      'incomplete-result': 'unspecified',
+      'accumulator-contract': 'unspecified',
+      'provider-disposed': 'unspecified',
+      'missing-provider': 'unspecified',
+      unspecified: 'unspecified'
+    };
+    // The population is the channel's own list, so a code added without a row
+    // here fails to compile rather than being skipped.
+    expect([...REQ_ERROR_CODES].sort(), 'the table is the channel’s own set').toEqual(
+      Object.keys(DOORS).sort()
+    );
+
+    // **Minted the way the channel's own classes are, and the first shape of
+    // this was the defect it accuses `RM7` of.** It built every value with
+    // `source: DOORS[code]`, so `thrown.source` and `DOOR_OF[thrown.code]`
+    // agreed on every input — and `capture` reading either gives the same
+    // answer. Measured: restoring the pre-repair line `const already =
+    // thrown.source` left `PO12` **and** `PO8` green, on the exact defect
+    // `DOOR_OF` was introduced to fix (`0005` records it: "the rule was written
+    // for one class while nine could reach it").
+    //
+    // So the values carry what the real ones carry: only the three **captured**
+    // codes have a `source` at all — the other seven are class instances with a
+    // `code` and nothing of the door on them. `thrown.source` is therefore
+    // `undefined` for seven of the ten, which is what makes the two readings
+    // separable.
+    // **Derived from the union, not written down.** As a hand-written list this
+    // was the repair's own weak point: replacing it with every code — which is
+    // the pre-repair minting — restores the defect and leaves the arm green, so
+    // one edit inside the test could silently undo it. The captured variants are
+    // the ones whose declaration carries a `source`, and that is read off the
+    // union's source text, which is independent of `DOOR_OF`.
+    const unionSource = readFileSync(join(LIBRARY, 'reqerror.ts'), 'utf8').replace(/\s+/g, ' ');
+    const CAPTURED = [...REQ_ERROR_CODES].filter((code) =>
+      new RegExp(`readonly source:[^;]*; readonly code: '${code}';`).test(unionSource)
+    );
+    expect(CAPTURED.sort(), 'the codes whose variant declares a door').toEqual(
+      ['descriptor-unreadable', 'relay-failed', 'unspecified'].sort()
+    );
+    // **One code is a request value only when it is the request's own class.**
+    // `transport-incompatible` is the provider's refusal's code too, and the
+    // channel takes it only from a value the request's class branded where it
+    // was built (`REQUEST_TRANSPORT_REFUSALS`); a generic object minted with that
+    // code is ours and not the channel's, and would be re-derived at every door.
+    // So that row is minted from the class, the way the library builds it.
+    const minted = (code: ReqErrorCode): ReqError =>
+      code === 'transport-incompatible'
+        ? (ownedByLibrary(
+            new RequestTransportIncompatibleError('a relay this provider’s transport cannot name')
+          ) as unknown as ReqError)
+        : (ownedByLibrary(
+            Object.assign(new Error(`a ${code} value`), {
+              code,
+              thrownName: 'Error',
+              truncated: false,
+              ...(CAPTURED.includes(code) ? { source: DOORS[code] } : {})
+            })
+          ) as unknown as ReqError);
+
+    const wrong: string[] = [];
+    const passed: string[] = [];
+    for (const code of REQ_ERROR_CODES) {
+      for (const door of ['descriptor', 'relay', 'unspecified'] as const) {
+        const value = minted(code);
+        const out = capture(value, door) as ReqError;
+        // **`unspecified` is a door of its own kind, and the arm used to skip
+        // it** — which left a third of this population unmeasured and made the
+        // title false as written. `capture` never re-derives *there*, because
+        // the door that cannot say where a value came from must not overwrite an
+        // attribution; so the expectation at that door is pass-through for
+        // every code, whatever its row says. Measured: with the
+        // `source !== 'unspecified'` clause deleted from `capture`, the skip
+        // left this arm green.
+        const handedThrough = out === value;
+        const shouldBe = door === 'unspecified' || DOORS[code] === door;
+        if (handedThrough !== shouldBe) {
+          wrong.push(
+            `${code} at ${door}: ${handedThrough ? 'handed through' : 're-derived'}, expected ${
+              shouldBe ? 'handed through' : 're-derived'
+            }`
+          );
+        }
+        if (handedThrough) passed.push(`${code}@${door}`);
+        else if (door === 'unspecified') {
+          // **Recorded rather than thrown.** This was a `throw`, which aborted
+          // the walk on the first code and left `wrong` unasserted — so the arm
+          // could not tell one bad row from ten, and any entry pushed before it
+          // was lost.
+          wrong.push(`${code} at ${door}: re-derived, and that door never re-derives`);
+        } else {
+          // Re-derived means it wears the door it actually arrived at, which is
+          // the half a membership test cannot see.
+          expect(out.code, `${code} re-derived at ${door} takes that door’s code`).toBe(
+            door === 'descriptor' ? 'descriptor-unreadable' : 'relay-failed'
+          );
+        }
+      }
+    }
+    expect(wrong, 'a code handed through at a door it did not arrive at').toEqual([]);
+    // **Not vacuous, both edges**: some pairs are handed through and some are
+    // re-derived, so a `capture` that copied everything — or one that copied
+    // nothing — fails here rather than agreeing.
+    expect(passed.length, 'no code is handed through at its own door').toBeGreaterThan(0);
+    expect(
+      REQ_ERROR_CODES.length * 3 - passed.length,
+      'no code is re-derived anywhere'
+    ).toBeGreaterThan(0);
+  });
 });
