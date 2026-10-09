@@ -903,6 +903,12 @@ describe('which failure code reaches which surface, and what a consumer compiles
             'export declare class Receiving { static take(this: typeof ReqFailure): void; }',
             'export declare class Inheriting extends CustomEvent<typeof ReqFailure> {}',
             'export declare class InheritingErased extends CustomEvent<any> {}',
+            'export interface InheritingInterface extends CustomEvent<typeof ReqFailure> {}',
+            'export interface InheritingInterfaceErased extends CustomEvent<any> {}',
+            'type CopiedEvent = { [K in keyof CustomEvent<typeof ReqFailure>]: CustomEvent<typeof ReqFailure>[K] };',
+            'export interface Copying extends CopiedEvent {}',
+            'type CopiedErased = { [K in keyof CustomEvent<any>]: CustomEvent<any>[K] };',
+            'export interface CopyingErased extends CopiedErased {}',
             'export type Renamed = { readonly held: typeof rejection };'
           ].join('\n')
         );
@@ -974,23 +980,51 @@ describe('which failure code reaches which surface, and what a consumer compiles
             ),
             alone('InheritingErased').some(
               (line) => line.startsWith('any:') && line.includes('<base>')
+            ),
+            alone('InheritingInterface').some(
+              (line) => line.startsWith('snapshot:') && line.includes('<base>')
+            ),
+            alone('InheritingInterfaceErased').some(
+              (line) => line.startsWith('any:') && line.includes('<base>')
+            ),
+            alone('Copying').some(
+              (line) => line.startsWith('snapshot:') && line.includes('.detail')
+            ),
+            alone('CopyingErased').some(
+              (line) => line.startsWith('any:') && line.includes('.detail')
             )
           ],
-          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, one a conditional return hides, a guard a component exports, a snapshot an event carries, the rejection set inside an alias, an event erased to any, a snapshot as a receiver, and a snapshot and an any a class inherits'
-        ).toEqual([true, true, true, true, true, true, true, true, true, true, true]);
+          'the walk’s control: a guard on a static’s member, a snapshot constructor a method resolves to, one a type parameter defaults to, one a conditional return hides, a guard a component exports, a snapshot an event carries, the rejection set inside an alias, an event erased to any, a snapshot as a receiver, a snapshot and an any a class inherits, the same an interface inherits, and the same in a mapped copy an interface extends'
+        ).toEqual([
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ]);
         // The premise: every published component was emitted as its own
         // declaration and reached from the index, not from a shim that types
         // any `.svelte` file the same way, nor from a module that shares its
         // name.
         expect(
           [
-            shadowedOf(['a/X.svelte', 'a/X.svelte.ts', 'a/Y.svelte', 'a/Z.svelte.ts']),
-            shadowedOf(['a/Article.svelte', 'a/article.svelte.ts'], false),
-            shadowedOf(['a/Article.svelte', 'a/article.svelte.ts'], true),
+            shadowedOf(['a/X.svelte', 'a/Y.svelte', 'a/Z.svelte.ts'], (path) =>
+              ['a/X.svelte.ts', 'a/Z.svelte.ts'].includes(path)
+            ),
             shadowedOf(libraryFiles())
           ],
-          'no component shares a name with a module beside it (its control: a pair, a component alone, a module alone, and a pair in two cases, as each kind of file system compares them)'
-        ).toEqual([['a/X.svelte'], ['a/Article.svelte'], [], []]);
+          'no component shares a name with a module beside it (its control: a component with a module, a component alone, a module alone)'
+        ).toEqual([['a/X.svelte'], []]);
         expect(
           MAIN_SURFACE.components.filter(
             (component) =>

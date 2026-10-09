@@ -117,18 +117,17 @@ const generatedOnly = (one: ts.Diagnostic): boolean => {
  * component's name is the module's, and a component exporting a guard beside
  * a rune module of its name passed the walk: measured. Refused rather than
  * resolved, since `./X.svelte.js` names the module at the same path.
+ *
+ * **Asked of the file system, not of the spellings.** A comparison of names
+ * has to reproduce how the file system matches them, and two attempts did
+ * not: spellings missed `article.svelte.ts`, and lower-casing missed `ς` for
+ * `Σ`, `ſ` for `s` and a decomposed `é`, each measured on a file system that
+ * ignores case. `exists` is the file system's own lookup.
  */
 export const shadowedOf = (
   paths: readonly string[],
-  caseSensitive: boolean = ts.sys.useCaseSensitiveFileNames
-): string[] => {
-  // As the file system compares names: on one that ignores case,
-  // `article.svelte.ts` shadows `Article.svelte`, and a comparison of
-  // spellings passed it, measured.
-  const key = (path: string): string => (caseSensitive ? path : path.toLowerCase());
-  const modules = new Set(paths.map(key));
-  return paths.filter((path) => path.endsWith('.svelte') && modules.has(key(`${path}.ts`)));
-};
+  exists: (path: string) => boolean = existsSync
+): string[] => paths.filter((path) => path.endsWith('.svelte') && exists(`${path}.ts`));
 
 /** Every component of the library, and every module, by path. */
 export const libraryFiles = (): string[] =>
@@ -343,8 +342,18 @@ export function reachableFrom(
       for (const argument of checker.getTypeArguments(type as ts.TypeReference))
         next('<>', argument);
     for (const argument of type.aliasTypeArguments ?? []) next('<alias>', argument);
+    // A mapped type this library declares is its own, whatever its members
+    // were copied from: one copying `CustomEvent<typeof ReqFailure>` had only
+    // the platform's `detail`, and the walk skipped it as the platform's,
+    // measured.
+    const mappedHere =
+      ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) !== 0 &&
+      (type.getSymbol()?.declarations ?? []).some((declaration) =>
+        resolve(declaration.getSourceFile().fileName).startsWith(`${EMITTED}/`)
+      );
     for (const property of checker.getPropertiesOfType(type))
-      if (ours(property)) next(`.${property.getName()}`, checker.getTypeOfSymbol(property));
+      if (mappedHere || ours(property))
+        next(`.${property.getName()}`, checker.getTypeOfSymbol(property));
     for (const [kind, signatures] of [
       ['()', type.getCallSignatures()],
       ['new()', type.getConstructSignatures()]
