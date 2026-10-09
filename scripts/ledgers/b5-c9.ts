@@ -45,7 +45,6 @@ export default {
     {
       id: 'C9-descriptor-door-keeps',
       arm: 'FC1',
-      requires: ['PB6'],
       describe: 'the descriptor boundary publishes the value thrown at it',
       edits: [
         {
@@ -58,7 +57,6 @@ export default {
     {
       id: 'C9-accumulator-door-keeps',
       arm: 'FC1',
-      requires: ['PB6'],
       describe: "the accumulator's catch keeps the value the accumulator threw",
       edits: [
         {
@@ -91,18 +89,6 @@ export default {
           file: 'src/lib/v1/machine.ts',
           from: '      reason: reason === undefined ? undefined : captureFromRelay(reason)',
           to: '      reason: reason === undefined ? undefined : (reason as RelayLegError)'
-        }
-      ]
-    },
-    {
-      id: 'C9-state-keeps',
-      arm: 'FC1',
-      describe: "the state publishes the query's error as it is",
-      edits: [
-        {
-          file: 'src/lib/v1/useStreamedReq.svelte.ts',
-          from: "    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined;",
-          to: "    query.status === 'error' ? (query.error as unknown as ReqStateError) : undefined;"
         }
       ]
     },
@@ -327,7 +313,6 @@ export default {
     {
       id: 'C9-ours-any-code',
       arm: 'FC1',
-      requires: ['PB7'],
       describe: 'any value of ours passes through, whatever its code',
       edits: [
         {
@@ -489,6 +474,22 @@ export default {
           to: '  const nodes = [root];'
         }
       ]
+    }
+  ],
+  retired: [
+    {
+      id: 'C9-state-uncaptured',
+      arm: 'FC1',
+      describe: "the state hands the query's error to `terminalFailure` uncaptured",
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: "    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined;",
+          to: "    query.status === 'error' ? terminalFailure(query.error as unknown as ReqError) : undefined;"
+        }
+      ],
+      reason:
+        "Equivalent on every path: every value the query function throws is one this library made — the descriptor refusal it captured at its door, a disposed provider's value, a minted accumulator-contract error, or what the accumulator's catch captured — and `capture` at `unspecified`, the door that cannot attribute, hands this library's own channel values back unchanged. Measured to survive in the ledger's run just before its retirement, on FC1 as it reads the cache. The falsifier is a throw into the query's error that this library did not mint."
     }
   ]
 } satisfies Ledger;

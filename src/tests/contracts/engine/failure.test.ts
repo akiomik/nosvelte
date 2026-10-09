@@ -181,6 +181,15 @@ describe('the failure channel publishes a value this library made, never one it 
     { timeout: 60_000 },
     async () => {
       const failures: string[] = [];
+      // **What this library keeps**, beside what it publishes: every entry of
+      // the query cache, its data and its error — the query library's own
+      // `error` and `failureReason` included, which no published surface hands
+      // out and which kept the caller's object when an entrance did not copy.
+      const cached = (): unknown[] =>
+        client
+          .getQueryCache()
+          .getAll()
+          .map((entry) => entry.state);
       const NAMES = {
         descriptor: 'descriptor-unreadable',
         relay: 'relay-failed',
@@ -195,7 +204,7 @@ describe('the failure channel publishes a value this library made, never one it 
       // object arrives.
       const entrances: [
         string,
-        (thrown: unknown) => Promise<{ published: unknown; again?: unknown }>,
+        (thrown: unknown) => Promise<{ published: unknown; again?: unknown; kept: unknown }>,
         keyof typeof NAMES
       ][] = [
         [
@@ -222,8 +231,9 @@ describe('the failure channel publishes a value this library made, never one it 
             await settle(120);
             const published = (held.value.state as { error?: unknown }).error;
             const again = held.value.diagnostics.lastError;
+            const kept = cached();
             held.destroy();
-            return { published, again };
+            return { published, again, kept };
           },
           'descriptor'
         ],
@@ -250,8 +260,9 @@ describe('the failure channel publishes a value this library made, never one it 
             await settle(200);
             const published = (held.value.state as { error?: unknown }).error;
             const again = held.value.diagnostics.lastError;
+            const kept = cached();
             held.destroy();
-            return { published, again };
+            return { published, again, kept };
           },
           'unspecified'
         ],
@@ -260,7 +271,7 @@ describe('the failure channel publishes a value this library made, never one it 
           async (thrown) => {
             const attemptId = attempts.mint();
             const written = noteFailure(beginAttempt(emptyEventSet, attemptId), attemptId, thrown);
-            return { published: written.failure?.error };
+            return { published: written.failure?.error, kept: written };
           },
           'unspecified'
         ],
@@ -307,8 +318,9 @@ describe('the failure channel publishes a value this library made, never one it 
             failForward?.(thrown);
             await settle(150);
             const published = held.value.diagnostics.legEnded?.error;
+            const kept = cached();
             held.destroy();
-            return { published };
+            return { published, kept };
           },
           'relay'
         ]
@@ -330,7 +342,7 @@ describe('the failure channel publishes a value this library made, never one it 
       for (const [entrance, arrive, door] of entrances) {
         const { error, middle, leaf } = theirs(`thrown at ${entrance}`);
         const before = shapeOf(error);
-        const { published, again } = await arrive(error);
+        const { published, again, kept } = await arrive(error);
         const failure = published as ReqFailure | undefined;
         expect(failure, `${entrance}: the premise, a failure published`).toBeInstanceOf(Error);
         if (published === error) failures.push(`${entrance}: published the value it was handed`);
@@ -348,6 +360,13 @@ describe('the failure channel publishes a value this library made, never one it 
             ours.has(one)
           ),
           `${entrance}: nothing of the caller’s reachable from what is published`
+        ).toEqual([]);
+        const held = reachable(kept);
+        expect(
+          [error, middle, leaf, (error as unknown as { theirs: object }).theirs].filter((one) =>
+            held.has(one)
+          ),
+          `${entrance}: nothing of the caller’s kept by this library, published or not`
         ).toEqual([]);
         expect(Object.isFrozen(published), `${entrance}: what is published is closed`).toBe(true);
         if (again !== undefined)
