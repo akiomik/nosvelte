@@ -498,11 +498,20 @@ describe('what an event has to be to be admitted or sent', () => {
       relay.send(['EVENT', backward, backwardPair.changed]);
       relay.send(['EVENT', backward, backwardPair.genuine]);
       relay.send(['EOSE', backward]);
+      // Each wait is for the whole of what the consumer should hold by then, so
+      // one that runs out says what it held instead.
       await waitFor(() => expect(request.state.status).not.toBe('loading'));
-      await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(1));
+      await waitFor(() =>
+        expect(events(), 'after the backlog').toEqual([whole(backwardPair.genuine)])
+      );
       relay.send(['EVENT', forward, forwardPair.changed]);
       relay.send(['EVENT', forward, forwardPair.genuine]);
-      await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(2));
+      await waitFor(() =>
+        expect(events(), 'after the forward pair').toEqual([
+          whole(forwardPair.genuine),
+          whole(backwardPair.genuine)
+        ])
+      );
 
       const refreshed = request.refresh();
       // Read into the wait's message: a refresh that refuses before it asks
@@ -531,15 +540,16 @@ describe('what an event has to be to be admitted or sent', () => {
       relay.send(['EVENT', again, refreshedPair.genuine]);
       relay.send(['EOSE', again]);
       await refreshed;
-      await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(3));
       // The handle lists by `created_at`, newest first, which is why each pair
       // is later than the one before it: the order expected is the published
       // one, not the order of arrival.
-      expect(events(), 'what the consumer holds: the genuine event of each pair').toEqual([
-        whole(refreshedPair.genuine),
-        whole(forwardPair.genuine),
-        whole(backwardPair.genuine)
-      ]);
+      await waitFor(() =>
+        expect(events(), 'what the consumer holds: the genuine event of each pair').toEqual([
+          whole(refreshedPair.genuine),
+          whole(forwardPair.genuine),
+          whole(backwardPair.genuine)
+        ])
+      );
       await finalWire();
     }
   );

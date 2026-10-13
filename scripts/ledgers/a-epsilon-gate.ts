@@ -129,6 +129,14 @@ export default {
       ]
     },
     {
+      id: 'C4-null',
+      arm: 'VG1',
+      describe: 'a verifier that answers `null` has passed',
+      edits: [
+        { file: MACHINE, from: FULFILLED, to: '        (ok) => leave(ok === true || ok === null),' }
+      ]
+    },
+    {
       id: 'C4-spelled-true',
       arm: 'VG1',
       describe: 'anything that renders as `true` delivers',

@@ -23,11 +23,12 @@
  * on leaves the outcome exactly right. So `VG2` observes the escape itself,
  * through {@link escapes}, with a positive control on each of its channels.
  * **What it hears is what arrives while it listens**, which ends a tenth of a
- * second after the last request: an escape deferred past that is heard by
- * nothing, the runner included. Measured with a rethrow on a timer of a second
- * and a half and this arm run alone: it passed, and the run exited 0. The two
- * exits the controls measure — RxJS's report on a timer of zero, and a
- * rejection reported once the microtasks have run — arrive well inside it.
+ * second after the last request. An escape deferred past that is the runner's
+ * to hear, through the listeners put back — and with this arm run alone, a
+ * rethrow on a timer of a second and a half was heard by neither: the arm
+ * passed and the run exited 0. The two exits the controls measure — RxJS's
+ * report on a timer of zero, and a rejection reported once the microtasks have
+ * run — arrive well inside the window.
  *
  * Port band 9700-9739.
  */
@@ -240,6 +241,7 @@ describe('the verification gate', () => {
       ['a number', 1],
       ['a list', ['yes']],
       ['nothing', undefined],
+      ['null', null],
       ['the word true', 'true'],
       ['a boxed true', Object(true) as unknown],
       ['true', true]
@@ -265,6 +267,7 @@ describe('the verification gate', () => {
       { answer: 'a number', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'a list', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'nothing', delivered: [], ends: [{ kind: 'complete' }] },
+      { answer: 'null', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'the word true', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'a boxed true', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'true', delivered: ['answered true'], ends: [{ kind: 'complete' }] }
