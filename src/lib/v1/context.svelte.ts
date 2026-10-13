@@ -25,7 +25,6 @@
 import type Nostr from 'nostr-typedef';
 import type { RxNostr, RxNostrConfig } from 'rx-nostr';
 import { createRxNostr } from 'rx-nostr';
-import { verifier } from 'rx-nostr-crypto';
 import { getContext, setContext } from 'svelte';
 import type { QueryClient } from 'tanstack-svelte-query-v6';
 
@@ -50,6 +49,7 @@ import {
   type RelayConfigurationError
 } from './scope.svelte.js';
 import type { NostrSigner } from './send.svelte.js';
+import { verifyEvent as libraryVerifier } from './verify.js';
 
 const KEY = Symbol('nosvelte');
 
@@ -740,7 +740,12 @@ export function createNostrContext(options: {
   // code: there was no path by which any verifier reached this client, and the
   // fixture hid it by turning verification off. `AE9` is the witness — a
   // provider built with no verifier argument at all still drops a forgery.
-  const verifyEvent = options.verifyEvent ?? verifier;
+  //
+  // **The library's own, and no longer the dependency's.** That one checked
+  // the signature over the hash of the fields and never compared the hash with
+  // `id`, so a correctly signed event under another event's id passed it
+  // (`A-ε-C18`; see `verify.ts`).
+  const verifyEvent = options.verifyEvent ?? libraryVerifier;
   // **The provider's disposal, handed to the cache so it runs *before* the
   // release rather than beside it.** A function declaration rather than a
   // `const`, because it is passed here and written below, where the things it

@@ -60,7 +60,8 @@ function identifierOf({ tags }: ReqEvent): string {
  * `d = 'b:c'` gives an addressable key three colons, and a regular event whose
  * `id` reads `10000:<pubkey>` collides with the replaceable coordinate
  * `(10000, pubkey)` — constructed, both. What forbids the second is that a
- * valid id is a hash, which is the verifier gate a caller supplies. `0003`
+ * valid id is a hash, which is the verifier gate: the library's checks it
+ * (`A-ε-C18`), and one a caller supplies at the engine's seam has to. `0003`
  * carries all of it with the port's freedoms named; this comment is deleted
  * with the spike.
  */
@@ -1414,7 +1415,8 @@ export function project(set: CachedEventSet, now: number | undefined): Projectio
  * `pubkey` — the same event under two replacement keys, where either order is
  * the same list of events. Their being distinguishable at all rests on a
  * premise this module does not enforce (that no two stored entries share an
- * id), which the verifier upholds and a caller's own `verifyEvent` can drop.
+ * id), which the library's verifier upholds (`A-ε-C18`) and a caller's own
+ * `verifyEvent` can drop.
  */
 function byRecency(a: OwnedPacket, b: OwnedPacket): number {
   if (a.event.created_at !== b.event.created_at) return b.event.created_at - a.event.created_at;
