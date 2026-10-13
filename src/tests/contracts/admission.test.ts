@@ -505,6 +505,13 @@ describe('what an event has to be to be admitted or sent', () => {
       await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(2));
 
       const refreshed = request.refresh();
+      // Read into the wait's message: a refresh that refuses before it asks
+      // the relay says why here, and nowhere else.
+      let answered = 'nothing yet';
+      void refreshed.then((outcome) => {
+        answered =
+          outcome.kind === 'error' ? `error: ${String(outcome.error)}` : JSON.stringify(outcome);
+      });
       let again: string | undefined;
       await vi.waitFor(
         () => {
@@ -515,9 +522,7 @@ describe('what an event has to be to be admitted or sent', () => {
             .at(-1);
           expect(
             again,
-            `the refresh asked the relay; the request is ${JSON.stringify(
-              request.state.status === 'error' ? String(request.state.error) : request.state.status
-            )}`
+            `the refresh asked the relay; the refresh answered ${answered}`
           ).toBeDefined();
         },
         { timeout: 5000 }
