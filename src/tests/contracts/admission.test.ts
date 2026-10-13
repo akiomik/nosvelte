@@ -12,7 +12,9 @@
  *
  * - **a rewritten id**: signed correctly over its own fields, with `id` set to
  *   something else — another author's id, a coordinate's key, its own hash in
- *   upper case. Only the id comparison refuses it.
+ *   upper case, its own hash with the last character changed, its own hash
+ *   with a character added. Only the id comparison refuses it, and only an
+ *   exact one: a comparison of a prefix takes the last two.
  * - **a signature that is not over the hash**: the fields changed, `id`
  *   recomputed from them, and the old signature kept. Its id is its hash, so
  *   only the signature check refuses it — "a genuine signature over different
@@ -71,24 +73,58 @@ const whole = (event: Nostr.Event | ReqEvent) => ({
   sig: event.sig
 });
 
-/** A signer that hands back whatever `rewrite` makes of a correct signature. */
+/**
+ * A signer that hands back whatever `rewrite` makes of a correct signature,
+ * and keeps what it handed back — a signature is not reproducible, so the
+ * event that should reach the wire is read off the signer.
+ */
 const signerOf = (
   seckey: string,
   rewrite: (event: Nostr.Event) => Nostr.Event = (event) => event
-): NostrSigner => ({
-  signEvent: async (template) =>
-    rewrite(signed(seckey, { ...template, tags: template.tags.map((tag) => [...tag]) }))
-});
+): NostrSigner & { readonly returned: Nostr.Event[] } => {
+  const returned: Nostr.Event[] = [];
+  return {
+    returned,
+    signEvent: async (template) => {
+      const event = rewrite(
+        signed(seckey, { ...template, tags: template.tags.map((tag) => [...tag]) })
+      );
+      returned.push(event);
+      return event;
+    }
+  };
+};
+
+const settle = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+
+const byId = <T extends { id: string }>(events: readonly T[]): T[] =>
+  [...events].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
 let port = 9220;
 
+/** A request over kinds 1 and 10000 that also stays open: both legs. */
+const LIVE: ReqPlan = {
+  kind: 'request',
+  descriptor: {
+    filters: [{ kinds: [1, 10000] }],
+    live: true,
+    retain: 'unbounded',
+    settleTimeoutMs: 2_000
+  }
+};
+
 /**
- * A relay, a provider over it and a consumer under that, the consumer's
- * request live over kinds 1 and 10000. The relay answers every EVENT it is sent
- * with `OK`, so a send that should have been refused and was not fails on what
- * it returns, rather than waiting out the library's `OK` timeout.
+ * A relay, a provider over it and one consumer per plan under that. The relay
+ * answers every EVENT it is sent with `OK`, so a send that should have been
+ * refused and was not fails on what it returns rather than waiting out the
+ * library's `OK` timeout. Each request's subscriptions are told apart by the
+ * leg in their name and the kinds in their filter, so every plan here asks for
+ * a different set of kinds.
  */
-async function consumer(signer: NostrSigner = signerOf(VICTIM)) {
+async function consumer({
+  signer = signerOf(VICTIM),
+  plans = [LIVE]
+}: { signer?: NostrSigner; plans?: readonly ReqPlan[] } = {}) {
   port += 1;
   const url = `ws://localhost:${String(port)}`;
   const relay = new WS(url, { jsonProtocol: true });
@@ -99,42 +135,61 @@ async function consumer(signer: NostrSigner = signerOf(VICTIM)) {
         socket.send(JSON.stringify(['OK', (frame[1] as { id: string }).id, true, '']));
     });
   });
-  let held: Held | undefined;
-  const plan = (): ReqPlan => ({
-    kind: 'request',
-    descriptor: {
-      filters: [{ kinds: [1, 10000] }],
-      live: true,
-      retain: 'unbounded',
-      settleTimeoutMs: 2_000
-    }
-  });
+  const held: Held[] = [];
   const view = render(Host, {
     relays: [url],
     signer,
-    plan,
-    expose: (handed: Held) => {
-      held = handed;
+    plans: plans.map((plan) => () => plan),
+    expose: (handed: Held, index: number) => {
+      held[index] = handed;
     }
   });
-  if (held === undefined) throw new Error('nosvelte test: the probe handed nothing over');
-  // The forward leg's REQ goes first and the backward leg's second, each named
-  // for its leg.
-  const subscriptions: string[] = [];
-  while (subscriptions.length < 2) {
+  const kindsOf = (plan: ReqPlan): string =>
+    plan.kind === 'request' ? JSON.stringify(plan.descriptor.filters[0]?.kinds) : '';
+  const expected = plans.reduce(
+    (sum, plan) => sum + (plan.kind === 'request' && plan.descriptor.live === true ? 2 : 1),
+    0
+  );
+  const subscriptions: { id: string; kinds: string }[] = [];
+  while (subscriptions.length < expected) {
     const frame = (await relay.nextMessage) as unknown[];
-    if (frame[0] === 'REQ') subscriptions.push(String(frame[1]));
+    if (frame[0] === 'REQ')
+      subscriptions.push({
+        id: String(frame[1]),
+        kinds: JSON.stringify((frame[2] as { kinds?: unknown }).kinds)
+      });
   }
-  const forward = subscriptions.find((id) => id.includes('-f'));
-  const backward = subscriptions.find((id) => id.includes('-b'));
-  if (forward === undefined || backward === undefined)
-    throw new Error(`nosvelte test: the legs' subscriptions were ${subscriptions.join(', ')}`);
-  const { request, send } = held;
-  const events = (): ReturnType<typeof whole>[] =>
-    request.state.status === 'loading' ? [] : request.state.events.map(whole);
-  const sent = (): unknown[][] =>
-    (relay.messages as unknown[][]).filter((frame) => frame[0] === 'EVENT');
-  return { relay, view, forward, backward, request, send, events, sent };
+  const requests = plans.map((plan, index) => {
+    const handed = held[index];
+    if (handed === undefined) throw new Error('nosvelte test: a probe handed nothing over');
+    const mine = subscriptions.filter((one) => one.kinds === kindsOf(plan));
+    const backward = mine.find((one) => one.id.includes('-b'))?.id;
+    const forward = mine.find((one) => one.id.includes('-f'))?.id;
+    if (backward === undefined)
+      throw new Error(`nosvelte test: the subscriptions were ${JSON.stringify(subscriptions)}`);
+    const { request } = handed;
+    const events = (): ReturnType<typeof whole>[] =>
+      request.state.status === 'loading' ? [] : request.state.events.map(whole);
+    return { request, events, backward, forward: forward ?? '' };
+  });
+  const send = held[0]?.send;
+  if (send === undefined) throw new Error('nosvelte test: no send was handed over');
+  /** Every EVENT frame on the wire, whole. */
+  const sent = (): ReturnType<typeof whole>[] =>
+    (relay.messages as unknown[][])
+      .filter((frame) => frame[0] === 'EVENT')
+      .map((frame) => whole(frame[1] as Nostr.Event));
+  /**
+   * The wire once the consumer has gone and anything it started has had time
+   * to arrive: a send left running is refused by the provider's revoked
+   * capability after this, so this is everything the consumer put out.
+   */
+  const finalWire = async (): Promise<ReturnType<typeof whole>[]> => {
+    view.unmount();
+    await settle(100);
+    return sent();
+  };
+  return { relay, requests, send, sent, finalWire };
 }
 
 describe('what an event has to be to be admitted or sent', () => {
@@ -145,8 +200,14 @@ describe('what an event has to be to be admitted or sent', () => {
     async () => {
       vi.stubGlobal('WebSocket', MockWebSocket);
       vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
-      const console_ = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
-        vi.spyOn(console, level).mockImplementation(() => undefined)
+      // Every method the console has, not five of them.
+      const levels = Object.getOwnPropertyNames(console).filter(
+        (name) =>
+          name !== 'Console' &&
+          typeof (console as unknown as Record<string, unknown>)[name] === 'function'
+      ) as (keyof Console)[];
+      const spies = levels.map((level) =>
+        vi.spyOn(console, level as 'log').mockImplementation(() => undefined)
       );
 
       const genuine = signed(VICTIM, { kind: 1, created_at: 100, tags: [], content: 'genuine' });
@@ -160,19 +221,23 @@ describe('what an event has to be to be admitted or sent', () => {
         ...signed(ATTACKER, { kind: 1, created_at: 200, tags: [], content: 'collides' }),
         id: `10000:${list.pubkey}`
       };
-      // Its own hash, spelled in upper case: a comparison that ignores case
-      // takes it, and only that one.
-      const shouting = (() => {
-        const own = signed(ATTACKER, { kind: 1, created_at: 101, tags: [], content: 'loud' });
-        return { ...own, id: own.id.toUpperCase() };
-      })();
+      const own = (content: string, created_at: number): Nostr.Event =>
+        signed(ATTACKER, { kind: 1, created_at, tags: [], content });
+      // Its own hash, respelled: in upper case, which a comparison ignoring
+      // case takes; with the last character changed, which a comparison of a
+      // prefix takes; and with a character added, which one of the hash as a
+      // prefix of the id takes.
+      const shouting = ((event) => ({ ...event, id: event.id.toUpperCase() }))(own('loud', 101));
+      const lastChanged = ((event) => ({
+        ...event,
+        id: `${event.id.slice(0, -1)}${event.id.endsWith('0') ? '1' : '0'}`
+      }))(own('close', 104));
+      const suffixed = ((event) => ({ ...event, id: `${event.id}0` }))(own('longer', 105));
       const notOverIt = resigned(genuine, { content: 'not what was signed' });
-      const notHex = {
-        ...signed(ATTACKER, { kind: 1, created_at: 102, tags: [], content: 'x' }),
-        sig: 'zz'
-      };
+      const notHex = { ...own('x', 102), sig: 'zz' };
       // **And what verified before still verifies**: fields whose serialization
-      // escapes and does not, tags included.
+      // escapes and does not, outside ASCII, and a character written as two
+      // code points that normalization would fold into one.
       const awkward = signed(ATTACKER, {
         kind: 1,
         created_at: 103,
@@ -180,76 +245,108 @@ describe('what an event has to be to be admitted or sent', () => {
           ['t', 'ünïcödé'],
           ['e', 'a"b\\c', '']
         ],
-        content: 'quote " backslash \\ newline \n tab \t emoji 🦩 separator \u2028 nul \u0000 é'
+        content:
+          'quote " backslash \\ newline \n tab \t emoji \u{1F9A9} separator   nul \u0000 é decomposed é'
       });
       expect(
-        [takeover, collision, shouting, notHex].map((one) => getEventHash(one) === one.id),
+        [takeover, collision, shouting, lastChanged, suffixed, notHex, notOverIt].map(
+          (one) => getEventHash(one) === one.id
+        ),
         'the premise: each rewritten id is not its hash, and the others are'
-      ).toEqual([false, false, false, true]);
+      ).toEqual([false, false, false, false, false, true, true]);
       expect(
-        getEventHash(notOverIt) === notOverIt.id,
-        'the premise: this one’s id is its hash'
-      ).toBe(true);
+        [
+          lastChanged.id.slice(0, -1) === getEventHash(lastChanged).slice(0, -1),
+          suffixed.id.startsWith(getEventHash(suffixed)),
+          awkward.content !== awkward.content.normalize('NFC')
+        ],
+        'the premise: the respelled ids agree with their hashes but for the end, and the awkward content is not normalized'
+      ).toEqual([true, true, true]);
       // The comparison is of the whole event, so the takeover — the victim's id
       // and nothing else of the victim's — is not read as the victim's event.
       expect(whole(takeover), 'the premise: the comparison tells the takeover apart').not.toEqual(
         whole(genuine)
       );
 
-      // **(1) The backward leg.** Each refused packet arrives before what the
-      // consumer should be holding, so a packet admitted would be the one held.
+      // **(1) and (2) Both legs.** The takeover arrives before the victim's
+      // event and the collision after the victim's revision, so either one
+      // admitted displaces what the consumer should hold. The others are
+      // refused on their own, and any one admitted is an extra in the list.
+      // The attacker's own event comes after the attacker's forgeries, so a
+      // verifier that held a refusal against the key would drop it: it is the
+      // id that is refused, not the key.
+      const offered = [
+        takeover,
+        genuine,
+        list,
+        collision,
+        shouting,
+        lastChanged,
+        suffixed,
+        notOverIt,
+        notHex,
+        theirs,
+        awkward
+      ];
+      const held = byId([genuine, list, theirs, awkward].map(whole));
       {
-        const { relay, view, backward, events, request } = await consumer();
-        for (const packet of [takeover, genuine, collision, list, shouting, notOverIt, notHex])
-          relay.send(['EVENT', backward, packet]);
-        relay.send(['EVENT', backward, awkward]);
+        const { relay, requests, finalWire } = await consumer();
+        const [{ backward, events, request }] = requests as [(typeof requests)[number]];
+        for (const packet of offered) relay.send(['EVENT', backward, packet]);
         relay.send(['EOSE', backward]);
         await waitFor(() => expect(request.state.status).not.toBe('loading'));
-        await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(3));
+        await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(held.length));
+        expect(byId(events()), 'backward: what the consumer holds').toEqual(held);
+        await finalWire();
+      }
+      {
+        const { relay, requests, finalWire } = await consumer();
+        const [{ backward, forward, events, request }] = requests as [(typeof requests)[number]];
+        relay.send(['EOSE', backward]);
+        await waitFor(() => expect(request.state.status).not.toBe('loading'));
+        for (const packet of offered) relay.send(['EVENT', forward, packet]);
+        await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(held.length));
+        expect(byId(events()), 'forward: what the consumer holds').toEqual(held);
+        await finalWire();
+      }
+
+      // **(3) A verdict is not carried from one request to the next.** Two
+      // requests under one provider: the victim's event admitted on the first,
+      // then the takeover offered first on the second. A verifier that kept
+      // its verdicts by id passed it there, and every door above, with one
+      // request each, stayed green: measured.
+      {
+        const kinds = (set: number[]): ReqPlan => ({
+          kind: 'request',
+          descriptor: { filters: [{ kinds: set }], settleTimeoutMs: 2_000 }
+        });
+        const { relay, requests, finalWire } = await consumer({
+          plans: [kinds([1]), kinds([1, 10000])]
+        });
+        const [first, second] = requests as [(typeof requests)[number], (typeof requests)[number]];
+        relay.send(['EVENT', first.backward, genuine]);
+        relay.send(['EOSE', first.backward]);
+        await waitFor(() => expect(first.events()).toEqual([whole(genuine)]));
+        relay.send(['EVENT', second.backward, takeover]);
+        relay.send(['EVENT', second.backward, genuine]);
+        relay.send(['EOSE', second.backward]);
+        await waitFor(() => expect(second.request.state.status).not.toBe('loading'));
+        await waitFor(() => expect(second.events().length).toBeGreaterThanOrEqual(1));
         expect(
-          sortedById(events()),
-          'backward: the victim’s event, the victim’s revision and the awkward one, and nothing refused'
-        ).toEqual(sortedById([genuine, list, awkward].map(whole)));
-        view.unmount();
+          [first.events(), second.events()],
+          'the second request holds the victim’s event too, not the takeover'
+        ).toEqual([[whole(genuine)], [whole(genuine)]]);
+        await finalWire();
       }
 
-      // **(2) The forward leg**, after the backlog ends empty: the same, live.
+      // **(4) A signed input to `useSend`**: refused, resolving rather than
+      // rejecting. Then a genuine one, which goes out as it is and is the wire
+      // reader's control. **The wire is read once the consumer has gone**: a
+      // refusal returns before anything a send started could reach the socket,
+      // and read right after the refusals it was empty for a send that went
+      // out anyway — measured.
       {
-        const { relay, view, forward, backward, events, request } = await consumer();
-        relay.send(['EOSE', backward]);
-        await waitFor(() => expect(request.state.status).not.toBe('loading'));
-        for (const packet of [takeover, genuine, collision, list, shouting, notOverIt, notHex])
-          relay.send(['EVENT', forward, packet]);
-        relay.send(['EVENT', forward, awkward]);
-        await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(3));
-        expect(
-          sortedById(events()),
-          'forward: the victim’s event, the victim’s revision and the awkward one, and nothing refused'
-        ).toEqual(sortedById([genuine, list, awkward].map(whole)));
-        view.unmount();
-      }
-
-      // **(3) The attacker's own event, unaltered, is admitted**: it is the id
-      // that is refused, not the key.
-      {
-        const { relay, view, backward, events, request } = await consumer();
-        relay.send(['EVENT', backward, theirs]);
-        relay.send(['EOSE', backward]);
-        await waitFor(() => expect(request.state.status).not.toBe('loading'));
-        await waitFor(() => expect(events()).toEqual([whole(theirs)]));
-        view.unmount();
-      }
-
-      // **(4) A signed input to `useSend`**: refused, and nothing on the wire;
-      // a genuine one goes out, which is the wire reader's own control.
-      //
-      // **Nothing on the wire is read after something is**: a refusal returns
-      // before anything a send started could reach the socket, so the wire is
-      // read once the genuine send that follows has been answered, and must
-      // hold exactly that one. Read right after the refusals, it was empty for
-      // a send that went out anyway: measured.
-      {
-        const { view, send, sent } = await consumer();
+        const { send, finalWire } = await consumer();
         const answers: SendResult[] = [];
         for (const input of [takeover, notOverIt, notHex]) answers.push(await send(input));
         expect(
@@ -261,58 +358,56 @@ describe('what an event has to be to be admitted or sent', () => {
           [out.status, out.status === 'settled' ? whole(out.event) : undefined],
           'a genuine one goes out as it is'
         ).toEqual(['settled', whole(awkward)]);
-        expect(
-          sent().map((frame) => (frame[1] as { id: string }).id),
-          'and it is the only one on the wire'
-        ).toEqual([awkward.id]);
-        view.unmount();
+        expect(await finalWire(), 'and it is the only event on the wire, whole').toEqual([
+          whole(awkward)
+        ]);
       }
 
       // **(5) What a signer returns**, the template unchanged in every case so
-      // only the verifier can refuse it: its id rewritten, its fields re-signed
-      // by nobody, its signature not hex; and a signer that returns what it
-      // signed, which goes out.
+      // only the verifier can refuse it: its id rewritten, another event's
+      // signature, a signature that is not hex. A genuine signed input follows
+      // each, as the marker the wire is read against; and a signer that
+      // returns what it signed goes out, as itself.
       const template: Fields = { kind: 1, created_at: 300, tags: [['t', 'x']], content: 'post' };
       for (const [label, rewrite] of [
         ['an id that is not its hash', (event: Nostr.Event) => ({ ...event, id: genuine.id })],
         ['a signature not over its hash', (event: Nostr.Event) => ({ ...event, sig: genuine.sig })],
         ['a signature that is not hex', (event: Nostr.Event) => ({ ...event, sig: 'zz' })]
       ] as const) {
-        const { view, send, sent } = await consumer(signerOf(VICTIM, rewrite));
+        const { send, finalWire } = await consumer({ signer: signerOf(VICTIM, rewrite) });
         const answer = await send(template);
-        // The marker, a signed input, which this signer is not asked about.
         const marker = await send(awkward);
         expect(
-          [
-            answer.status === 'refused' ? answer.code : answer.status,
-            marker.status,
-            sent().map((frame) => (frame[1] as { id: string }).id)
-          ],
-          `a signer returning ${label}: refused, and only the marker after it on the wire`
-        ).toEqual(['signer-failed', 'settled', [awkward.id]]);
-        view.unmount();
+          [answer.status === 'refused' ? answer.code : answer.status, marker.status],
+          `a signer returning ${label}: refused, resolving`
+        ).toEqual(['signer-failed', 'settled']);
+        expect(
+          await finalWire(),
+          `a signer returning ${label}: only the marker on the wire`
+        ).toEqual([whole(awkward)]);
       }
       {
-        const { view, send, sent } = await consumer(signerOf(VICTIM));
+        const signer = signerOf(VICTIM);
+        const { send, finalWire } = await consumer({ signer });
         const answer = await send(template);
+        const [returned] = signer.returned;
+        if (returned === undefined) throw new Error('nosvelte test: the signer was not asked');
         expect(
-          [answer.status, sent().length],
-          'a signer returning what it signed: it goes out'
-        ).toEqual(['settled', 1]);
-        view.unmount();
+          [answer.status, answer.status === 'settled' ? whole(answer.event) : undefined],
+          'a signer returning what it signed: it goes out, as itself'
+        ).toEqual(['settled', whole(returned)]);
+        expect(await finalWire(), 'and it is on the wire, whole').toEqual([whole(returned)]);
       }
 
       // **Nothing was written to the console** while any of it was refused —
-      // read with its control, a line written here, which is the only one.
-      console.warn('nosvelte test: the console reader’s control');
+      // read with its control: one line written through every method, which
+      // are then the only calls.
+      for (const level of levels)
+        (console[level] as (...args: unknown[]) => void)('nosvelte test: the control');
       expect(
-        console_.flatMap((spy) => spy.mock.calls),
-        'verification writes nothing to the console'
-      ).toEqual([['nosvelte test: the console reader’s control']]);
+        spies.map((spy) => spy.mock.calls),
+        'verification writes nothing to the console, by any method'
+      ).toEqual(levels.map(() => [['nosvelte test: the control']]));
     }
   );
 });
-
-function sortedById<T extends { id: string }>(events: readonly T[]): T[] {
-  return [...events].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-}
