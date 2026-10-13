@@ -1184,16 +1184,17 @@ function useSend(): Send;
 ```
 
 - **Who signs** — the maintainer's ruling. An input carrying any of `id`, `pubkey` or `sig` is a
-  signed event: it must carry all three, its signature must verify, and it goes out unchanged.
-  Anything else is a template, signed by the provider's `signer` prop — structurally NIP-07's
-  `signEvent`, so `window.nostr` is one — and refused `'no-signer'` when there is none. What the
-  signer returns must verify and must be the template it was asked to sign, or the send is refused
-  `'signer-failed'` — and "the template" is a copy the signer never holds: it is handed another, so
-  a signer that rewrites what it was given and signs the rewrite correctly is compared against the
-  original and refused. Every copy taken from a caller's value is of the elements, by index into
-  plain arrays, and compared element by element — an `Array` subclass's own `every` or `toJSON`
-  never runs on a value this library has taken. The dependency never signs: it is handed the event
-  already checked here, so what goes on the wire is what was checked (`C6-C12`, `C6-C15`).
+  signed event: it must carry all three, it must verify — its `id` the hash of its fields and its
+  signature over that hash (`A-ε-C18`) — and it goes out unchanged. Anything else is a template,
+  signed by the provider's `signer` prop — structurally NIP-07's `signEvent`, so `window.nostr` is
+  one — and refused `'no-signer'` when there is none. What the signer returns must verify and must
+  be the template it was asked to sign, or the send is refused `'signer-failed'` — and "the
+  template" is a copy the signer never holds: it is handed another, so a signer that rewrites what
+  it was given and signs the rewrite correctly is compared against the original and refused. Every
+  copy taken from a caller's value is of the elements, by index into plain arrays, and compared
+  element by element — an `Array` subclass's own `every` or `toJSON` never runs on a value this
+  library has taken. The dependency never signs: it is handed the event already checked here, so
+  what goes on the wire is what was checked (`C6-C12`, `C6-C15`).
 - **Where it goes** — the maintainer's ruling. By default to every writable relay in the provider's
   scope. An explicit `relays` must be a subset of those, each named by the provider's transport as
   the provider's own relays are (0003, B-α; since 2026-10-03): a string that is not relay input, one
@@ -1396,6 +1397,20 @@ reachable under one provider through the published surface, and the obvious fix 
 refused by the same record, because a fresh closure per render splits the cache on every keystroke.
 So publishing the verifier is a cache-identity decision with no sound key today, not a new option
 beside the existing ones. An adversarial pass read the two records against each other.
+
+**The library's verifier is its own function, and the dependency's was not enough (#138).**
+`rx-nostr-crypto`'s `verifier` checks the signature over the hash of the fields and never compares
+that hash with `id`, so an event signed correctly under any `id` passed it — and `0003` keys a
+regular event by its id and keeps the first packet of an id. The library's verifier computes the
+hash once, requires it to equal `id` exactly, and checks the signature over it; it is the default
+every provider installs, and every door that verifies — both legs of a request, a signed input to
+`useSend`, what a signer returns — asks it (`A-ε-C18`). **The check is in the verifier rather than
+at the admission boundary**, and that was a decision: the boundary would hold it whatever verifier
+ran, and it would also refuse every fixture this suite builds with placeholder ids under
+`acceptAnyEvent` — the reason measured below for not defaulting to the shipping verifier. Since no
+published path takes a verifier, the published surface always has this one; a substitute at the
+engine's seam replaces the id check with it, which is the residue `0003` names, and the named option
+the paragraphs above anticipate would have to decide whether it keeps the check.
 
 **"The library supplies its own" was false when this paragraph was written, and it is the reason
 `skipVerify` has moved out of the list above.** The provider passed no verifier at all, and

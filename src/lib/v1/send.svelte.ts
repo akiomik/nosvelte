@@ -404,7 +404,10 @@ async function signedEventOf(port: SendPort, input: SendInput): Promise<Nostr.Ev
     const copy = ownCopy(held);
     return (await port.verifyEvent(copy))
       ? copy
-      : refused('invalid-event', "the event's signature does not verify.");
+      : refused(
+          'invalid-event',
+          'the event does not verify: its id is not the hash of its fields, or its signature is not over that hash.'
+        );
   }
 
   const createdAt = held.created_at ?? Math.floor(Date.now() / 1000);
@@ -464,7 +467,10 @@ async function signedEventOf(port: SendPort, input: SendInput): Promise<Nostr.Ev
   }
   return (await port.verifyEvent(copy))
     ? copy
-    : refused('signer-failed', "the signer's event does not verify.");
+    : refused(
+        'signer-failed',
+        "the signer's event does not verify: its id is not the hash of its fields, or its signature is not over that hash."
+      );
 }
 
 /** Exported for the arms, which drive it without mounting a component. */

@@ -141,6 +141,11 @@ export interface MachineParams {
  * envelope. **A fixed total, whatever it is, is therefore wrong
  * for some perfectly normal backlog**, which is what `AE7` fails on.
  *
+ * **These are the dependency's verifier's figures, and the gate's verifier is
+ * the library's own now** (`A-ε-C18`): the same hash over the same
+ * serialisation and the same schnorr check, plus one string comparison. They
+ * were not re-taken against it.
+ *
  * The bound is re-armed every time an event leaves the gate, so N does not
  * enter it: what is bounded is a gate that has stopped moving. `slowest`
  * rather than the first or the mean, because a cost already paid cannot be

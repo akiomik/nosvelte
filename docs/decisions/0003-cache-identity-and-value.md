@@ -1183,17 +1183,17 @@ version of this paragraph gave one and read as if it had given all three.
   premise, or two authors share a key.
 - The **id** arm rests on a different premise entirely: that no two _distinct_ events reaching the
   fold carry one id. That is a hash, not an alphabet, and the same verifier gate is what makes it
-  true — `byRecency` states it as its sibling premise. An unverified duplicate id silently replaces,
-  exactly as above.
+  true — the library's verifier compares the hash with the id (`A-ε-C18`) — `byRecency` states it as
+  its sibling premise. An unverified duplicate id silently replaces, exactly as above.
 - **Across arms the separation rests on the same premise as within them, and a first draft of this
   bullet claimed otherwise.** It said the arms cannot collide "as a property of the shape rather
   than of the values" — an id has no `:`, a replaceable key one, an addressable key two. Both halves
   are false and both were constructed: a `d` tag of `b:c` gives an addressable key **three** colons,
   and a regular event whose `id` is the string `10000:<pubkey>` produces exactly the key of the
   replaceable coordinate `(10000, pubkey)`. What forbids the second is that a valid event's id is
-  its own hash, which is the verifier gate again — so this is a value property, not a shape
-  property, and it is the one bullet that cannot be exempted from the residue below. A port that
-  renders `kind` in hex or joins with a character a `d` tag may contain loses even that.
+  its own hash, which is the verifier gate again (`A-ε-C18`) — so this is a value property, not a
+  shape property, and it is the one bullet that cannot be exempted from the residue below. A port
+  that renders `kind` in hex or joins with a character a `d` tag may contain loses even that.
 
 The classification itself is a fourth freedom, and it has **no row of its own**: `B5-C1` and `B5-C2`
 rest on the kind ranges without stating them, so a port that widens `replaceable` moves events
@@ -1239,7 +1239,13 @@ one of them; a port inherits the protocol from NIP-01 and these from here, so ea
   everything the id commits to; and a packet that carries an `ots` proof does not replace one
   without. NIP-03 now carries attestations as separate kind-1040 events, so a proof store, if one is
   wanted, belongs beside the event set and keyed by id. All of this assumes the id is the hash of
-  the fields, which admission does not check yet (#138).
+  the fields, **and admission checks that now**: the library's verifier refuses an event whose `id`
+  is not the hash of its fields, on both legs and on both of `useSend`'s doors (`A-ε-C18`). Until it
+  did, a relay could hold another author's regular event out of a request by sending first an event
+  of its own under that event's id, and could displace a replaceable revision by sending a later
+  event whose id is that coordinate's key — both measured through `useReq`. The issue that reported
+  the gap (#138) said the second was limited to the forger's own events; the collision across arms
+  above is why it was not.
 
 The event set's tests carry the same split: their oracle lists each rule with its source, a sentence
 of NIP-01 or this paragraph.
