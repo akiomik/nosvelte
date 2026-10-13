@@ -181,9 +181,11 @@ export interface RelayDiagnostic {
    * The last `NOTICE` this relay sent, if any.
    *
    * `NOTICE` is `["NOTICE", <message>]` — no subscription id, by NIP-01's own
-   * shape (CONST-R9) — so this is the only place it can go. Today the library
-   * writes it to `console.error` unconditionally, which is #85: a message with
-   * nowhere to be shown becomes a message the application cannot suppress.
+   * shape (CONST-R9) — so this is the only place it can go. The old surface
+   * never read one, so a relay's notice went nowhere. This comment said it was
+   * written to `console.error`, and cited #85: that issue is the old `useReq`
+   * writing a *stream error* there, a message the application could not
+   * suppress.
    *
    * **Bounded, and the type says so** — see `RelayMessage`. It was a bare
    * `string`, so a relay decided how much a provider held for as long as it was
