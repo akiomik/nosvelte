@@ -300,18 +300,80 @@ export const mergeDeclarations = (
   return { tests, files: owner, positions, duplicates };
 };
 
-/** A callee written as a name or as one name's member — `expect`, `expect.soft` — as its parts. */
-const calleeParts = (callee: ts.Expression): [string, string | undefined] | undefined =>
-  ts.isIdentifier(callee)
-    ? [callee.text, undefined]
-    : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
-      ? [callee.expression.text, callee.name.text]
-      : undefined;
+/** The families an assertion is called through. */
+const ASSERTING = new Set(['expect', 'expectTypeOf', 'expectOf', 'assert']);
+
+/** A wrapper an expression is read through: parentheses, a cast, a non-null assertion. */
+const isWrapper = (
+  node: ts.Node
+): node is
+  | ts.ParenthesizedExpression
+  | ts.AsExpression
+  | ts.SatisfiesExpression
+  | ts.NonNullExpression
+  | ts.TypeAssertion =>
+  ts.isParenthesizedExpression(node) ||
+  ts.isAsExpression(node) ||
+  ts.isSatisfiesExpression(node) ||
+  ts.isNonNullExpression(node) ||
+  ts.isTypeAssertionExpression(node);
+
+/** The outermost wrapper around `node`, or `node`. */
+const wrapped = (node: ts.Node): ts.Node => {
+  let at = node;
+  while (isWrapper(at.parent)) at = at.parent;
+  return at;
+};
+
+/** `node` with the wrappers around its inside taken off. */
+const unwrapped = (node: ts.Expression): ts.Expression => {
+  let at = node;
+  while (isWrapper(at)) at = at.expression;
+  return at;
+};
 
 /**
- * Whether an arm's call makes an assertion: a matcher read off `expect(…)` or
+ * A callee as the family it names and the member called on it, read from its
+ * last two names: `expect`, `expect.soft`, `assert.equal`, and the same behind
+ * a namespace — `v.expect`, `v.assert.equal`.
+ */
+const calleeParts = (callee: ts.Expression): [string, string | undefined] | undefined => {
+  const names: string[] = [];
+  let at = unwrapped(callee);
+  while (ts.isPropertyAccessExpression(at)) {
+    names.unshift(at.name.text);
+    at = unwrapped(at.expression);
+  }
+  if (!ts.isIdentifier(at)) return undefined;
+  names.unshift(at.text);
+  const last = names[names.length - 1];
+  const before = names[names.length - 2];
+  if (last !== undefined && ASSERTING.has(last)) return [last, undefined];
+  if (before === 'expect' || before === 'assert') return [before, last];
+  return undefined;
+};
+
+/**
+ * Whether a property is read off `call`, through any further reads, and what
+ * was read is called: `expect(x).toBe(1)`, `expect(x).not.toBe(1)`. A read
+ * that is not called — `expect(x).toBe;` — is not a matcher run.
+ */
+const matcherCalled = (call: ts.CallExpression): boolean => {
+  let chain = wrapped(call);
+  let reads = 0;
+  while (ts.isPropertyAccessExpression(chain.parent) && chain.parent.expression === chain) {
+    chain = wrapped(chain.parent);
+    reads += 1;
+  }
+  return reads > 0 && ts.isCallExpression(chain.parent) && chain.parent.expression === chain;
+};
+
+/**
+ * Whether an arm's call makes an assertion: a matcher called on `expect(…)` or
  * `expect.<member>(…)`, a call of `expectTypeOf`, `expectOf`, `assert` or
- * `assert.<member>`, or `expect.assertions` and its siblings.
+ * `assert.<member>`, or `expect.assertions` and its siblings. Parentheses,
+ * casts, non-null assertions and a namespace are read through; an optional
+ * call is not counted, since it may not happen.
  *
  * **Read off the syntax tree, and that is the repair.** This scanned the text
  * with comments stripped by hand and strings cut out by a pattern, and three
@@ -321,19 +383,20 @@ const calleeParts = (callee: ts.Expression): [string, string | undefined] | unde
  * template's `${…}` too. The parser decides what is a comment, a string, a
  * pattern and an expression, so none of those is a question here any more,
  * and a title cannot assert by being named.
+ *
+ * **What it reads is spelling.** A local `expect` that does nothing, a helper
+ * nobody calls and code after a `return` all read as asserting, as they did
+ * when this was a text scan; what would close them — the binding, and the
+ * run — is #169's.
  */
 export const asserts = (body: string): boolean => {
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) return;
-    if (ts.isCallExpression(node)) {
+    if (ts.isCallExpression(node) && node.questionDotToken === undefined) {
       const [head, member] = calleeParts(node.expression) ?? [];
-      const matcherRead =
-        head === 'expect' &&
-        ts.isPropertyAccessExpression(node.parent) &&
-        node.parent.expression === node;
       if (
-        matcherRead ||
+        (head === 'expect' && matcherCalled(node)) ||
         ((head === 'expectTypeOf' || head === 'expectOf') && member === undefined) ||
         head === 'assert' ||
         (head === 'expect' &&

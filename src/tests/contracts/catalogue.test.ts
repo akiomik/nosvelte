@@ -504,6 +504,22 @@ describe('the production contract bridge', () => {
       ].map((body) => unasserted(body).length === 0),
       'a continued string holding an assertion, then one before a real one; a template’s text, then its `${…}`; a pattern'
     ).toEqual([false, true, false, true, false]);
+    // Through parentheses, a cast and a namespace, a matcher still runs; a
+    // read that is not called, and a call that may not happen, are not one.
+    expect(
+      [
+        '(expect(1)).toBe(1);',
+        '(expect(1) as ReturnType<typeof expect>).toBe(1);',
+        'v.expect(1).toBe(1);',
+        'v.assert.equal(1, 1);',
+        'await expect(p).resolves.not.toBe(1);',
+        'expect(1).toBe;',
+        'expect(1).not;',
+        'expect.getState().testPath;',
+        'assert?.(false);'
+      ].map((body) => unasserted(body).length === 0),
+      'wrapped, namespaced and chained matchers; then a read, a modifier, a property and an optional call'
+    ).toEqual([true, true, true, true, true, false, false, false, false]);
     expect(unasserted('void 0'), 'an empty arm').toEqual(['CT12']);
     expect(
       [...declarationsIn(`  ${'it'}('CT13: does not expect (yet)', () => {});`).bodies.entries()]
