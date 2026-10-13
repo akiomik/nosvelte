@@ -43,6 +43,7 @@ import {
   SURFACES,
   WITNESSES
 } from './engine/helpers/reachability.js';
+import { legacyBlockers, legacyFaults, legacyLines } from './legacy.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TESTS_ROOT = resolve(HERE, '..');
@@ -718,5 +719,85 @@ describe('the production contract bridge', () => {
     expect(arms.length, 'the premise: the cells are held by more than the landing').toBeGreaterThan(
       4
     );
+  });
+
+  it('CAT44: every legacy issue the record lists is answered by rows on the roster, or names the family that owes it', () => {
+    const text = read('0005-contract-catalogue.md');
+    expect(legacyFaults(text, decisions), 'the legacy table, against the roster').toEqual([]);
+    // **Every issue `0001` starts from is on it**: the rebuild's own list is
+    // the one most likely to be forgotten, because it was written first.
+    const { lines } = legacyLines(text);
+    const cited = [
+      ...new Set(
+        [...read('0001-rebuild-usereq-rather-than-patch-it.md').matchAll(/#(\d+)\b/g)].map(
+          (match) => Number(match[1])
+        )
+      )
+    ];
+    expect(
+      cited.filter((issue) => !lines.some((line) => line.issue === issue)),
+      'an issue 0001 cites that the table does not answer'
+    ).toEqual([]);
+    expect(cited.length, 'the premise: 0001 was read').toBeGreaterThan(10);
+
+    // **The checker's controls**, on a record of its own, so a row landing
+    // or a gap closing in the real one cannot change what they ask.
+    const record = (
+      lines: string,
+      counts = '**3 issues**: **1 covered**, **1 removed** and **1 gaps**'
+    ) =>
+      [
+        '#### The port route of a row',
+        '',
+        '```text',
+        'X1-C1        public        TBD',
+        'X1-C2        public        test:XA1',
+        '```',
+        '',
+        '### Which legacy issue each row answers',
+        '',
+        `${counts}.`,
+        '',
+        '| Issue | Disposition | Rows | What is left |',
+        '| --- | --- | --- | --- |',
+        lines,
+        ''
+      ].join('\n');
+    const good = [
+      '| #1 | covered | `X1-C1` | — |',
+      '| #2 | removed | `X1-C2` | — |',
+      '| #3 | gap | — | **X1** — an arrangement |'
+    ].join('\n');
+    const owners = new Set(['X1']);
+    expect(legacyFaults(record(good), owners), 'the control record reads clean').toEqual([]);
+    const faults = (lines: string, counts?: string): string[] =>
+      legacyFaults(record(lines, counts), owners);
+    expect(
+      [
+        faults(good.replace('`X1-C1`', '`X1-C9`')),
+        faults(good.replace('**X1** — an', 'an')),
+        faults(good.replace('**X1** — an', '**X9** — an')),
+        faults(good.replace('| #2 |', '| #1 |')),
+        faults(good.replace('| #3 | gap |', '| #3 | partial |')),
+        faults(good.replace('| #2 | removed | `X1-C2` |', '| #2 | removed | — |')),
+        faults(good, '**3 issues**: **2 covered**, **0 removed** and **1 gaps**'),
+        faults(good, 'three issues')
+      ].map((found) => found.length > 0),
+      'the checker refuses an unrostered row, a gap with no owner or an undeclared one, an issue twice, an unknown disposition, a removal naming nothing, and a count the table does not have or does not state'
+    ).toEqual([true, true, true, true, true, true, true, true]);
+    // The release step: a gap, and a row the table names that has not landed.
+    expect(legacyBlockers(record(good)), 'the release step reads the gaps and the roster').toEqual([
+      '#1: X1-C1 still TBD',
+      '#3: a gap — **X1** — an arrangement'
+    ]);
+
+    // **The release step itself**, asked for by name: before v1 replaces the
+    // entry, nothing may stand between the table and closing the issues. It
+    // is off in an ordinary run, where gaps are expected; the controls above
+    // run either way.
+    if (process.env['NOSVELTE_RELEASE_GATE'] === '1')
+      expect(legacyBlockers(text), 'what stands between v1 and closing the legacy issues').toEqual(
+        []
+      );
   });
 });

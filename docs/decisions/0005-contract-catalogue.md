@@ -3576,6 +3576,65 @@ of the entries here are what make that possible rather than merely stated:
   is unusable — `invalid-descriptor` on `rxNostr` — from the request and from `refresh()` alike
   (`C11-C18`, `RM4`, `RM5`). One ownership event, one classification.
 
+### Which legacy issue each row answers
+
+**The old surface's bugs are not fixed on it** — the maintainer's ruling, 2026-10-13. They stay open
+on GitHub, so the bugs of the published surface are disclosed, and v1 fixes them when it replaces
+the entry; the many already known are the reason for the rebuild (`0001`). That is a promise about
+v1, and this table is what makes it checkable: each open issue against the old library's behaviour,
+and the rows of this catalogue that answer it. `#96` is not here, because it is about the
+repository's tooling rather than the library's behaviour.
+
+A line is one of three dispositions.
+
+- **`covered`** — the rows named have a Given that reproduces the issue, or makes its wrong result
+  impossible to miss, so their landing fails on a v1 that has the bug.
+- **`removed`** — the API the bug arises through does not exist in v1, and the rows named record the
+  removal. Where v1 replaced that API, the replacement's rows are what a line names, and the line is
+  `covered` or a `gap` on them.
+- **`gap`** — no row's Given reaches the wrong result. The line opens with the decision whose family
+  owes the arrangement, says what it is, and names any row that reaches part of it. A gap is closed
+  by widening a row's Given or adding a row when that family is ported.
+
+**27 issues**: **14 covered**, **2 removed** and **11 gaps**, as triaged 2026-10-13 against this
+catalogue's rows. `CAT44` reads that sentence and the table against the roster: every row named is
+on it, every gap names a declared decision, each issue appears once.
+
+**Before v1 replaces the entry**, no gap may remain and every row a `covered` or `removed` line
+names has terminal evidence — landed, decided absent, or discharged. `CAT44` run with
+`NOSVELTE_RELEASE_GATE=1` fails while anything stands in the way, and lists it. The issues are
+closed with that release, each pointing here.
+
+| Issue | Disposition | Rows                                                                 | What is left                                                                                                                                                                                                                                         |
+| ----- | ----------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #61   | covered     | `A5-C21`                                                             | —                                                                                                                                                                                                                                                    |
+| #68   | gap         | `B7a-C3`, `C7-C7`                                                    | **C7** — `EventList`, `UniqueEventList` or `Event` mounted for an id whose relay answers with an event of another kind than 1 (kind 30023), and the outlet read: the rows named read the REQ and the key, not the answer                             |
+| #69   | gap         | `C12-C8`, `C8-C3`                                                    | **C12** — each single-event component's outlet and the handle's `state`, read while the request is in flight and when the event does not exist. `ReqResult` itself is gone; `C12-C8` reaches only the expiry path, and `C8-C3` compares declarations |
+| #73   | gap         | `C3-C1`, `A5-S4`, `C6-C10`                                           | **A6** — two concurrent requests with different filters under one provider and one relay, each answered, each under its own subscription id on the wire. `req` itself is gone (`C3-C1`); `C6-C10` holds one socket, not two subscriptions            |
+| #74   | covered     | `B-α-C2`, `B-γ-C1`, `C11-C4`                                         | —                                                                                                                                                                                                                                                    |
+| #75   | covered     | `A13-C1`, `A13-C2`, `A13-C5`, `A14-C1`, `A15-C1`                     | The reconnect trigger is held by `A13-C5`'s reading of the source alone, as `A13-C1` says                                                                                                                                                            |
+| #76   | removed     | `A15-C2`                                                             | v1 takes no query-client configuration to merge                                                                                                                                                                                                      |
+| #77   | gap         | `A15-C3`, `C6-C3`, `C6-C9`                                           | **C6** — a provider whose `relays` change and which is then torn down, the query client's listeners counted. v1 builds its client once, so this guards the leak rather than the trigger                                                              |
+| #78   | gap         | `B-γ-C1`, `C3-C2`                                                    | **B-γ** — a provider whose relays are all write-only and a request that names none: no REQ, reported not asked, and `refresh()` resolving `not-started`. `B-γ-C1`'s Given admits that scope and does not require it                                  |
+| #79   | covered     | `B8-C1`, `C7-C3`                                                     | —                                                                                                                                                                                                                                                    |
+| #80   | covered     | `A12-C5`, `A16-C6`, `C11-C8`, `C11-C17`                              | —                                                                                                                                                                                                                                                    |
+| #81   | covered     | `B2-C2`, `C3-C1`                                                     | A hook whose filters change in place is held only through the key being derived                                                                                                                                                                      |
+| #82   | covered     | `A2-C1`, `A2-S1`, `C11-C14`                                          | —                                                                                                                                                                                                                                                    |
+| #83   | covered     | `A-α-C3`, `A-ε-C1`, `A5-C2`, `B10-C3`, `C12-C1`, `C4b-C1`, `C-δ-C13` | —                                                                                                                                                                                                                                                    |
+| #84   | covered     | `C5-C1`, `C11-C15`                                                   | A first attempt that fails before it finishes renders the `error` slot by decision (`C5-C3`); its events stay on the state                                                                                                                           |
+| #85   | gap         | —                                                                    | **C5** — every request failure path driven with every `console` method watched, and nothing written. v1 calls no console method today, and nothing holds that                                                                                        |
+| #86   | gap         | `C5-C3`, `C8-C3`                                                     | **C5** — a failure landing in the same turn as the first event, and the refresh's outcome read against the state. The published state cannot say "succeeded, status error", and nothing arranges the race                                            |
+| #87   | gap         | `A6-C5`, `A11-C10`, `B10-C5`, `B-η-C5`                               | **A11** — a cache entry collected while a producer is still delivering, and the entry not recreated by the late delivery                                                                                                                             |
+| #88   | covered     | `C6-C1`                                                              | The module-level store is gone; concurrent server renders have no arrangement of their own                                                                                                                                                           |
+| #89   | covered     | `A16-C6`, `C6-C2`                                                    | —                                                                                                                                                                                                                                                    |
+| #90   | gap         | `A-α-C3`, `A-γ-C1`, `A-γ-C2`                                         | **A-γ** — a live request whose relay sends neither EOSE nor an event, read at the settle timeout: the state leaves `loading`                                                                                                                         |
+| #91   | gap         | `C-δ-C1`, `C8-C2`                                                    | **C-δ** — `useConnections` is gone and its replacement is a value, not an Observable. A connection-state stream that errors under `useRelayDiagnostics` has no arrangement, and `diagnostics.svelte.ts` subscribes to it with a `next` handler only  |
+| #92   | covered     | `C-δ-C1`                                                             | —                                                                                                                                                                                                                                                    |
+| #93   | removed     | `C3-C1`, `C8-C2`                                                     | `operator` is gone, with nothing in its place                                                                                                                                                                                                        |
+| #94   | covered     | `A6-C1`, `A6-C5`, `C11-C11`                                          | —                                                                                                                                                                                                                                                    |
+| #95   | gap         | `A6-C2`, `A6-C7`, `B-η-C5`                                           | **A6** — the two concurrent requests of #73, their subscription ids read off the wire. `A6-C7` holds that no subscription is anonymous, not that two are distinct                                                                                    |
+| #163  | covered     | `A-ε-C17`, `A-ε-C18`                                                 | —                                                                                                                                                                                                                                                    |
+
 ### Drafted for the next round, and not contracts yet
 
 **These rows have no witness, so they are not in the catalogue above and the parser does not read
