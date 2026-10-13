@@ -242,6 +242,12 @@ describe('what an event has to be to be admitted or sent', () => {
 
       // **(4) A signed input to `useSend`**: refused, and nothing on the wire;
       // a genuine one goes out, which is the wire reader's own control.
+      //
+      // **Nothing on the wire is read after something is**: a refusal returns
+      // before anything a send started could reach the socket, so the wire is
+      // read once the genuine send that follows has been answered, and must
+      // hold exactly that one. Read right after the refusals, it was empty for
+      // a send that went out anyway: measured.
       {
         const { view, send, sent } = await consumer();
         const answers: SendResult[] = [];
@@ -250,7 +256,6 @@ describe('what an event has to be to be admitted or sent', () => {
           answers.map((answer) => (answer.status === 'refused' ? answer.code : answer.status)),
           'a signed input whose id is not its hash, whose signature is not over it, or is not hex'
         ).toEqual(['invalid-event', 'invalid-event', 'invalid-event']);
-        expect(sent(), 'and none of them reached the wire').toEqual([]);
         const out = await send(awkward);
         expect(
           [out.status, out.status === 'settled' ? whole(out.event) : undefined],
@@ -258,7 +263,7 @@ describe('what an event has to be to be admitted or sent', () => {
         ).toEqual(['settled', whole(awkward)]);
         expect(
           sent().map((frame) => (frame[1] as { id: string }).id),
-          'and is on the wire'
+          'and it is the only one on the wire'
         ).toEqual([awkward.id]);
         view.unmount();
       }
@@ -275,10 +280,16 @@ describe('what an event has to be to be admitted or sent', () => {
       ] as const) {
         const { view, send, sent } = await consumer(signerOf(VICTIM, rewrite));
         const answer = await send(template);
+        // The marker, a signed input, which this signer is not asked about.
+        const marker = await send(awkward);
         expect(
-          [answer.status === 'refused' ? answer.code : answer.status, sent()],
-          `a signer returning ${label}: refused, and nothing on the wire`
-        ).toEqual(['signer-failed', []]);
+          [
+            answer.status === 'refused' ? answer.code : answer.status,
+            marker.status,
+            sent().map((frame) => (frame[1] as { id: string }).id)
+          ],
+          `a signer returning ${label}: refused, and only the marker after it on the wire`
+        ).toEqual(['signer-failed', 'settled', [awkward.id]]);
         view.unmount();
       }
       {

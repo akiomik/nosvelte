@@ -355,8 +355,8 @@ export default {
       edits: [
         {
           file: 'src/tests/contracts/admission.test.ts',
-          from: 'const whole = (event: Nostr.Event | ReqEvent) => ({\n  id: event.id,\n  pubkey: event.pubkey,',
-          to: 'const whole = (event: Nostr.Event | ReqEvent) => ({\n  id: event.id,\n  pubkey: event.id,'
+          from: 'const whole = (event: Nostr.Event | ReqEvent) => ({\n  id: event.id,\n  pubkey: event.pubkey,\n  created_at: event.created_at,\n  kind: event.kind,\n  tags: event.tags.map((tag) => [...tag]),\n  content: event.content,\n  sig: event.sig\n});',
+          to: 'const whole = (event: Nostr.Event | ReqEvent) => ({\n  id: event.id\n});'
         }
       ]
     },
