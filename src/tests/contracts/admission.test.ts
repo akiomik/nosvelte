@@ -183,8 +183,16 @@ async function consumer({
    * The wire once the consumer has gone and anything it started has had time
    * to arrive: a send left running is refused by the provider's revoked
    * capability after this, so this is everything the consumer put out.
+   *
+   * **A wait while it is still mounted comes first.** A send deferred past
+   * the refusal reached the socket after the marker had been answered, and
+   * unmounting at once revoked it before it went: green, for a consumer that
+   * stays mounted and would have sent it — measured. What this does not see is
+   * a send deferred longer than the wait; one deferred past the consumer's
+   * lifetime is refused by the revoked capability.
    */
   const finalWire = async (): Promise<ReturnType<typeof whole>[]> => {
+    await settle(300);
     view.unmount();
     await settle(100);
     return sent();
