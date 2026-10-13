@@ -56,18 +56,41 @@ export const declaresTest = (): RegExp =>
  * character, or keyword, before it. A keyword used as a property name
  * (`obj.in / 2`) is not a keyword. Single and double quotes and patterns reset
  * at a line end; a template carries.
+ *
+ * **A line end is every terminator the language has**, not only `\n`: a `//`
+ * comment stops at U+2028, U+2029 and a lone CR as well, and split at `\n`
+ * alone, a comment ended by one of those swallowed the code after it. **But
+ * U+2028 and U+2029 may stand inside a quoted string**, where `\n` and a lone
+ * CR may not, so at those two a quote carries — resetting it there turned a
+ * string's closing quote into an opening one, and a `//` after it into code —
+ * and so it does at any line end a backslash escapes, which continues the
+ * string. Each terminator is written back as it was, so the output has the
+ * input's line breaks, and a `\n` after its last line, as it always had.
+ *
+ * **Its reader is the scan for an arm id the suite declares outside the
+ * production root**, and it is a hand-written lexer, which is what the tree
+ * walk in {@link asserts} replaced. That scan matches its pattern against what
+ * this keeps, and this keeps strings: an `it('ID: …')` written inside a string
+ * or a template is read as a declaration — measured. Moving that scan onto the
+ * parser too, and deleting this, is #168's.
  */
 export function code(raw: string): string {
   let out = '';
   let inBlock = false;
   let quote: string | undefined;
-  for (const line of raw.split('\n')) {
+  const parts = raw.split(/(\r\n|[\n\r\u2028\u2029])/);
+  for (let index = 0; index < parts.length; index += 2) {
+    const line = parts[index] as string;
+    const end = parts[index + 1] ?? '\n';
     let kept = '';
     let inRegex = false;
     let inClass = false;
     let previous = '';
     let word = '';
     let afterDot = false;
+    // A backslash that ends a line inside a quote continues the string onto
+    // the next one.
+    let continued = false;
     for (let at = 0; at < line.length; at += 1) {
       const here = line[at] as string;
       const two = line.slice(at, at + 2);
@@ -114,6 +137,7 @@ export function code(raw: string): string {
         if (here === "'" || here === '"' || here === '`') quote = here;
       } else if (here === '\\') {
         kept += here + (line[at + 1] ?? '');
+        continued = at + 1 === line.length;
         at += 1;
         continue;
       } else if (here === quote) quote = undefined;
@@ -126,8 +150,9 @@ export function code(raw: string): string {
         previous = here;
       }
     }
-    if (quote === "'" || quote === '"') quote = undefined;
-    out += `${kept}\n`;
+    if ((quote === "'" || quote === '"') && !continued && end !== '\u2028' && end !== '\u2029')
+      quote = undefined;
+    out += `${kept}${end}`;
   }
 
   return out;
@@ -200,7 +225,13 @@ export const declarationsIn = (
   const twice: string[] = [];
   const tree = parse(source);
   const checker = checkerFor(tree);
-  const lines = source.split('\n');
+  // **The parser's lines, not `\n`'s.** A position is the parser's, and so is
+  // the runner's, which reports the same line: both break at U+2028 and U+2029
+  // too. Split at `\n` alone, an arm below one of those — an event's content
+  // in a string can carry one — was looked for a line too low, and lost every
+  // marker it had. Measured on `AH2`, below one in `AH1`'s fixtures.
+  const starts = tree.getLineStarts();
+  const lines = starts.map((start, index) => source.slice(start, starts[index + 1]));
   const shape = new RegExp(`^(${TEST_ID}):`);
   const visit = (node: ts.Node): void => {
     if (
@@ -269,20 +300,117 @@ export const mergeDeclarations = (
   return { tests, files: owner, positions, duplicates };
 };
 
+/** The families an assertion is called through. */
+const ASSERTING = new Set(['expect', 'expectTypeOf', 'expectOf', 'assert']);
+
+/** A wrapper an expression is read through: parentheses, a cast, a non-null assertion. */
+const isWrapper = (
+  node: ts.Node
+): node is
+  | ts.ParenthesizedExpression
+  | ts.AsExpression
+  | ts.SatisfiesExpression
+  | ts.NonNullExpression
+  | ts.TypeAssertion =>
+  ts.isParenthesizedExpression(node) ||
+  ts.isAsExpression(node) ||
+  ts.isSatisfiesExpression(node) ||
+  ts.isNonNullExpression(node) ||
+  ts.isTypeAssertionExpression(node);
+
+/** The outermost wrapper around `node`, or `node`. */
+const wrapped = (node: ts.Node): ts.Node => {
+  let at = node;
+  while (isWrapper(at.parent)) at = at.parent;
+  return at;
+};
+
+/** `node` with the wrappers around its inside taken off. */
+const unwrapped = (node: ts.Expression): ts.Expression => {
+  let at = node;
+  while (isWrapper(at)) at = at.expression;
+  return at;
+};
+
 /**
- * Whether an arm's call makes an assertion: a matcher after `expect(…)`,
- * `expectTypeOf`/`expectOf`, `assert`, or `expect.assertions` and its
- * siblings. Strings come out first, so a title cannot assert by being named.
+ * A callee as the family it names and the member called on it, read from its
+ * last two names: `expect`, `expect.soft`, `assert.equal`, and the same behind
+ * a namespace — `v.expect`, `v.assert.equal`.
+ */
+const calleeParts = (callee: ts.Expression): [string, string | undefined] | undefined => {
+  const names: string[] = [];
+  let at = unwrapped(callee);
+  while (ts.isPropertyAccessExpression(at)) {
+    names.unshift(at.name.text);
+    at = unwrapped(at.expression);
+  }
+  if (!ts.isIdentifier(at)) return undefined;
+  names.unshift(at.text);
+  const last = names[names.length - 1];
+  const before = names[names.length - 2];
+  if (last !== undefined && ASSERTING.has(last)) return [last, undefined];
+  if (before === 'expect' || before === 'assert') return [before, last];
+  return undefined;
+};
+
+/**
+ * Whether a property is read off `call`, through any further reads, and what
+ * was read is called: `expect(x).toBe(1)`, `expect(x).not.toBe(1)`. A read
+ * that is not called — `expect(x).toBe;` — is not a matcher run.
+ */
+const matcherCalled = (call: ts.CallExpression): boolean => {
+  let chain = wrapped(call);
+  let reads = 0;
+  while (ts.isPropertyAccessExpression(chain.parent) && chain.parent.expression === chain) {
+    chain = wrapped(chain.parent);
+    reads += 1;
+  }
+  return reads > 0 && ts.isCallExpression(chain.parent) && chain.parent.expression === chain;
+};
+
+/**
+ * Whether an arm's call makes an assertion: a matcher called on `expect(…)` or
+ * `expect.<member>(…)`, a call of `expectTypeOf`, `expectOf`, `assert` or
+ * `assert.<member>`, or `expect.assertions` and its siblings. Parentheses,
+ * casts, non-null assertions and a namespace are read through; an optional
+ * call is not counted, since it may not happen.
+ *
+ * **Read off the syntax tree, and that is the repair.** This scanned the text
+ * with comments stripped by hand and strings cut out by a pattern, and three
+ * rounds of review each found a lexical input it read wrongly — a comment
+ * ended by U+2028, a quote carried over it, a string continued past a line
+ * end — and, with the last, a template's text, a pattern's text and a
+ * template's `${…}` too. The parser decides what is a comment, a string, a
+ * pattern and an expression, so none of those is a question here any more,
+ * and a title cannot assert by being named.
+ *
+ * **What it reads is spelling.** A local `expect` that does nothing, a helper
+ * nobody calls and code after a `return` all read as asserting, as they did
+ * when this was a text scan; what would close them — the binding, and the
+ * run — is #169's.
  */
 export const asserts = (body: string): boolean => {
-  const bare = code(body).replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node) && node.questionDotToken === undefined) {
+      const [head, member] = calleeParts(node.expression) ?? [];
+      if (
+        (head === 'expect' && matcherCalled(node)) ||
+        ((head === 'expectTypeOf' || head === 'expectOf') && member === undefined) ||
+        head === 'assert' ||
+        (head === 'expect' &&
+          (member === 'assertions' || member === 'hasAssertions' || member === 'unreachable'))
+      ) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(body));
 
-  return (
-    /\bexpect(?:\.\w+)?\s*\([^;]*\)\s*\.\s*\w/.test(bare) ||
-    /\bexpect(?:Type)?Of\s*\(/.test(bare) ||
-    /\bassert(?:\.\w+)?\s*\(/.test(bare) ||
-    /\bexpect\s*\.\s*(?:assertions|hasAssertions|unreachable)\s*\(/.test(bare)
-  );
+  return found;
 };
 
 /**

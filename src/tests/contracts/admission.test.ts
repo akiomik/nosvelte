@@ -2,13 +2,16 @@
  * @license Apache-2.0
  * @copyright 2023 Akiomi Kamakura
  *
- * What an event has to be to be admitted or sent: `A-ε-C18`'s landing, `AH1`.
+ * What an event has to be to be admitted or sent: `A-ε-C18`'s landing, `AH1`;
+ * and that the provider's verifier is the one a request is checked by:
+ * `A-ε-C17`'s, `AH2`.
  *
  * Driven through the published entry only — a mounted `NostrApp` given relays
  * and a signer, `useReq` and `useSend` under it — so the verifier is the one
  * the library supplies, as it is for every consumer: `0004` publishes none.
- * Every event is signed with a real key, and each refused one is built so that
- * only one half of the rule refuses it:
+ * Every event is signed with a real key. Each one `AH1` refuses is built so
+ * that only one half of the rule refuses it, and `AH2`'s are the row's own
+ * arrangement, which both halves refuse:
  *
  * - **a rewritten id**: signed correctly over its own fields, with `id` set to
  *   something else — another author's id, a coordinate's key, its own hash in
@@ -155,15 +158,34 @@ async function consumer({
     (sum, plan) => sum + (plan.kind === 'request' && plan.descriptor.live === true ? 2 : 1),
     0
   );
+  // **Bounded, and failing on what the requests say.** A request that refuses
+  // before it asks the relay — one left with no verifier refuses that way —
+  // would otherwise leave this waiting until the test's own timeout, which says
+  // nothing about why.
   const subscriptions: { id: string; kinds: string }[] = [];
-  while (subscriptions.length < expected) {
-    const frame = (await relay.nextMessage) as unknown[];
-    if (frame[0] === 'REQ')
-      subscriptions.push({
-        id: String(frame[1]),
-        kinds: JSON.stringify((frame[2] as { kinds?: unknown }).kinds)
-      });
-  }
+  await vi.waitFor(
+    () => {
+      subscriptions.splice(
+        0,
+        subscriptions.length,
+        ...(relay.messages as unknown[][])
+          .filter((frame) => frame[0] === 'REQ')
+          .map((frame) => ({
+            id: String(frame[1]),
+            kinds: JSON.stringify((frame[2] as { kinds?: unknown }).kinds)
+          }))
+      );
+      expect(
+        subscriptions.length,
+        `every request asked the relay; their states are ${JSON.stringify(
+          held.map(({ request }) =>
+            request.state.status === 'error' ? String(request.state.error) : request.state.status
+          )
+        )}`
+      ).toBeGreaterThanOrEqual(expected);
+    },
+    { timeout: 5000 }
+  );
   const requests = plans.map((plan, index) => {
     const handed = held[index];
     if (handed === undefined) throw new Error('nosvelte test: a probe handed nothing over');
@@ -421,6 +443,114 @@ describe('what an event has to be to be admitted or sent', () => {
         spies.map((spy) => spy.mock.calls),
         'verification writes nothing to the console, by any method'
       ).toEqual(levels.map(() => [['nosvelte test: the control']]));
+    }
+  );
+
+  // @contracts A-ε-C17
+  it(
+    'AH2: an event changed after it was signed does not reach a consumer of a request made through a provider',
+    { timeout: 30_000 },
+    async () => {
+      vi.stubGlobal('WebSocket', MockWebSocket);
+      vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
+
+      // **The row's own arrangement**: a genuine signature over different
+      // content — the id and the signature of an event signed for real, with its
+      // content changed afterwards. One such pair for each door a request takes
+      // events in by: its backward leg, its forward leg, and the backward leg of
+      // a refresh, which runs outside the component's initialisation and so
+      // cannot look the provider up again. The changed event comes first, so one
+      // admitted is the event the consumer holds: the fold keeps the first of an
+      // id (`B5-C3`). Nothing names a verifier anywhere, because nothing
+      // published takes one; the provider's is the only one there is, and it
+      // reaches the machine or nothing checks.
+      const pairs = (['backward', 'forward', 'refreshed'] as const).map((door, index) => {
+        const genuine = signed(VICTIM, {
+          kind: 1,
+          created_at: 100 * (index + 1),
+          tags: [],
+          content: `signed for the ${door} leg`
+        });
+        return { door, genuine, changed: { ...genuine, content: `changed on the ${door} leg` } };
+      });
+      expect(
+        pairs.map(({ genuine, changed }) => [
+          changed.id === genuine.id,
+          changed.sig === genuine.sig,
+          changed.content === genuine.content
+        ]),
+        'the premise: the same id and signature, over different content'
+      ).toEqual(pairs.map(() => [true, true, false]));
+      // Through the comparison the arm reads with, not only the field: a
+      // `whole()` that read the id alone would take one for the other.
+      expect(
+        pairs.filter(
+          ({ genuine, changed }) =>
+            JSON.stringify(whole(changed)) === JSON.stringify(whole(genuine))
+        ),
+        'the premise: the comparison tells each pair apart'
+      ).toEqual([]);
+      type Pair = (typeof pairs)[number];
+      const [backwardPair, forwardPair, refreshedPair] = pairs as [Pair, Pair, Pair];
+
+      const { relay, requests, finalWire } = await consumer();
+      const [{ backward, forward, events, request }] = requests as [(typeof requests)[number]];
+      relay.send(['EVENT', backward, backwardPair.changed]);
+      relay.send(['EVENT', backward, backwardPair.genuine]);
+      relay.send(['EOSE', backward]);
+      // Each wait is for the whole of what the consumer should hold by then, so
+      // one that runs out says what it held instead.
+      await waitFor(() => expect(request.state.status).not.toBe('loading'));
+      await waitFor(() =>
+        expect(events(), 'after the backlog').toEqual([whole(backwardPair.genuine)])
+      );
+      relay.send(['EVENT', forward, forwardPair.changed]);
+      relay.send(['EVENT', forward, forwardPair.genuine]);
+      await waitFor(() =>
+        expect(events(), 'after the forward pair').toEqual([
+          whole(forwardPair.genuine),
+          whole(backwardPair.genuine)
+        ])
+      );
+
+      const refreshed = request.refresh();
+      // Read into the wait's message: a refresh that refuses before it asks
+      // the relay says why here, and nowhere else.
+      let answered = 'nothing yet';
+      void refreshed.then((outcome) => {
+        answered =
+          outcome.kind === 'error' ? `error: ${String(outcome.error)}` : JSON.stringify(outcome);
+      });
+      let again: string | undefined;
+      await vi.waitFor(
+        () => {
+          again = (relay.messages as unknown[][])
+            .filter((frame) => frame[0] === 'REQ')
+            .map((frame) => String(frame[1]))
+            .filter((id) => id.includes('-b') && id !== backward)
+            .at(-1);
+          expect(
+            again,
+            `the refresh asked the relay; the refresh answered ${answered}`
+          ).toBeDefined();
+        },
+        { timeout: 5000 }
+      );
+      relay.send(['EVENT', again, refreshedPair.changed]);
+      relay.send(['EVENT', again, refreshedPair.genuine]);
+      relay.send(['EOSE', again]);
+      await refreshed;
+      // The handle lists by `created_at`, newest first, which is why each pair
+      // is later than the one before it: the order expected is the published
+      // one, not the order of arrival.
+      await waitFor(() =>
+        expect(events(), 'what the consumer holds: the genuine event of each pair').toEqual([
+          whole(refreshedPair.genuine),
+          whole(forwardPair.genuine),
+          whole(backwardPair.genuine)
+        ])
+      );
+      await finalWire();
     }
   );
 });

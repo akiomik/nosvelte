@@ -444,6 +444,13 @@ describe('the production contract bridge', () => {
         ['  // @contracts A1-C1', '', '  // something else entirely', arm('CT11')].join('\n')
       ).rows.get('CT11') ?? [])
     ]).toEqual([]);
+    // A line break the parser counts and `\n` does not, above the arm: the
+    // marker is still the one directly above it.
+    expect([
+      ...(declarationsIn(
+        ["  const content = 'a\u2028b';", '  // @contracts A1-C1', arm('CT15')].join('\n')
+      ).rows.get('CT15') ?? [])
+    ]).toEqual(['A1-C1']);
 
     // What counts as asserting, both ways.
     const armWith = (body: string): string => `  ${'it'}('CT12: fabricated', () => { ${body} });`;
@@ -456,6 +463,63 @@ describe('the production contract bridge', () => {
     expect(unasserted('expectTypeOf(1).toBeNumber()')).toEqual([]);
     expect(unasserted('expect.soft(1).toBe(1)')).toEqual([]);
     expect(unasserted('expect(1)'), 'a call with no matcher asserts nothing').toEqual(['CT12']);
+    // A `//` comment ends at every line terminator the language has, and what
+    // follows it is code.
+    expect(
+      ['\u2028', '\u2029', '\r'].flatMap((end) => unasserted(`// a note${end}expect(1).toBe(1)`)),
+      'an assertion after a comment ended by U+2028, U+2029 or a lone CR'
+    ).toEqual([]);
+    // And inside a quoted string those two are characters, not line ends: the
+    // quote carries over them, both ways.
+    expect(
+      ['\u2028', '\u2029'].flatMap((end) =>
+        unasserted(`const s = "before${end}after"; // expect(1).toBe(1)\nvoid 0;`)
+      ),
+      'a `//` after a string holding U+2028 or U+2029 is still a comment'
+    ).toEqual(['CT12', 'CT12']);
+    expect(
+      ['\u2028', '\u2029'].flatMap((end) =>
+        unasserted(`const s = "a${end}// b"; expect(1).toBe(1);`)
+      ),
+      'a `//` inside a string holding U+2028 or U+2029 is still text'
+    ).toEqual([]);
+    // Nor is a line end a backslash escapes: the string goes on past it.
+    expect(
+      [
+        unasserted('const s = "a\\\nb"; // expect(1).toBe(1)\nvoid 0;'),
+        unasserted('const s = "a\\\n// b"; expect(1).toBe(1);')
+      ],
+      'a string continued past a line end, then a comment, then a `//` inside it'
+    ).toEqual([['CT12'], []]);
+    // What is a string, a template, a pattern or an expression is the
+    // parser's to say: text shaped like an assertion inside the first three is
+    // not one, and an assertion inside a template's `${…}` is.
+    expect(
+      [
+        'const s = "a\\\n// expect(1).toBe(1)";',
+        'const s = "a\\\n b"; expect("x").toBe("x");',
+        'const s = `expect(1).toBe(1)`;',
+        'const s = `${String(expect(1).toBe(1))}`;',
+        'const r = /expect(1).toBe(1)/;'
+      ].map((body) => unasserted(body).length === 0),
+      'a continued string holding an assertion, then one before a real one; a template’s text, then its `${…}`; a pattern'
+    ).toEqual([false, true, false, true, false]);
+    // Through parentheses, a cast and a namespace, a matcher still runs; a
+    // read that is not called, and a call that may not happen, are not one.
+    expect(
+      [
+        '(expect(1)).toBe(1);',
+        '(expect(1) as ReturnType<typeof expect>).toBe(1);',
+        'v.expect(1).toBe(1);',
+        'v.assert.equal(1, 1);',
+        'await expect(p).resolves.not.toBe(1);',
+        'expect(1).toBe;',
+        'expect(1).not;',
+        'expect.getState().testPath;',
+        'assert?.(false);'
+      ].map((body) => unasserted(body).length === 0),
+      'wrapped, namespaced and chained matchers; then a read, a modifier, a property and an optional call'
+    ).toEqual([true, true, true, true, true, false, false, false, false]);
     expect(unasserted('void 0'), 'an empty arm').toEqual(['CT12']);
     expect(
       [...declarationsIn(`  ${'it'}('CT13: does not expect (yet)', () => {});`).bodies.entries()]
