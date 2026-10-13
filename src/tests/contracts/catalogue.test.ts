@@ -469,6 +469,28 @@ describe('the production contract bridge', () => {
       ['\u2028', '\u2029', '\r'].flatMap((end) => unasserted(`// a note${end}expect(1).toBe(1)`)),
       'an assertion after a comment ended by U+2028, U+2029 or a lone CR'
     ).toEqual([]);
+    // And inside a quoted string those two are characters, not line ends: the
+    // quote carries over them, both ways.
+    expect(
+      ['\u2028', '\u2029'].flatMap((end) =>
+        unasserted(`const s = "before${end}after"; // expect(1).toBe(1)\nvoid 0;`)
+      ),
+      'a `//` after a string holding U+2028 or U+2029 is still a comment'
+    ).toEqual(['CT12', 'CT12']);
+    expect(
+      ['\u2028', '\u2029'].flatMap((end) =>
+        unasserted(`const s = "a${end}// b"; expect(1).toBe(1);`)
+      ),
+      'a `//` inside a string holding U+2028 or U+2029 is still text'
+    ).toEqual([]);
+    // Nor is a line end a backslash escapes: the string goes on past it.
+    expect(
+      [
+        unasserted('const s = "a\\\nb"; // expect(1).toBe(1)\nvoid 0;'),
+        unasserted('const s = "a\\\n// b"; expect(1).toBe(1);')
+      ],
+      'a string continued past a line end, then a comment, then a `//` inside it'
+    ).toEqual([['CT12'], []]);
     expect(unasserted('void 0'), 'an empty arm').toEqual(['CT12']);
     expect(
       [...declarationsIn(`  ${'it'}('CT13: does not expect (yet)', () => {});`).bodies.entries()]

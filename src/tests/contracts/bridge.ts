@@ -60,8 +60,14 @@ export const declaresTest = (): RegExp =>
  * **A line end is every terminator the language has**, not only `\n`: a `//`
  * comment stops at U+2028, U+2029 and a lone CR as well. Split at `\n` alone,
  * a comment ended by one of those swallowed the code after it, and an arm
- * whose assertion sat there was read as asserting nothing. Each terminator is
- * written back as it was, so the output's lines are the input's.
+ * whose assertion sat there was read as asserting nothing. **But U+2028 and
+ * U+2029 may stand inside a quoted string**, where `\n` and a lone CR may not,
+ * so at those two a quote carries: resetting it there turned a string's
+ * closing quote into an opening one, and a `//` after it into code — an arm
+ * with no assertion read as asserting. So it does at any line end a backslash
+ * escapes, which continues the string. Each terminator is written back as it
+ * was, so the output has the input's line breaks, and a `\n` after its last
+ * line, as it always had.
  */
 export function code(raw: string): string {
   let out = '';
@@ -77,6 +83,9 @@ export function code(raw: string): string {
     let previous = '';
     let word = '';
     let afterDot = false;
+    // A backslash that ends a line inside a quote continues the string onto
+    // the next one.
+    let continued = false;
     for (let at = 0; at < line.length; at += 1) {
       const here = line[at] as string;
       const two = line.slice(at, at + 2);
@@ -123,6 +132,7 @@ export function code(raw: string): string {
         if (here === "'" || here === '"' || here === '`') quote = here;
       } else if (here === '\\') {
         kept += here + (line[at + 1] ?? '');
+        continued = at + 1 === line.length;
         at += 1;
         continue;
       } else if (here === quote) quote = undefined;
@@ -135,7 +145,8 @@ export function code(raw: string): string {
         previous = here;
       }
     }
-    if (quote === "'" || quote === '"') quote = undefined;
+    if ((quote === "'" || quote === '"') && !continued && end !== '\u2028' && end !== '\u2029')
+      quote = undefined;
     out += `${kept}${end}`;
   }
 
