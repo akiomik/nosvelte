@@ -491,6 +491,19 @@ describe('the production contract bridge', () => {
       ],
       'a string continued past a line end, then a comment, then a `//` inside it'
     ).toEqual([['CT12'], []]);
+    // What is a string, a template, a pattern or an expression is the
+    // parser's to say: text shaped like an assertion inside the first three is
+    // not one, and an assertion inside a template's `${…}` is.
+    expect(
+      [
+        'const s = "a\\\n// expect(1).toBe(1)";',
+        'const s = "a\\\n b"; expect("x").toBe("x");',
+        'const s = `expect(1).toBe(1)`;',
+        'const s = `${String(expect(1).toBe(1))}`;',
+        'const r = /expect(1).toBe(1)/;'
+      ].map((body) => unasserted(body).length === 0),
+      'a continued string holding an assertion, then one before a real one; a template’s text, then its `${…}`; a pattern'
+    ).toEqual([false, true, false, true, false]);
     expect(unasserted('void 0'), 'an empty arm').toEqual(['CT12']);
     expect(
       [...declarationsIn(`  ${'it'}('CT13: does not expect (yet)', () => {});`).bodies.entries()]

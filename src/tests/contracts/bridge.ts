@@ -58,16 +58,21 @@ export const declaresTest = (): RegExp =>
  * at a line end; a template carries.
  *
  * **A line end is every terminator the language has**, not only `\n`: a `//`
- * comment stops at U+2028, U+2029 and a lone CR as well. Split at `\n` alone,
- * a comment ended by one of those swallowed the code after it, and an arm
- * whose assertion sat there was read as asserting nothing. **But U+2028 and
- * U+2029 may stand inside a quoted string**, where `\n` and a lone CR may not,
- * so at those two a quote carries: resetting it there turned a string's
- * closing quote into an opening one, and a `//` after it into code — an arm
- * with no assertion read as asserting. So it does at any line end a backslash
- * escapes, which continues the string. Each terminator is written back as it
- * was, so the output has the input's line breaks, and a `\n` after its last
- * line, as it always had.
+ * comment stops at U+2028, U+2029 and a lone CR as well, and split at `\n`
+ * alone, a comment ended by one of those swallowed the code after it. **But
+ * U+2028 and U+2029 may stand inside a quoted string**, where `\n` and a lone
+ * CR may not, so at those two a quote carries — resetting it there turned a
+ * string's closing quote into an opening one, and a `//` after it into code —
+ * and so it does at any line end a backslash escapes, which continues the
+ * string. Each terminator is written back as it was, so the output has the
+ * input's line breaks, and a `\n` after its last line, as it always had.
+ *
+ * **Its reader is the scan for an arm id the suite declares outside the
+ * production root**, and it is a hand-written lexer, which is what the tree
+ * walk in {@link asserts} replaced. That scan matches its pattern against what
+ * this keeps, and this keeps strings: an `it('ID: …')` written inside a string
+ * or a template is read as a declaration — measured. Moving that scan onto the
+ * parser too, and deleting this, is #168's.
  */
 export function code(raw: string): string {
   let out = '';
@@ -295,20 +300,54 @@ export const mergeDeclarations = (
   return { tests, files: owner, positions, duplicates };
 };
 
+/** A callee written as a name or as one name's member — `expect`, `expect.soft` — as its parts. */
+const calleeParts = (callee: ts.Expression): [string, string | undefined] | undefined =>
+  ts.isIdentifier(callee)
+    ? [callee.text, undefined]
+    : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
+      ? [callee.expression.text, callee.name.text]
+      : undefined;
+
 /**
- * Whether an arm's call makes an assertion: a matcher after `expect(…)`,
- * `expectTypeOf`/`expectOf`, `assert`, or `expect.assertions` and its
- * siblings. Strings come out first, so a title cannot assert by being named.
+ * Whether an arm's call makes an assertion: a matcher read off `expect(…)` or
+ * `expect.<member>(…)`, a call of `expectTypeOf`, `expectOf`, `assert` or
+ * `assert.<member>`, or `expect.assertions` and its siblings.
+ *
+ * **Read off the syntax tree, and that is the repair.** This scanned the text
+ * with comments stripped by hand and strings cut out by a pattern, and three
+ * rounds of review each found a lexical input it read wrongly — a comment
+ * ended by U+2028, a quote carried over it, a string continued past a line
+ * end — and, with the last, a template's text, a pattern's text and a
+ * template's `${…}` too. The parser decides what is a comment, a string, a
+ * pattern and an expression, so none of those is a question here any more,
+ * and a title cannot assert by being named.
  */
 export const asserts = (body: string): boolean => {
-  const bare = code(body).replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node)) {
+      const [head, member] = calleeParts(node.expression) ?? [];
+      const matcherRead =
+        head === 'expect' &&
+        ts.isPropertyAccessExpression(node.parent) &&
+        node.parent.expression === node;
+      if (
+        matcherRead ||
+        ((head === 'expectTypeOf' || head === 'expectOf') && member === undefined) ||
+        head === 'assert' ||
+        (head === 'expect' &&
+          (member === 'assertions' || member === 'hasAssertions' || member === 'unreachable'))
+      ) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(body));
 
-  return (
-    /\bexpect(?:\.\w+)?\s*\([^;]*\)\s*\.\s*\w/.test(bare) ||
-    /\bexpect(?:Type)?Of\s*\(/.test(bare) ||
-    /\bassert(?:\.\w+)?\s*\(/.test(bare) ||
-    /\bexpect\s*\.\s*(?:assertions|hasAssertions|unreachable)\s*\(/.test(bare)
-  );
+  return found;
 };
 
 /**
