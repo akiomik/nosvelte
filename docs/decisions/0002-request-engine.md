@@ -2334,24 +2334,30 @@ Three claims, each true on its own, replace it:
   proving that an arbitrary `Promise` returns inside it. Nothing here makes a verification fast;
   what the number rests on is a measurement of one verifier.
 
-**The support envelope.** The provider defaults the gate to `rx-nostr-crypto`'s verifier — **3.1.3
-resolved, which is the version every figure below was taken against**, and a measurement of a
-dependency without the version it was taken against is not one. Its p95 is 1.275-1.467ms across
-every run this record carries — the measured ends, unrounded, because rounding them outward gives a
-ratio below that does not divide from the numbers beside it. **That range is wider than the
-"1.3-1.4ms" written here before**, which ten of eighteen fresh runs fell outside — eight under it
-and two over. A figure quoted narrower than the runs behind it is a figure somebody will fail to
-reproduce and report as drift. **The method is stated here rather than only the figure**, which it
-was not for several rounds: generate a key, sign a thousand events with it, run a hundred warm-up
-verifications untimed to get past the cold path, then time **all thousand** end to end through the
-same `verifier` export the provider installs — not the schnorr primitive underneath it, which leaves
-out the hashing and the serialisation the gate also pays for — check that each one comes back `true`
-so a verifier rejecting its own signatures is not timed on its fast path, sort, and take the 95th
-percentile. **The warm-up is untimed rather than taken out of the sample**, and this paragraph said
-otherwise — "then time each remaining event" — which a port reading it at the two hundred below
-would implement as a hundred timed samples instead of two hundred. `tools/verifier-p95.mjs` —
-branch-local, like every program under `tools/` — times every event it signed and prints that whole
-number as the sample count.
+**The support envelope.** The provider defaulted the gate to `rx-nostr-crypto`'s verifier when every
+figure below was taken — **3.1.3 resolved, which is the version they were taken against**, and a
+measurement of a dependency without the version it was taken against is not one. Its p95 is
+1.275-1.467ms across every run this record carries — the measured ends, unrounded, because rounding
+them outward gives a ratio below that does not divide from the numbers beside it. **That range is
+wider than the "1.3-1.4ms" written here before**, which ten of eighteen fresh runs fell outside —
+eight under it and two over. A figure quoted narrower than the runs behind it is a figure somebody
+will fail to reproduce and report as drift. **The method is stated here rather than only the
+figure**, which it was not for several rounds: generate a key, sign a thousand events with it, run a
+hundred warm-up verifications untimed to get past the cold path, then time **all thousand** end to
+end through the same `verifier` export the provider installs — not the schnorr primitive underneath
+it, which leaves out the hashing and the serialisation the gate also pays for — check that each one
+comes back `true` so a verifier rejecting its own signatures is not timed on its fast path, sort,
+and take the 95th percentile. **The warm-up is untimed rather than taken out of the sample**, and
+this paragraph said otherwise — "then time each remaining event" — which a port reading it at the
+two hundred below would implement as a hundred timed samples instead of two hundred.
+`tools/verifier-p95.mjs` — branch-local, like every program under `tools/` — times every event it
+signed and prints that whole number as the sample count.
+
+**The gate's default is the library's own verifier now** (`A-ε-C18`, #138), because the dependency's
+never compared the hash it computes with the event's `id`. It computes the same hash over the same
+serialisation, makes the same schnorr check over it, and adds one string comparison, so the work
+timed above is the work the gate does. **The figures were not re-taken against the new function**:
+they are the dependency's export's, at 3.1.3.
 
 Four runs on an Apple M1 Max under node 26 gave p95s between 1.29ms and 1.45ms, and four more after
 the script moved gave 1.29, 1.30, 1.34 and 1.37. Fourteen more on that machine under node 26.3.1,
@@ -2390,9 +2396,10 @@ own runs. The ratio is what the choice rests on — a gate still holding after i
 that will never drain rather than a threshold somebody tunes, and nothing in that argument needs the
 ratio to two significant figures. The verifier is replaceable all the same. The provider takes one
 and the engine requires one, so a slower verifier is a value somebody can supply rather than a case
-the types exclude — internal today only because nothing of this engine is on the published entry at
-all. The envelope is therefore the shipped verifier on ordinary hardware, and a consumer outside it
-is outside a policy rather than outside a proof.
+the types exclude — internal because `0004` publishes no verifier — its verifier paragraph is the
+decision, and a verifier supplied at the engine's seam replaces the id check `A-ε-C18` holds along
+with the rest of the library's. The envelope is therefore the shipped verifier on ordinary hardware,
+and a consumer outside it is outside a policy rather than outside a proof.
 
 `tools/verifier-p95.mjs` is that method as a script, and **where it lives is part of the claim.** It
 sat under `src/tests/stores/spike-v6/` for several rounds, which made the paragraph above
