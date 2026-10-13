@@ -105,6 +105,50 @@ export default {
       ]
     },
     {
+      id: 'C4-forward-truthy',
+      arm: 'VG1',
+      describe: "the forward leg reads the verifier's answer for truthiness",
+      edits: [
+        {
+          file: MACHINE,
+          from: FULFILLED,
+          to: "        (ok) => leave(leg === 'forward' ? Boolean(ok) : ok === true),"
+        }
+      ]
+    },
+    {
+      id: 'C4-nullish',
+      arm: 'VG1',
+      describe: 'a verifier that answers nothing has passed',
+      edits: [
+        {
+          file: MACHINE,
+          from: FULFILLED,
+          to: '        (ok) => leave(ok === true || ok === undefined || ok === null),'
+        }
+      ]
+    },
+    {
+      id: 'C4-spelled-true',
+      arm: 'VG1',
+      describe: 'anything that renders as `true` delivers',
+      edits: [
+        { file: MACHINE, from: FULFILLED, to: "        (ok) => leave(String(ok) === 'true')," }
+      ]
+    },
+    {
+      id: 'C4-forward-during-backlog',
+      arm: 'VG1',
+      describe: 'the forward leg delivers what it is handed while the backlog is still being read',
+      edits: [
+        {
+          file: MACHINE,
+          from: FULFILLED,
+          to: "        (ok) => leave(ok === true || (leg === 'forward' && gates.backward.phase === 'open')),"
+        }
+      ]
+    },
+    {
       id: 'I-forward-refused-not-sent',
       arm: 'VG1',
       describe:
@@ -124,8 +168,8 @@ export default {
       edits: [
         {
           file: GATE,
-          from: "      return !event.content.startsWith('REFUSED');",
-          to: '      return event.content.length > 0;'
+          from: "      if (event.content.startsWith('REFUSED')) return false;\n      if (event.content.startsWith('LOOSE')) return 'nope';\n",
+          to: ''
         }
       ]
     },
@@ -136,8 +180,8 @@ export default {
       edits: [
         {
           file: GATE,
-          from: "      ['a list', ['yes']],\n      ['true', true]\n",
-          to: "      ['a list', ['yes']]\n"
+          from: "      ['a boxed true', Object(true) as unknown],\n      ['true', true]\n",
+          to: "      ['a boxed true', Object(true) as unknown]\n"
         }
       ]
     },
@@ -183,6 +227,45 @@ export default {
           file: MACHINE,
           from: REJECTED,
           to: '        (error: unknown) => {\n          leave(false);\n          throw error;\n        }'
+        }
+      ]
+    },
+    {
+      id: 'C11-throw-escapes-next',
+      arm: 'VG2',
+      describe:
+        "the verifier is also called bare after the guarded call, so a synchronous throw leaves through the subscription's callback while the outcome stays right",
+      edits: [
+        {
+          file: MACHINE,
+          from: `${REJECTED}\n      );\n`,
+          to: `${REJECTED}\n      );\n    void verifyEvent(packet.event as unknown as Nostr.Event);\n`
+        }
+      ]
+    },
+    {
+      id: 'C11-rejection-throws-later',
+      arm: 'VG2',
+      describe:
+        'a verifier that fails drops the event and releases the admission, and the failure is thrown again from a microtask',
+      edits: [
+        {
+          file: MACHINE,
+          from: REJECTED,
+          to: '        (error: unknown) => {\n          leave(false);\n          queueMicrotask(() => {\n            throw error;\n          });\n        }'
+        }
+      ]
+    },
+    {
+      id: 'C11-extra-chunk',
+      arm: 'VG2',
+      describe:
+        'a verifier that fails drops the event and puts a chunk of its own beside the outcome',
+      edits: [
+        {
+          file: MACHINE,
+          from: REJECTED,
+          to: "        () => {\n          leave(false);\n          push({ type: 'legEnded', leg: 'forward', reason: undefined });\n        }"
         }
       ]
     },
@@ -275,12 +358,37 @@ export default {
       id: 'C17-verifier-absent',
       arm: 'AH2',
       describe:
-        "a provider's request is handed no verifier, so it refuses before asking the relay: the arm's control, the genuine events, is what fails",
+        "a provider's request is handed no verifier, so it refuses before asking the relay: the arm fails on its bounded wait for the REQs, which names the refusal",
       edits: [
         {
           file: 'src/lib/v1/useStreamedReq.svelte.ts',
           from: '          verifierOf: () => inputs.verifyEvent,',
           to: '          verifierOf: () => undefined,'
+        }
+      ]
+    },
+    {
+      id: 'C17-refresh-rereads-context',
+      arm: 'AH2',
+      describe:
+        'each attempt looks the provider up again for its verifier, which a refresh outside the component cannot',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '        verifyEvent: verifyEvent ?? noVerifier(),',
+          to: '        verifyEvent: (() => {\n          void verifyEvent;\n          return tryGetNostrContext()?.verifyEvent ?? noVerifier();\n        })(),'
+        }
+      ]
+    },
+    {
+      id: 'C17-stream-drops-verifier',
+      arm: 'AH2',
+      describe: 'the stream hands the machine a verifier that passes whatever its own answered',
+      edits: [
+        {
+          file: 'src/lib/v1/stream.ts',
+          from: '      verifyEvent,\n      ...(settleTimeoutMs',
+          to: '      verifyEvent: async (event) => (await verifyEvent(event)) || true,\n      ...(settleTimeoutMs'
         }
       ]
     },
@@ -291,8 +399,8 @@ export default {
       edits: [
         {
           file: ADMISSION,
-          from: "      const changed = { ...genuine, content: 'changed after signing' };",
-          to: '      const changed = { ...genuine };'
+          from: '        return { door, genuine, changed: { ...genuine, content: `changed on the ${door} leg` } };',
+          to: '        return { door, genuine, changed: { ...genuine } };'
         }
       ]
     },

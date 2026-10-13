@@ -9,8 +9,9 @@
  * Driven through the published entry only — a mounted `NostrApp` given relays
  * and a signer, `useReq` and `useSend` under it — so the verifier is the one
  * the library supplies, as it is for every consumer: `0004` publishes none.
- * Every event is signed with a real key, and each refused one is built so that
- * only one half of the rule refuses it:
+ * Every event is signed with a real key. Each one `AH1` refuses is built so
+ * that only one half of the rule refuses it, and `AH2`'s are the row's own
+ * arrangement, which both halves refuse:
  *
  * - **a rewritten id**: signed correctly over its own fields, with `id` set to
  *   something else — another author's id, a coordinate's key, its own hash in
@@ -455,57 +456,84 @@ describe('what an event has to be to be admitted or sent', () => {
 
       // **The row's own arrangement**: a genuine signature over different
       // content — the id and the signature of an event signed for real, with its
-      // content changed afterwards. One such pair for each leg, and the changed
-      // event first, so one admitted is the event the consumer holds: the fold
-      // keeps the first of an id (`B5-C3`). Nothing names a verifier anywhere,
-      // because nothing published takes one; the provider's is the only one
-      // there is, and it reaches the machine or nothing checks.
-      const genuine = signed(VICTIM, {
-        kind: 1,
-        created_at: 100,
-        tags: [],
-        content: 'signed for real'
+      // content changed afterwards. One such pair for each door a request takes
+      // events in by: its backward leg, its forward leg, and the backward leg of
+      // a refresh, which runs outside the component's initialisation and so
+      // cannot look the provider up again. The changed event comes first, so one
+      // admitted is the event the consumer holds: the fold keeps the first of an
+      // id (`B5-C3`). Nothing names a verifier anywhere, because nothing
+      // published takes one; the provider's is the only one there is, and it
+      // reaches the machine or nothing checks.
+      const pairs = (['backward', 'forward', 'refreshed'] as const).map((door, index) => {
+        const genuine = signed(VICTIM, {
+          kind: 1,
+          created_at: 100 * (index + 1),
+          tags: [],
+          content: `signed for the ${door} leg`
+        });
+        return { door, genuine, changed: { ...genuine, content: `changed on the ${door} leg` } };
       });
-      const changed = { ...genuine, content: 'changed after signing' };
-      const later = signed(VICTIM, { kind: 1, created_at: 200, tags: [], content: 'signed later' });
-      const changedLater = { ...later, content: 'changed later' };
       expect(
-        [genuine, later].map((one, index) => {
-          const other = [changed, changedLater][index] as Nostr.Event;
-          return [other.id === one.id, other.sig === one.sig, other.content === one.content];
-        }),
+        pairs.map(({ genuine, changed }) => [
+          changed.id === genuine.id,
+          changed.sig === genuine.sig,
+          changed.content === genuine.content
+        ]),
         'the premise: the same id and signature, over different content'
-      ).toEqual([
-        [true, true, false],
-        [true, true, false]
-      ]);
+      ).toEqual(pairs.map(() => [true, true, false]));
       // Through the comparison the arm reads with, not only the field: a
       // `whole()` that read the id alone would take one for the other.
       expect(
-        whole(changed),
-        'the premise: the comparison tells the backward pair apart'
-      ).not.toEqual(whole(genuine));
-      expect(
-        whole(changedLater),
-        'the premise: the comparison tells the forward pair apart'
-      ).not.toEqual(whole(later));
+        pairs.filter(
+          ({ genuine, changed }) =>
+            JSON.stringify(whole(changed)) === JSON.stringify(whole(genuine))
+        ),
+        'the premise: the comparison tells each pair apart'
+      ).toEqual([]);
+      type Pair = (typeof pairs)[number];
+      const [backwardPair, forwardPair, refreshedPair] = pairs as [Pair, Pair, Pair];
 
       const { relay, requests, finalWire } = await consumer();
       const [{ backward, forward, events, request }] = requests as [(typeof requests)[number]];
-      relay.send(['EVENT', backward, changed]);
-      relay.send(['EVENT', backward, genuine]);
+      relay.send(['EVENT', backward, backwardPair.changed]);
+      relay.send(['EVENT', backward, backwardPair.genuine]);
       relay.send(['EOSE', backward]);
       await waitFor(() => expect(request.state.status).not.toBe('loading'));
       await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(1));
-      relay.send(['EVENT', forward, changedLater]);
-      relay.send(['EVENT', forward, later]);
+      relay.send(['EVENT', forward, forwardPair.changed]);
+      relay.send(['EVENT', forward, forwardPair.genuine]);
       await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(2));
-      // The handle lists by `created_at`, newest first, which is why the later
-      // pair is the forward one: the order expected is the published one, not
-      // the order of arrival.
+
+      const refreshed = request.refresh();
+      let again: string | undefined;
+      await vi.waitFor(
+        () => {
+          again = (relay.messages as unknown[][])
+            .filter((frame) => frame[0] === 'REQ')
+            .map((frame) => String(frame[1]))
+            .filter((id) => id.includes('-b') && id !== backward)
+            .at(-1);
+          expect(
+            again,
+            `the refresh asked the relay; the request is ${JSON.stringify(
+              request.state.status === 'error' ? String(request.state.error) : request.state.status
+            )}`
+          ).toBeDefined();
+        },
+        { timeout: 5000 }
+      );
+      relay.send(['EVENT', again, refreshedPair.changed]);
+      relay.send(['EVENT', again, refreshedPair.genuine]);
+      relay.send(['EOSE', again]);
+      await refreshed;
+      await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(3));
+      // The handle lists by `created_at`, newest first, which is why each pair
+      // is later than the one before it: the order expected is the published
+      // one, not the order of arrival.
       expect(events(), 'what the consumer holds: the genuine event of each pair').toEqual([
-        whole(later),
-        whole(genuine)
+        whole(refreshedPair.genuine),
+        whole(forwardPair.genuine),
+        whole(backwardPair.genuine)
       ]);
       await finalWire();
     }

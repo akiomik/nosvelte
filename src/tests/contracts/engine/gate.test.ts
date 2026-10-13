@@ -9,7 +9,7 @@
  * verifier answers — with something that is not a boolean, by throwing before
  * it has made a Promise, by never answering. A consumer gets the provider's
  * verifier, which answers none of those ways (0005, "Port route"). So these
- * drive `referenceStream` directly, over a real client and a real socket, with
+ * drive `referenceStream` directly, over a real client and a mock socket, with
  * the verifier injected at the machine's required parameter, and the relays
  * named through a scope as a provider's requests name them. The client is
  * `createTestRelay`'s, which writes `skipVerify: true` as the provider does:
@@ -22,12 +22,18 @@
  * a rejection handler that drops the event, releases the gate and then throws
  * on leaves the outcome exactly right. So `VG2` observes the escape itself,
  * through {@link escapes}, with a positive control on each of its channels.
+ * **What it hears is what arrives while it listens**, which ends a tenth of a
+ * second after the last request: an escape deferred past that is heard by
+ * nothing, the runner included. Measured with a rethrow on a timer of a second
+ * and a half and this arm run alone: it passed, and the run exited 0. The two
+ * exits the controls measure — RxJS's report on a timer of zero, and a
+ * rejection reported once the microtasks have run — arrive well inside it.
  *
  * Port band 9700-9739.
  */
 import type Nostr from 'nostr-typedef';
 import { createRxOneshotReq } from 'rx-nostr';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import { referenceStream } from '$lib/v1/machine.js';
@@ -114,17 +120,25 @@ const endsOf = (chunks: readonly MachineChunk[]) =>
  * events, with the runner's own listeners taken off for the duration and put
  * back by `restore`.
  *
- * **Those two events are where an error with no handler goes, from either
- * copy of RxJS.** A throw in a subscriber's `next` is reported by RxJS on a
- * timer, which throws it again, and a rejection nobody handles is Node's
- * `unhandledRejection`. Both were measured reaching these events under this
- * file's environment before this was written, and both are measured again by
- * the arm's positive controls, on every run.
+ * **Those two events are where an error with no handler goes.** A throw in a
+ * subscriber's `next` is reported by RxJS on a timer, which throws it again —
+ * the application's RxJS and the copy the dependency bundles do the same, which
+ * was measured once, before this was written — and a rejection nobody handles
+ * is Node's `unhandledRejection`. The arm's positive controls measure both on
+ * every run, the first through the capability the machine subscribes through,
+ * whose subscriber is the application's RxJS.
+ *
+ * **Put back however the arm ends.** A test the runner times out is abandoned
+ * rather than unwound, so its `finally` never runs, and the runner's listeners
+ * stayed off for the rest of the worker — measured. So `restore` is also
+ * registered with the runner, and running it twice does nothing the second
+ * time. The listeners are saved raw, so one registered with `once` goes back
+ * as its wrapper and stays once.
  */
 function escapes() {
   const saved = {
-    uncaught: process.listeners('uncaughtException'),
-    rejection: process.listeners('unhandledRejection')
+    uncaught: process.rawListeners('uncaughtException') as NodeJS.UncaughtExceptionListener[],
+    rejection: process.rawListeners('unhandledRejection') as NodeJS.UnhandledRejectionListener[]
   };
   const seen: { channel: string; message: string }[] = [];
   const recorder =
@@ -138,44 +152,57 @@ function escapes() {
   process.removeAllListeners('unhandledRejection');
   process.on('uncaughtException', onUncaught);
   process.on('unhandledRejection', onRejection);
-  return {
-    seen,
-    restore(): void {
-      process.removeListener('uncaughtException', onUncaught);
-      process.removeListener('unhandledRejection', onRejection);
-      for (const listener of saved.uncaught) process.on('uncaughtException', listener);
-      for (const listener of saved.rejection) process.on('unhandledRejection', listener);
-    }
+  let restored = false;
+  const restore = (): void => {
+    if (restored) return;
+    restored = true;
+    process.removeListener('uncaughtException', onUncaught);
+    process.removeListener('unhandledRejection', onRejection);
+    for (const listener of saved.uncaught) process.on('uncaughtException', listener);
+    for (const listener of saved.rejection) process.on('unhandledRejection', listener);
   };
+  onTestFinished(restore);
+  return { seen, restore };
 }
 
 describe('the verification gate', () => {
   // @contracts A-ε-C4
   it('VG1: neither leg hands over an event the verifier did not answer `true` for, and each hands over the event beside it', async () => {
-    // **(A) A refusal, on each leg.** The relay sends a refused event and then
-    // a genuine one on the backward leg, and the same pair on the forward leg
-    // once the backlog has settled. The verifier refuses by content, and keeps
-    // the content of everything it was handed.
+    // **(A) A refusal, on each leg.** The relay sends a refused event, one the
+    // verifier answers with a string, and then a genuine one on the backward
+    // leg, and the same three on the forward leg once the backlog has settled.
+    // The verifier answers by content, and keeps the content of everything it
+    // was handed. The string is here as well as in (B) because (B) asks on the
+    // backward leg only, and a leg that read the answer loosely is a leg.
     const handed: string[] = [];
-    const gate: Verifier = async (event) => {
+    const gate = (async (event: Nostr.Event) => {
       handed.push(event.content);
-      return !event.content.startsWith('REFUSED');
-    };
+      if (event.content.startsWith('REFUSED')) return false;
+      if (event.content.startsWith('LOOSE')) return 'nope';
+      return true;
+    }) as unknown as Verifier;
     const live = request(gate, { live: true, reqIdBase: 'vg1' });
     const backward = await live.subId('b');
     const forward = await live.subId('f');
+    // The forward leg is open from the start, so a relay can answer on it
+    // while the backlog is still being read: a pair there too, before the EOSE.
+    respondWithEvent(live.server, forward, fakeEvent({ content: 'REFUSED-early' }));
+    respondWithEvent(live.server, forward, fakeEvent({ content: 'genuine-early' }));
+    await vi.waitFor(() => expect(handed).toHaveLength(2), { timeout: 2000 });
     respondWithEvent(live.server, backward, fakeEvent({ content: 'REFUSED-backward' }));
+    respondWithEvent(live.server, backward, fakeEvent({ content: 'LOOSE-backward' }));
     respondWithEvent(live.server, backward, fakeEvent({ content: 'genuine-backward' }));
     respondWithEose(live.server, backward);
     await vi.waitFor(() => expect(shape(live.chunks), 'the backlog settled').toContain('settled'), {
       timeout: 3000
     });
     respondWithEvent(live.server, forward, fakeEvent({ content: 'REFUSED-forward' }));
+    respondWithEvent(live.server, forward, fakeEvent({ content: 'LOOSE-forward' }));
     respondWithEvent(live.server, forward, fakeEvent({ content: 'genuine-forward' }));
     // What is waited for is the verifier being asked, not something being
     // delivered: a mutation that drops an event has to reach the assertion
     // below rather than the wait.
-    await vi.waitFor(() => expect(handed).toHaveLength(4), { timeout: 2000 });
+    await vi.waitFor(() => expect(handed).toHaveLength(8), { timeout: 2000 });
     await settle(50);
     await live.stop();
 
@@ -183,17 +210,23 @@ describe('the verification gate', () => {
     // refused ones included. So nothing before it — the client's own check
     // among them — dropped them, and the refusal measured is the gate's.
     expect(handed, 'the gate was handed every event, on both legs').toEqual([
+      'REFUSED-early',
+      'genuine-early',
       'REFUSED-backward',
+      'LOOSE-backward',
       'genuine-backward',
       'REFUSED-forward',
+      'LOOSE-forward',
       'genuine-forward'
     ]);
+    // In the order they reached the gate: the early forward one before the
+    // backlog's, and the backlog's before the outcome.
     expect(
       [shape(live.chunks), contents(live.chunks)],
-      'only the genuine event of each leg is handed over, the backward one before the outcome'
+      'only the genuine events are handed over, from each leg and in each state of the backlog'
     ).toEqual([
-      ['event', 'settled', 'event'],
-      ['genuine-backward', 'genuine-forward']
+      ['event', 'event', 'settled', 'event'],
+      ['genuine-early', 'genuine-backward', 'genuine-forward']
     ]);
 
     // **(B) Answers that are not `true`**, one request each, with `true` as the
@@ -206,6 +239,9 @@ describe('the verification gate', () => {
       ['an object', { ok: false }],
       ['a number', 1],
       ['a list', ['yes']],
+      ['nothing', undefined],
+      ['the word true', 'true'],
+      ['a boxed true', Object(true) as unknown],
       ['true', true]
     ] as const;
     const seen: { answer: string; delivered: string[]; ends: unknown[] }[] = [];
@@ -228,6 +264,9 @@ describe('the verification gate', () => {
       { answer: 'an object', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'a number', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'a list', delivered: [], ends: [{ kind: 'complete' }] },
+      { answer: 'nothing', delivered: [], ends: [{ kind: 'complete' }] },
+      { answer: 'the word true', delivered: [], ends: [{ kind: 'complete' }] },
+      { answer: 'a boxed true', delivered: [], ends: [{ kind: 'complete' }] },
       { answer: 'true', delivered: ['answered true'], ends: [{ kind: 'complete' }] }
     ]);
   }, 30_000);
@@ -320,7 +359,10 @@ describe('the verification gate', () => {
       // after the microtasks, to arrive while the collector is installed.
       await settle(100);
 
-      expect(results, 'the event is dropped and the outcome says how the wait ended').toEqual([
+      expect(
+        results,
+        `the event is dropped and the outcome says how the wait ended; what escaped was ${JSON.stringify(escaped.seen)}`
+      ).toEqual([
         { verifier: 'throws', chunks: ['settled'], ends: [{ kind: 'complete' }] },
         { verifier: 'rejects', chunks: ['settled'], ends: [{ kind: 'complete' }] },
         {
