@@ -2,7 +2,9 @@
  * @license Apache-2.0
  * @copyright 2023 Akiomi Kamakura
  *
- * What an event has to be to be admitted or sent: `A-ε-C18`'s landing, `AH1`.
+ * What an event has to be to be admitted or sent: `A-ε-C18`'s landing, `AH1`;
+ * and that the provider's verifier is the one a request is checked by:
+ * `A-ε-C17`'s, `AH2`.
  *
  * Driven through the published entry only — a mounted `NostrApp` given relays
  * and a signer, `useReq` and `useSend` under it — so the verifier is the one
@@ -155,15 +157,34 @@ async function consumer({
     (sum, plan) => sum + (plan.kind === 'request' && plan.descriptor.live === true ? 2 : 1),
     0
   );
+  // **Bounded, and failing on what the requests say.** A request that refuses
+  // before it asks the relay — one left with no verifier refuses that way —
+  // would otherwise leave this waiting until the test's own timeout, which says
+  // nothing about why.
   const subscriptions: { id: string; kinds: string }[] = [];
-  while (subscriptions.length < expected) {
-    const frame = (await relay.nextMessage) as unknown[];
-    if (frame[0] === 'REQ')
-      subscriptions.push({
-        id: String(frame[1]),
-        kinds: JSON.stringify((frame[2] as { kinds?: unknown }).kinds)
-      });
-  }
+  await vi.waitFor(
+    () => {
+      subscriptions.splice(
+        0,
+        subscriptions.length,
+        ...(relay.messages as unknown[][])
+          .filter((frame) => frame[0] === 'REQ')
+          .map((frame) => ({
+            id: String(frame[1]),
+            kinds: JSON.stringify((frame[2] as { kinds?: unknown }).kinds)
+          }))
+      );
+      expect(
+        subscriptions.length,
+        `every request asked the relay; their states are ${JSON.stringify(
+          held.map(({ request }) =>
+            request.state.status === 'error' ? String(request.state.error) : request.state.status
+          )
+        )}`
+      ).toBeGreaterThanOrEqual(expected);
+    },
+    { timeout: 5000 }
+  );
   const requests = plans.map((plan, index) => {
     const handed = held[index];
     if (handed === undefined) throw new Error('nosvelte test: a probe handed nothing over');
@@ -421,6 +442,72 @@ describe('what an event has to be to be admitted or sent', () => {
         spies.map((spy) => spy.mock.calls),
         'verification writes nothing to the console, by any method'
       ).toEqual(levels.map(() => [['nosvelte test: the control']]));
+    }
+  );
+
+  // @contracts A-ε-C17
+  it(
+    'AH2: an event changed after it was signed does not reach a consumer of a request made through a provider',
+    { timeout: 30_000 },
+    async () => {
+      vi.stubGlobal('WebSocket', MockWebSocket);
+      vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
+
+      // **The row's own arrangement**: a genuine signature over different
+      // content — the id and the signature of an event signed for real, with its
+      // content changed afterwards. One such pair for each leg, and the changed
+      // event first, so one admitted is the event the consumer holds: the fold
+      // keeps the first of an id (`B5-C3`). Nothing names a verifier anywhere,
+      // because nothing published takes one; the provider's is the only one
+      // there is, and it reaches the machine or nothing checks.
+      const genuine = signed(VICTIM, {
+        kind: 1,
+        created_at: 100,
+        tags: [],
+        content: 'signed for real'
+      });
+      const changed = { ...genuine, content: 'changed after signing' };
+      const later = signed(VICTIM, { kind: 1, created_at: 200, tags: [], content: 'signed later' });
+      const changedLater = { ...later, content: 'changed later' };
+      expect(
+        [genuine, later].map((one, index) => {
+          const other = [changed, changedLater][index] as Nostr.Event;
+          return [other.id === one.id, other.sig === one.sig, other.content === one.content];
+        }),
+        'the premise: the same id and signature, over different content'
+      ).toEqual([
+        [true, true, false],
+        [true, true, false]
+      ]);
+      // Through the comparison the arm reads with, not only the field: a
+      // `whole()` that read the id alone would take one for the other.
+      expect(
+        whole(changed),
+        'the premise: the comparison tells the backward pair apart'
+      ).not.toEqual(whole(genuine));
+      expect(
+        whole(changedLater),
+        'the premise: the comparison tells the forward pair apart'
+      ).not.toEqual(whole(later));
+
+      const { relay, requests, finalWire } = await consumer();
+      const [{ backward, forward, events, request }] = requests as [(typeof requests)[number]];
+      relay.send(['EVENT', backward, changed]);
+      relay.send(['EVENT', backward, genuine]);
+      relay.send(['EOSE', backward]);
+      await waitFor(() => expect(request.state.status).not.toBe('loading'));
+      await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(1));
+      relay.send(['EVENT', forward, changedLater]);
+      relay.send(['EVENT', forward, later]);
+      await waitFor(() => expect(events().length).toBeGreaterThanOrEqual(2));
+      // The handle lists by `created_at`, newest first, which is why the later
+      // pair is the forward one: the order expected is the published one, not
+      // the order of arrival.
+      expect(events(), 'what the consumer holds: the genuine event of each pair').toEqual([
+        whole(later),
+        whole(genuine)
+      ]);
+      await finalWire();
     }
   );
 });
