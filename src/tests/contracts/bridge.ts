@@ -56,12 +56,21 @@ export const declaresTest = (): RegExp =>
  * character, or keyword, before it. A keyword used as a property name
  * (`obj.in / 2`) is not a keyword. Single and double quotes and patterns reset
  * at a line end; a template carries.
+ *
+ * **A line end is every terminator the language has**, not only `\n`: a `//`
+ * comment stops at U+2028, U+2029 and a lone CR as well. Split at `\n` alone,
+ * a comment ended by one of those swallowed the code after it, and an arm
+ * whose assertion sat there was read as asserting nothing. Each terminator is
+ * written back as it was, so the output's lines are the input's.
  */
 export function code(raw: string): string {
   let out = '';
   let inBlock = false;
   let quote: string | undefined;
-  for (const line of raw.split('\n')) {
+  const parts = raw.split(/(\r\n|[\n\r\u2028\u2029])/);
+  for (let index = 0; index < parts.length; index += 2) {
+    const line = parts[index] as string;
+    const end = parts[index + 1] ?? '\n';
     let kept = '';
     let inRegex = false;
     let inClass = false;
@@ -127,7 +136,7 @@ export function code(raw: string): string {
       }
     }
     if (quote === "'" || quote === '"') quote = undefined;
-    out += `${kept}\n`;
+    out += `${kept}${end}`;
   }
 
   return out;

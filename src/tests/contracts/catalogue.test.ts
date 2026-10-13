@@ -463,6 +463,12 @@ describe('the production contract bridge', () => {
     expect(unasserted('expectTypeOf(1).toBeNumber()')).toEqual([]);
     expect(unasserted('expect.soft(1).toBe(1)')).toEqual([]);
     expect(unasserted('expect(1)'), 'a call with no matcher asserts nothing').toEqual(['CT12']);
+    // A `//` comment ends at every line terminator the language has, and what
+    // follows it is code.
+    expect(
+      ['\u2028', '\u2029', '\r'].flatMap((end) => unasserted(`// a note${end}expect(1).toBe(1)`)),
+      'an assertion after a comment ended by U+2028, U+2029 or a lone CR'
+    ).toEqual([]);
     expect(unasserted('void 0'), 'an empty arm').toEqual(['CT12']);
     expect(
       [...declarationsIn(`  ${'it'}('CT13: does not expect (yet)', () => {});`).bodies.entries()]
