@@ -2344,7 +2344,7 @@ eight under it and two over. A figure quoted narrower than the runs behind it is
 will fail to reproduce and report as drift. **The method is stated here rather than only the
 figure**, which it was not for several rounds: generate a key, sign a thousand events with it, run a
 hundred warm-up verifications untimed to get past the cold path, then time **all thousand** end to
-end through the same `verifier` export the provider installs — not the schnorr primitive underneath
+end through the `verifier` export the provider installed then — not the schnorr primitive underneath
 it, which leaves out the hashing and the serialisation the gate also pays for — check that each one
 comes back `true` so a verifier rejecting its own signatures is not timed on its fast path, sort,
 and take the 95th percentile. **The warm-up is untimed rather than taken out of the sample**, and
@@ -2398,8 +2398,10 @@ ratio to two significant figures. The verifier is replaceable all the same. The 
 and the engine requires one, so a slower verifier is a value somebody can supply rather than a case
 the types exclude — internal because `0004` publishes no verifier — its verifier paragraph is the
 decision, and a verifier supplied at the engine's seam replaces the id check `A-ε-C18` holds along
-with the rest of the library's. The envelope is therefore the shipped verifier on ordinary hardware,
-and a consumer outside it is outside a policy rather than outside a proof.
+with the rest of the library's. The envelope is therefore that of the verifier the provider
+installed when it was measured, on ordinary hardware — the shipped one does the same work and one
+string comparison more, and was not measured itself — and a consumer outside it is outside a policy
+rather than outside a proof.
 
 `tools/verifier-p95.mjs` is that method as a script, and **where it lives is part of the claim.** It
 sat under `src/tests/stores/spike-v6/` for several rounds, which made the paragraph above
@@ -2415,17 +2417,18 @@ it does, the trigger is re-derivable from the method above, which is why the met
 in full.
 
 **Reconsider when** either end of that is observed to move: a p95 for the shipped verifier on a
-low-end device within an order of magnitude of the floor — run the script above on that device,
-which is what makes this trigger checkable rather than rhetorical — or a main-thread stall long
-enough to put a working verification past it. **Said that way it is true on any ordinary day**,
-which an adversarial pass pointed out: a suspended tab, a stopped debugger and a long task are
-exactly what the clamp below exists to absorb, so "a stall happened" is the design working. What
-reopens this is a stall the clamp does _not_ absorb — a verification that answers and is discarded
-anyway, because the wait it belonged to was cut — which is an observation of this library's
-behaviour rather than of the machine's, and is the shape the sibling trigger already has. The sample
-is wall time across a `Promise` rather than work, so a stall counts in full — against the deadline
-it is measured under, and against the sample the next deadline is built from. Publishing the
-verifier override is the third trigger, because it turns one measured verifier into an open set.
+low-end device within an order of magnitude of the floor — run the script above on that device, with
+the export it times changed to the library's own (`verify.ts`), which it was written before, which
+is what makes this trigger checkable rather than rhetorical — or a main-thread stall long enough to
+put a working verification past it. **Said that way it is true on any ordinary day**, which an
+adversarial pass pointed out: a suspended tab, a stopped debugger and a long task are exactly what
+the clamp below exists to absorb, so "a stall happened" is the design working. What reopens this is
+a stall the clamp does _not_ absorb — a verification that answers and is discarded anyway, because
+the wait it belonged to was cut — which is an observation of this library's behaviour rather than of
+the machine's, and is the shape the sibling trigger already has. The sample is wall time across a
+`Promise` rather than work, so a stall counts in full — against the deadline it is measured under,
+and against the sample the next deadline is built from. Publishing the verifier override is the
+third trigger, because it turns one measured verifier into an open set.
 
 #### The three waits, side by side
 

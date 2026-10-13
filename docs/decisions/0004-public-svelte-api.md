@@ -1388,6 +1388,16 @@ publishes the dependency's `EventVerifier` type, and no consumer has asked. The 
 own; when someone needs to substitute one, that is a named option with its own record rather than a
 config object with everything else riding along.
 
+**And that record is not an addition, which this paragraph implied for several rounds.** `0003`
+keeps the verifier _outside_ the cache key on the ground that a consumer cannot spell it — and `OM6`
+measures what happens when two hooks disagree about one (`A16-C7`): with a permissive verifier
+mounted first the strict hook shows an event its own verifier rejected, and the other way round it
+is told nothing was found. The day the verifier becomes a descriptor field, that measured defect is
+reachable under one provider through the published surface, and the obvious fix — keying on it — is
+refused by the same record, because a fresh closure per render splits the cache on every keystroke.
+So publishing the verifier is a cache-identity decision with no sound key today, not a new option
+beside the existing ones. An adversarial pass read the two records against each other.
+
 **The library's verifier is its own function, and the dependency's was not enough (#138).**
 `rx-nostr-crypto`'s `verifier` checks the signature over the hash of the fields and never compares
 that hash with `id`, so an event signed correctly under any `id` passed it — and `0003` keys a
@@ -1400,17 +1410,7 @@ ran, and it would also refuse every fixture this suite builds with placeholder i
 `acceptAnyEvent` — the reason measured below for not defaulting to the shipping verifier. Since no
 published path takes a verifier, the published surface always has this one; a substitute at the
 engine's seam replaces the id check with it, which is the residue `0003` names, and the named option
-this paragraph anticipates would have to decide whether it keeps the check.
-
-**And that record is not an addition, which this paragraph implied for several rounds.** `0003`
-keeps the verifier _outside_ the cache key on the ground that a consumer cannot spell it — and `OM6`
-measures what happens when two hooks disagree about one (`A16-C7`): with a permissive verifier
-mounted first the strict hook shows an event its own verifier rejected, and the other way round it
-is told nothing was found. The day the verifier becomes a descriptor field, that measured defect is
-reachable under one provider through the published surface, and the obvious fix — keying on it — is
-refused by the same record, because a fresh closure per render splits the cache on every keystroke.
-So publishing the verifier is a cache-identity decision with no sound key today, not a new option
-beside the existing ones. An adversarial pass read the two records against each other.
+the paragraphs above anticipate would have to decide whether it keeps the check.
 
 **"The library supplies its own" was false when this paragraph was written, and it is the reason
 `skipVerify` has moved out of the list above.** The provider passed no verifier at all, and
