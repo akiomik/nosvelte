@@ -43,6 +43,13 @@ import {
   SURFACES,
   WITNESSES
 } from './engine/helpers/reachability.js';
+import {
+  legacyBlockers,
+  legacyEntryPublished,
+  legacyFaults,
+  legacyLines,
+  TRIAGED
+} from './legacy.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TESTS_ROOT = resolve(HERE, '..');
@@ -718,5 +725,161 @@ describe('the production contract bridge', () => {
     expect(arms.length, 'the premise: the cells are held by more than the landing').toBeGreaterThan(
       4
     );
+  });
+
+  it('CAT44: every legacy issue is answered by rows that still reproduce it, or names the family that owes it', () => {
+    const text = read('0005-contract-catalogue.md');
+    expect(
+      legacyFaults(text, decisions),
+      'the legacy table, against the roster and the rows'
+    ).toEqual([]);
+    const { lines } = legacyLines(text);
+    // **None of the triaged issues may go missing**: a line deleted with its
+    // count adjusted reads clean otherwise. One added is a new triage.
+    expect(
+      TRIAGED.filter((issue) => !lines.some((line) => line.issue === issue)),
+      'a triaged issue the table no longer answers'
+    ).toEqual([]);
+    // And every issue 0001 starts from is among them.
+    const cited = [
+      ...new Set(
+        [...read('0001-rebuild-usereq-rather-than-patch-it.md').matchAll(/#(\d+)\b/g)].map(
+          (match) => Number(match[1])
+        )
+      )
+    ];
+    expect(
+      cited.filter((issue) => !TRIAGED.includes(issue)),
+      'an issue 0001 cites that was never triaged'
+    ).toEqual([]);
+    expect(cited.length, 'the premise: 0001 was read').toBeGreaterThan(10);
+
+    // **The checker's controls**, on a record of its own, so a row landing
+    // or a gap closing in the real one cannot change what they ask. Each is
+    // read for its own fault, so one check cannot stand in for another.
+    const record = (
+      lines: string,
+      counts = '**3 issues**: **1 covered**, **1 removed** and **1 gaps**',
+      header = '| Issue | Disposition | Rows | Clauses | What is left |'
+    ) =>
+      [
+        '| `X1-C1` | X1 | behavior | a given | the first then |',
+        '| `X1-C2` | X1 | behavior | a given | the second then |',
+        '',
+        '#### The port route of a row',
+        '',
+        '```text',
+        'X1-C1        public        TBD',
+        'X1-C2        public        test:XA1',
+        'X1-C3        internal      absent:0002 X1 — no seam;returns when one exists',
+        '```',
+        '',
+        '### Which legacy issue each row answers',
+        '',
+        `${counts}.`,
+        '',
+        header,
+        header.replace(/[^|]+/g, ' --- '),
+        lines,
+        ''
+      ].join('\n');
+    const good = [
+      '| #1 | covered | `X1-C1` | `X1-C1` "the first then" | — |',
+      '| #2 | removed | `X1-C2` | `X1-C2` "the second then" | — |',
+      '| #3 | gap | `X1-C1` | — | **X1** — an arrangement |'
+    ].join('\n');
+    const owners = new Set(['X1']);
+    expect(legacyFaults(record(good), owners), 'the control record reads clean').toEqual([]);
+    const faultsOf = (lines: string, counts?: string, header?: string): string[] =>
+      legacyFaults(record(lines, counts, header), owners);
+    const refuses = (found: string[], fault: string): boolean =>
+      found.some((one) => one.includes(fault));
+    expect(
+      [
+        refuses(
+          faultsOf(good.replace('| `X1-C1` | `X1-C1`', '| `X1-C9` | `X1-C9`')),
+          'not on the roster'
+        ),
+        refuses(
+          faultsOf(good.replace('"the first then"', '"a first then"')),
+          'is no longer in X1-C1'
+        ),
+        refuses(
+          faultsOf(good.replace('`X1-C1` "the first then"', '`X1-C2` "the second then"')),
+          'which the line does not name'
+        ),
+        refuses(faultsOf(good.replace('`X1-C1` "the first then"', '—')), 'with no clause from it'),
+        refuses(
+          faultsOf(good.replace('| — |\n| #2', '| holds by `X1-C2` |\n| #2')),
+          'the note leans on X1-C2'
+        ),
+        refuses(faultsOf(good.replace('**X1** — an', 'an')), 'does not open with the decision'),
+        refuses(faultsOf(good.replace('**X1** — an', '**X9** — an')), 'which no record declares'),
+        refuses(faultsOf(good.replace('| #2 |', '| #1 |')), 'twice'),
+        refuses(faultsOf(good.replace('| #1 |', '| #4 |')), 'ascending order'),
+        refuses(faultsOf(good.replace('| #3 | gap |', '| #3 | partial |')), 'unknown disposition'),
+        refuses(
+          faultsOf(
+            good.replace(
+              '| #2 | removed | `X1-C2` | `X1-C2` "the second then" |',
+              '| #2 | removed | — | — |'
+            )
+          ),
+          'no row named'
+        ),
+        refuses(faultsOf(good.replace('| #1 |', '| 1 |')), 'is not #<number>'),
+        refuses(
+          faultsOf(good.replace('| `X1-C1` | `X1-C1`', '| `X1-C1`, [X1-C2](#x) | `X1-C1`')),
+          'not code spans and commas'
+        ),
+        refuses(
+          faultsOf(good, '**3 issues**: **2 covered**, **0 removed** and **1 gaps**'),
+          'and the table has'
+        ),
+        refuses(
+          faultsOf(good, '**4 issues**: **1 covered**, **1 removed** and **1 gaps**'),
+          'do not add up'
+        ),
+        refuses(faultsOf(good, 'three issues'), 'no longer states its counts'),
+        refuses(
+          faultsOf(good, undefined, '| Issue | Disposition | Rows | What is left |'),
+          'columns are'
+        )
+      ],
+      'the checker refuses each fault on its own'
+    ).toEqual(Array.from({ length: 17 }, () => true));
+    // The release step: a gap, a row not landed, and a row decided absent.
+    expect(
+      legacyBlockers(
+        record(good.replace('| `X1-C2` | `X1-C2` "the second then"', '| `X1-C3` | `X1-C3` "x"'))
+      ),
+      'the release step reads the gaps, and a named row that has not landed, absent included'
+    ).toEqual([
+      '#1: X1-C1 still TBD',
+      '#2: triage again — X1-C3 is absent',
+      '#3: a gap — **X1** — an arrangement'
+    ]);
+
+    // **The release step itself.** When v1 is the published entry it holds
+    // unconditionally; before that, `NOSVELTE_RELEASE_GATE=1` runs it as a
+    // preview. The trigger's own control: today's entry and a v1 one.
+    const entry = readFileSync(resolve(HERE, '../../lib/index.ts'), 'utf8');
+    const manifest = readFileSync(resolve(HERE, '../../../package.json'), 'utf8');
+    expect(
+      [
+        legacyEntryPublished(entry, manifest),
+        legacyEntryPublished(
+          "export * from './v1/index.js';\n",
+          JSON.stringify({ files: ['dist', 'LICENSE'] })
+        ),
+        legacyEntryPublished("export * from './v1/index.js';\n", manifest),
+        legacyEntryPublished(entry, JSON.stringify({ files: ['dist', 'LICENSE'] }))
+      ],
+      'the trigger: the old entry today, a v1 entry with v1 in the package, and either half alone'
+    ).toEqual([true, false, true, true]);
+    if (process.env['NOSVELTE_RELEASE_GATE'] === '1' || !legacyEntryPublished(entry, manifest))
+      expect(legacyBlockers(text), 'what stands between v1 and closing the legacy issues').toEqual(
+        []
+      );
   });
 });

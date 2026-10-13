@@ -923,8 +923,9 @@ function useRelayDiagnostics(): {
 // it — for the eight single-event components there is no event in existence
 // there.
 // Rendering markup of the library's own is worse: an unstyled, unlocalised
-// string a consumer cannot suppress is the shape of #85, where a `NOTICE` with
-// nowhere to go became a `console.error` the application could not turn off.
+// string a consumer cannot suppress is the shape of #85, where a stream error
+// with nowhere to go became a `console.error` the application could not turn
+// off. (This said a `NOTICE` did, and the old surface never read one.)
 // **The cost is named rather than argued away**, and it is the one this record
 // refuses everywhere else: `error` and `nodata` are two of the three that may be
 // absent, so a consumer who supplied neither is shown a failure and a
