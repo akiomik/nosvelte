@@ -62,7 +62,12 @@ const resigned = (event: Nostr.Event, fields: Partial<Fields>): Nostr.Event => {
   return { ...changed, id: getEventHash(changed) };
 };
 
-/** Every field a consumer holds of an event, so a comparison is of the whole. */
+/**
+ * The seven fields NIP-01 gives an event, so a comparison is of the whole of
+ * what the id and the signature commit to. `ots`, which a `ReqEvent` carries
+ * when the wire did, is not read: the signature does not cover it, and a send
+ * drops it today (#164).
+ */
 const whole = (event: Nostr.Event | ReqEvent) => ({
   id: event.id,
   pubkey: event.pubkey,
