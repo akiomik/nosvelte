@@ -444,6 +444,13 @@ describe('the production contract bridge', () => {
         ['  // @contracts A1-C1', '', '  // something else entirely', arm('CT11')].join('\n')
       ).rows.get('CT11') ?? [])
     ]).toEqual([]);
+    // A line break the parser counts and `\n` does not, above the arm: the
+    // marker is still the one directly above it.
+    expect([
+      ...(declarationsIn(
+        ["  const content = 'a\u2028b';", '  // @contracts A1-C1', arm('CT15')].join('\n')
+      ).rows.get('CT15') ?? [])
+    ]).toEqual(['A1-C1']);
 
     // What counts as asserting, both ways.
     const armWith = (body: string): string => `  ${'it'}('CT12: fabricated', () => { ${body} });`;

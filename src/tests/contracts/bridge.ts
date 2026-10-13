@@ -200,7 +200,13 @@ export const declarationsIn = (
   const twice: string[] = [];
   const tree = parse(source);
   const checker = checkerFor(tree);
-  const lines = source.split('\n');
+  // **The parser's lines, not `\n`'s.** A position is the parser's, and so is
+  // the runner's, which reports the same line: both break at U+2028 and U+2029
+  // too. Split at `\n` alone, an arm below one of those — an event's content
+  // in a string can carry one — was looked for a line too low, and lost every
+  // marker it had. Measured on `AH2`, below one in `AH1`'s fixtures.
+  const starts = tree.getLineStarts();
+  const lines = starts.map((start, index) => source.slice(start, starts[index + 1]));
   const shape = new RegExp(`^(${TEST_ID}):`);
   const visit = (node: ts.Node): void => {
     if (
