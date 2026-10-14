@@ -2333,13 +2333,15 @@ measured, both reach `settled` with `false` and the `nodata` slot (`EV2`). **A t
 the same place and is the one the boundary clause above is for**: a matching event admitted to the
 forward gate and still being verified when that leg's wait was cut is discarded, and the verifier
 answering `true` afterwards changes nothing. Measured — the answer is `settled` with no events,
-`false`, and `nodata`, and it is indistinguishable from the same request with no event ever sent
-(`EV4`). The discard is reported by `legEnded` and by nothing finer; 0002's A-ε is where that
-silence is decided and what would falsify it. Counting arrivals instead would let any relay turn a
-truthful "nothing found" into a blank `default` slot by sending one unverifiable event, and a claim
-about the world that a hostile peer can suppress is worth less than the claim C12 asked for. It is
-also the only reading under which the field is honest for every accumulator, because what an
-accumulator sees is what the request accepted.
+`false`, and `nodata`, and once the forward gate's wait is over it is indistinguishable from the
+same request with no event ever sent (`EV4`); until then the one holding the candidate is still
+`live`, because a verdict passing inside that wait would deliver it (0002 A-ε). The discard is
+reported by `legEnded` and by nothing finer; 0002's A-ε is where that silence is decided and what
+would falsify it. Counting arrivals instead would let any relay turn a truthful "nothing found" into
+a blank `default` slot by sending one unverifiable event, and a claim about the world that a hostile
+peer can suppress is worth less than the claim C12 asked for. It is also the only reading under
+which the field is honest for every accumulator, because what an accumulator sees is what the
+request accepted.
 
 `error` carries `events` and they are always empty today. The field is there so that every state but
 `loading` answers "what do I show" the same way — a consumer should not have to ask which shape it

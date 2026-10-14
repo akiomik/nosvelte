@@ -650,10 +650,14 @@ export async function* referenceStream({
    * End a leg's wait, once, and let nothing follow it.
    *
    * The guard is the absorption: a gate that is not draining has either never
-   * had a wait or has already answered one, and in both cases there is nothing
-   * here to do. That is what stops a cut from being followed by a second
-   * deadline over the same gate (`AE16`) and what stops a discarded candidate
-   * from being delivered after the outcome it missed (`AE15`).
+   * had a wait or has already answered one, so a later resolution — a stray
+   * deadline firing, or the last candidate leaving after a cut — changes
+   * nothing. **It absorbs a second deadline rather than preventing one.** What
+   * keeps a candidate that leaves after the cut from arming one is `leave`'s
+   * own guard (`AE25`), what keeps the end from waiting the gate out again is
+   * `drawBoundary`'s refusal to draw over a gate that has answered (`AE16`),
+   * and what keeps a discarded candidate from being delivered after the outcome
+   * it missed is the mark the cut puts on it below (`AE15`).
    */
   const resolveGate = (gate: Gate, phase: 'drained' | 'cut') => {
     if (gate.phase !== 'draining') return;
@@ -672,8 +676,11 @@ export async function* referenceStream({
    *
    * Each leg's boundary is drawn at most once, by construction: the backward
    * one by `settle()`, which `settled` makes idempotent, and the forward one by
-   * `finish()`, which `ending` does. So the early exit is only ever reached
-   * with a gate that has already resolved.
+   * `finish()`, which `ending` does. So no path on this tree reaches the early
+   * exit. It is kept so that a second draw over a gate that has already
+   * answered runs `then` at once rather than waiting the gate out again
+   * (`AE16`), which is what a port that shares one gate between its legs
+   * meets.
    */
   const drawBoundary = (leg: LegName, then: () => void) => {
     const gate = gates[leg];
@@ -829,7 +836,10 @@ export async function* referenceStream({
    * already finished or will, and nothing else can produce an event. Ending
    * here is what lets the query resolve, which drops the activity axis to
    * `idle` — a request that says `live` while nothing can reach it is the
-   * experience #90 and #83 are about.
+   * experience #90 and #83 are about. Not at once if the forward gate is
+   * holding a candidate: the end waits for that gate (`finish()`), and until
+   * its wait is over the request still says `live` — truthfully, since a
+   * verdict passing inside it delivers (`A-ε-C5`, `A-ε-C13`).
    *
    * The Observable is not the input. rx-nostr routes transport failures to
    * `createAllErrorObservable()` and leaves the subscription untouched: on an
