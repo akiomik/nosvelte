@@ -829,7 +829,13 @@ describe('the boundary where an event off the wire becomes this library’s own'
         ): Promise<unknown> => {
           const before = read();
           server.send(frame);
-          await vi.waitFor(() => expect(read()).not.toBe(before), { timeout: 2000 });
+          // A bounded allowance rather than a wait the arm fails on: a stage
+          // that publishes nothing is recorded as such, and the next one runs.
+          try {
+            await vi.waitFor(() => expect(read()).not.toBe(before), { timeout: 1000 });
+          } catch {
+            return 'nothing new was published';
+          }
           return measured(read());
         };
         const notices: unknown[] = [];

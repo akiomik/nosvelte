@@ -175,7 +175,7 @@ export default {
       id: 'C15-tags-null-thrown',
       arm: 'WB1',
       describe:
-        'a tag list that is not a list is walked anyway, which throws: out of the boundary when it is called directly, and out of the subscription on the wire, ending it',
+        'a tag list that is not a list is walked anyway, which throws: out of the boundary when it is called directly, and out of the subscription callback on the wire, while the events after it still arrive',
       edits: [
         {
           file: EVENT,
