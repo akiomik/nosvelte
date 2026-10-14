@@ -97,7 +97,7 @@ export default {
       id: 'C7-one-gate-for-both-legs',
       arm: 'DC2',
       describe:
-        'the forward leg is admitted into the backward gate, so once its boundary is drawn the forward leg delivers nothing — prompt, and killed on the traffic after the outcome rather than on lateness',
+        'the forward leg is admitted into the backward gate, so once its boundary is drawn no new forward candidate is admitted: what was already held drains and is delivered, and nothing sent after that is — prompt, and killed on the traffic sent after the outcome rather than on lateness',
       edits: [
         {
           file: MACHINE,
@@ -341,6 +341,24 @@ export default {
           file: MACHINE,
           from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;",
           to: "    if (phase === 'cut')\n      for (const each of gate.holding) {\n        each.discarded = true;\n        (each as { forge?: () => void }).forge?.();\n      }"
+        }
+      ]
+    },
+    {
+      id: 'C8-backward-verdict-queued-behind-forward',
+      arm: 'DC3',
+      describe:
+        'both verifications run, but a backward verdict is acted on only once every forward candidate admitted before it has been answered — a queue the machine owns, met only when the forward candidate is admitted first and never answered',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  const admitEvent = (leg: LegName, incoming: EventPacket) => {',
+          to: '  let forwardTail: Promise<unknown> = Promise.resolve();\n  const admitEvent = (leg: LegName, incoming: EventPacket) => {'
+        },
+        {
+          file: MACHINE,
+          from: '    Promise.resolve()\n      .then(() => verifyEvent(packet.event as unknown as Nostr.Event))\n      .then(\n',
+          to: "    const ahead = forwardTail;\n    const verdict = Promise.resolve().then(() =>\n      verifyEvent(packet.event as unknown as Nostr.Event)\n    );\n    if (leg === 'forward') forwardTail = Promise.all([forwardTail, verdict.catch(() => undefined)]);\n    verdict\n      .then((ok) => (leg === 'backward' ? ahead.then(() => ok) : ok))\n      .then(\n"
         }
       ]
     },

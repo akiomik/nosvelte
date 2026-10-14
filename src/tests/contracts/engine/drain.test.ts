@@ -230,7 +230,9 @@ describe('the wait over what the gate holds, and its end', () => {
     // after that — the feed, the verifier's cost, the machine's drain deadlines
     // — moves only when the arm moves it; the request's own settle timer was
     // made before and stays real, at 20s, and promise jobs run as they always
-    // do. What is measured is the machine's scheduling on that clock.
+    // do. What is measured is the machine's scheduling on that clock: work it
+    // does without a timer — a synchronous loop, say — takes no time on it, so
+    // the 300ms bounds what the machine schedules and not the CPU it spends.
     //
     // **Twice: once as the row has it, and once after one forward event that
     // cost two seconds**, because a bound that grew with what the forward leg
@@ -274,6 +276,7 @@ describe('the wait over what the gate holds, and its end', () => {
             await vi.advanceTimersByTimeAsync(5);
           observed['deliveredBeforeTheEose'] = events().length - before;
           observed['pendingAtTheEose'] = pending;
+          const sentAtTheEose = sent;
           const chunksAtTheEose = one.chunks.length;
           const eoseAt = Date.now();
           respondWithEose(one.server, backward);
@@ -290,7 +293,8 @@ describe('the wait over what the gate holds, and its end', () => {
           observed['outcomeAfterTheEose'] = settledIndex >= chunksAtTheEose;
           observed['interval'] =
             settledAt === undefined ? 'no outcome in the window' : settledAt - eoseAt;
-          observed['sent'] = sent;
+          // Counted over the window alone, from the EOSE on.
+          observed['sentInTheWindow'] = sent - sentAtTheEose;
           // Sent after the outcome and delivered: what an in-flight drain of
           // the forward gate cannot account for.
           observed['deliveredAfterTheOutcome'] = one.chunks
@@ -325,7 +329,7 @@ describe('the wait over what the gate holds, and its end', () => {
         forwardGateOccupiedAtTheEose: (o['pendingAtTheEose'] as number) > 0,
         outcomeAfterTheEose: o['outcomeAfterTheEose'],
         within300ms: typeof o['interval'] === 'number' && o['interval'] >= 0 && o['interval'] < 300,
-        moreThan25Sent: (o['sent'] as number) > 25,
+        moreThan25SentInTheWindow: (o['sentInTheWindow'] as number) > 25,
         moreThan3SentAfterAndDelivered: (o['deliveredAfterTheOutcome'] as number) > 3,
         ends: o['ends']
       };
@@ -336,7 +340,7 @@ describe('the wait over what the gate holds, and its end', () => {
       forwardGateOccupiedAtTheEose: true,
       outcomeAfterTheEose: true,
       within300ms: true,
-      moreThan25Sent: true,
+      moreThan25SentInTheWindow: true,
       moreThan3SentAfterAndDelivered: true,
       ends: [{ kind: 'complete' }]
     };
@@ -351,7 +355,7 @@ describe('the wait over what the gate holds, and its end', () => {
 
   // @contracts A-ε-C8
   it('DC3: what the backlog answers does not depend on the forward leg’s order or its history', async () => {
-    // **Five runs, every one collected before any is read**, so a mutation is
+    // **Six runs, every one collected before any is read**, so a mutation is
     // measured against all of them — a run whose setup failed is recorded
     // rather than ending the arm.
     const failedRun = (error: unknown): { failed: string } => ({
@@ -359,15 +363,24 @@ describe('the wait over what the gate holds, and its end', () => {
     });
     const orderRun = async (
       reqIdBase: string,
-      plan: (gate: ReturnType<typeof held>) => Promise<void>
+      plan: (gate: ReturnType<typeof held>) => Promise<void>,
+      forwardAdmittedFirst = false
     ): Promise<unknown> => {
       const gate = held();
       const one = request(gate.verify, { live: true, reqIdBase });
       try {
         const backward = await one.subId('b');
         const forward = await one.subId('f');
-        respondWithEvent(one.server, backward, fakeEvent({ content: 'b1' }));
-        respondWithEvent(one.server, forward, fakeEvent({ content: 'f1' }));
+        if (forwardAdmittedFirst) {
+          // Admitted and handed to its verifier, not merely sent, before the
+          // backward candidate is.
+          respondWithEvent(one.server, forward, fakeEvent({ content: 'f1' }));
+          await vi.waitFor(() => expect(gate.admitted('f1')).toBe(true), { timeout: 2000 });
+          respondWithEvent(one.server, backward, fakeEvent({ content: 'b1' }));
+        } else {
+          respondWithEvent(one.server, backward, fakeEvent({ content: 'b1' }));
+          respondWithEvent(one.server, forward, fakeEvent({ content: 'f1' }));
+        }
         respondWithEose(one.server, backward);
         await vi.waitFor(() => expect(gate.admitted('b1') && gate.admitted('f1')).toBe(true), {
           timeout: 2000
@@ -403,10 +416,16 @@ describe('the wait over what the gate holds, and its end', () => {
     });
     // **The order that is not one**: the forward verification never finishes,
     // which is the ordinary case for a live request rather than a corner.
-    const forwardUnfinished = await orderRun('dc3c', async (gate) => {
+    const unfinished = async (gate: ReturnType<typeof held>) => {
       await gate.release('b1');
       await delay(300);
-    });
+    };
+    const forwardUnfinished = await orderRun('dc3c', unfinished);
+    // **And admitted the other way round**: the forward candidate is in its
+    // gate before the backward one arrives, and is still never answered. A
+    // backlog that waited on what the other leg admitted before it — rather
+    // than on its own candidates — answers differently here and nowhere else.
+    const forwardAdmittedFirst = await orderRun('dc3f', unfinished, true);
 
     // **The other input**: the same backward event and EOSE, differing only in
     // whether one forward event was verified first, at 500ms against the
@@ -454,24 +473,30 @@ describe('the wait over what the gate holds, and its end', () => {
     };
     expect(
       {
-        sameInEveryOrder: [backwardFirst, forwardUnfinished].map(
+        sameInEveryOrder: [backwardFirst, forwardUnfinished, forwardAdmittedFirst].map(
           (run) => answerOf(run) === answerOf(forwardFirst)
         ),
         forwardFirst,
         forwardUnfinished,
+        forwardAdmittedFirst,
         sameWhateverTheHistory:
           JSON.stringify(aForwardVerificationFirst) === JSON.stringify(noHistory),
         noHistory
       },
       'the same answer in every release order and whatever the forward leg cost before it'
     ).toEqual({
-      sameInEveryOrder: [true, true],
+      sameInEveryOrder: [true, true, true],
       forwardFirst: {
         end: { kind: 'complete' },
         backlogEventPrecedesOutcome: true,
         forwardAnswered: true
       },
       forwardUnfinished: {
+        end: { kind: 'complete' },
+        backlogEventPrecedesOutcome: true,
+        forwardAnswered: false
+      },
+      forwardAdmittedFirst: {
         end: { kind: 'complete' },
         backlogEventPrecedesOutcome: true,
         forwardAnswered: false
