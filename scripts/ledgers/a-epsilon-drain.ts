@@ -13,6 +13,8 @@ import type { Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
 const ARMS = 'src/tests/contracts/engine/drain.test.ts';
+/** The end of the outcome's callback, once the backlog is reported. */
+const SETTLE_END = '        if (!live || forwardEnded) finish();\n      });\n    });\n  };';
 
 /** The backward boundary, and the outcome pushed once it has drained or been cut. */
 const SETTLE =
@@ -37,8 +39,8 @@ export default {
   files: [ARMS],
   calibration: {
     measured:
-      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { DC1: 5, DC2: 4, DC3: 8, DC4: 7 }
+      "one run of each arm's duration in a single Vitest run at the commit that last changed the arms, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
+    seconds: { DC1: 7, DC2: 4, DC3: 8, DC4: 9 }
   },
   entries: [
     {
@@ -94,7 +96,8 @@ export default {
     {
       id: 'C7-one-gate-for-both-legs',
       arm: 'DC2',
-      describe: 'the forward leg is admitted into the backward gate',
+      describe:
+        'the forward leg is admitted into the backward gate, so once its boundary is drawn the forward leg delivers nothing — prompt, and killed on the traffic after the outcome rather than on lateness',
       edits: [
         {
           file: MACHINE,
@@ -240,14 +243,158 @@ export default {
       ]
     },
     {
+      id: 'C6-live-drain-budget',
+      arm: 'DC1',
+      describe: "a live request's wait over its draining gate is a fixed 100ms",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const cap = Math.max(VERIFY_DRAIN_FLOOR_MS, Math.ceil(believed * VERIFY_DRAIN_SAFETY));',
+          to: '    const cap = live ? 100 : Math.max(VERIFY_DRAIN_FLOOR_MS, Math.ceil(believed * VERIFY_DRAIN_SAFETY));'
+        }
+      ]
+    },
+    {
+      id: 'C7-forward-cost-delays-the-outcome',
+      arm: 'DC2',
+      describe:
+        "the backlog's outcome waits half of the slowest forward verification, a bound the forward leg sets",
+      edits: [
+        {
+          file: MACHINE,
+          from: SETTLE,
+          to: "      drawBoundary('backward', () => setTimeout(() => {\n        push({ type: 'settled', viaTimer });"
+        },
+        {
+          file: MACHINE,
+          from: SETTLE_END,
+          to: '        if (!live || forwardEnded) finish();\n      }, gates.forward.slowestVerifyMs / 2));\n    });\n  };'
+        }
+      ]
+    },
+    {
+      id: 'C7-shared-counter',
+      arm: 'DC2',
+      describe:
+        "forward candidates are counted in the backlog's wait as well as their own: the outcome waits on traffic that has nothing to do with it",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    gate.holding.add(admission);',
+          to: "    gate.holding.add(admission);\n    if (leg === 'forward') gates.backward.holding.add(admission);"
+        },
+        {
+          file: MACHINE,
+          from: '      gate.holding.delete(admission);',
+          to: '      gate.holding.delete(admission);\n      gates.backward.holding.delete(admission);'
+        }
+      ]
+    },
+    {
+      id: 'C7-outcome-before-the-eose',
+      arm: 'DC2',
+      describe:
+        'a backward REQ marks its relay as having answered, so the backlog settles before its EOSE',
+      edits: [
+        {
+          file: MACHINE,
+          from: "      else if (leg === 'backward') advanceBackward(packet.to, 'active');",
+          to: "      else if (leg === 'backward') advanceBackward(packet.to, 'complete');"
+        }
+      ]
+    },
+    {
+      id: 'C7-forward-held-until-the-outcome',
+      arm: 'DC2',
+      describe: 'the forward leg delivers nothing until the backlog has been reported',
+      edits: [
+        {
+          file: MACHINE,
+          from: DELIVERED,
+          to: "      if (deliver && !admission.discarded && (leg !== 'forward' || backlogReported)) push({ type: 'event', packet });"
+        }
+      ]
+    },
+    {
+      id: 'C7-stream-ends-at-the-outcome',
+      arm: 'DC2',
+      describe: 'a live request ends when its backlog is reported, closing the forward leg',
+      edits: [
+        {
+          file: MACHINE,
+          from: '        if (!live || forwardEnded) finish();',
+          to: '        void forwardEnded;\n        finish();'
+        }
+      ]
+    },
+    {
+      id: 'C8-cut-forges',
+      arm: 'DC3',
+      describe: 'the cut hands the candidates it gave up on over unverified',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const admission: Admission = { discarded: false };',
+          to: "    const admission: Admission & { forge?: () => void } = {\n      discarded: false,\n      forge: () => push({ type: 'event', packet })\n    };"
+        },
+        {
+          file: MACHINE,
+          from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;",
+          to: "    if (phase === 'cut')\n      for (const each of gate.holding) {\n        each.discarded = true;\n        (each as { forge?: () => void }).forge?.();\n      }"
+        }
+      ]
+    },
+    {
+      id: 'C9-cut-forges',
+      arm: 'DC4',
+      describe: 'the cut hands the candidates it gave up on over unverified',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const admission: Admission = { discarded: false };',
+          to: "    const admission: Admission & { forge?: () => void } = {\n      discarded: false,\n      forge: () => push({ type: 'event', packet })\n    };"
+        },
+        {
+          file: MACHINE,
+          from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;",
+          to: "    if (phase === 'cut')\n      for (const each of gate.holding) {\n        each.discarded = true;\n        (each as { forge?: () => void }).forge?.();\n      }"
+        }
+      ]
+    },
+    {
+      id: 'C9-stream-ends-at-the-outcome',
+      arm: 'DC4',
+      describe:
+        'a live request ends when its backlog is reported, so it has already returned when the held candidate is answered',
+      edits: [
+        {
+          file: MACHINE,
+          from: '        if (!live || forwardEnded) finish();',
+          to: '        void forwardEnded;\n        finish();'
+        }
+      ]
+    },
+    {
+      id: 'I-eose-before-the-forward-gate-is-occupied',
+      arm: 'DC2',
+      describe: "the arm sends the backlog's EOSE before any forward event is inside the gate",
+      edits: [
+        {
+          file: ARMS,
+          from: '          for (let step = 0; step < 200 && events().length - before < 2; step += 1)',
+          to: '          for (let step = 0; step < 200 && events().length - before < 0; step += 1)'
+        }
+      ]
+    },
+    {
       id: 'I-verifier-concurrent',
       arm: 'DC1',
       describe: "the arm's verifier answers every event at once rather than one after another",
       edits: [
         {
           file: ARMS,
-          from: '      chain = chain.then(async () => {',
-          to: '      chain = Promise.resolve().then(async () => {'
+          from: '          chain = chain.then(async () => {',
+          to: '          chain = Promise.resolve().then(async () => {'
         }
       ]
     },
@@ -258,8 +405,8 @@ export default {
       edits: [
         {
           file: ARMS,
-          from: '      pendingAtEose = pending;\n      respondWithEose(one.server, backward);',
-          to: '      clearInterval(feed);\n      pendingAtEose = pending;\n      respondWithEose(one.server, backward);'
+          from: '          const eoseAt = Date.now();\n          respondWithEose(one.server, backward);',
+          to: '          const eoseAt = Date.now();\n          if (feed !== undefined) clearInterval(feed);\n          respondWithEose(one.server, backward);'
         }
       ]
     },
@@ -278,7 +425,8 @@ export default {
     {
       id: 'I-not-live',
       arm: 'DC4',
-      describe: "the arm's request is not live",
+      describe:
+        "the arm's request is not live — killed by its premise, since a non-live request opens no forward leg for the arm to find",
       edits: [
         {
           file: ARMS,
@@ -288,5 +436,14 @@ export default {
       ]
     }
   ],
-  retired: []
+  retired: [
+    {
+      id: 'an-empty-gate-at-the-deadline-is-reported-as-cut',
+      arm: 'DC1',
+      describe: 'a gate that is empty when its deadline fires is reported cut',
+      reason:
+        'No entrance: a deadline is armed only over a non-empty gate, and the one statement that empties a draining gate resolves it and clears the deadline in the same breath, so the cut never fires over an empty gate. The `drained` arm of the deadline is kept for the direction it would fail in, as `machine.ts` says.',
+      edits: [{ file: MACHINE, from: CUT, to: "      resolveGate(gate, 'cut');" }]
+    }
+  ]
 } satisfies Ledger;

@@ -39,8 +39,12 @@ import {
   respondWithEvent
 } from './helpers/relay.js';
 
-afterEach(() => {
+/** Every request an arm opened, so one a failed run left behind is ended too. */
+const opened: { stop: () => Promise<void> }[] = [];
+
+afterEach(async () => {
   vi.useRealTimers();
+  for (const one of opened.splice(0)) await one.stop();
   WS.clean();
 });
 
@@ -98,14 +102,23 @@ function request(
     );
     return found as string;
   };
-  /** Waits for the generator to end on its own, for at most `ms`, then ends it. */
+  let stopped = false;
+  /**
+   * Waits for the generator to end on its own, for at most `ms`, then ends it.
+   * Once: a run that failed half-way is ended by its arm and then by
+   * `afterEach`, and the second does nothing.
+   */
   const stop = async (ms = 0): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
     await Promise.race([done, delay(ms)]);
     ac.abort();
     await Promise.race([done, delay(500)]);
     rxNostr.dispose();
   };
-  return { server, chunks, at, done, subId, stop, returned: (): boolean => returned };
+  const one = { server, chunks, at, done, subId, stop, returned: (): boolean => returned };
+  opened.push(one);
+  return one;
 }
 
 /** Chunk kinds, each event named by its content, because the order is the claim. */
@@ -116,6 +129,13 @@ const shape = (chunks: readonly MachineChunk[]): string[] =>
 
 const endsOf = (chunks: readonly MachineChunk[]) =>
   chunks.flatMap((chunk) => (chunk.type === 'settled' ? [chunk.end] : []));
+
+/** The chunks up to and including the outcome, which is what "at the outcome" reads. */
+const toTheOutcome = (chunks: readonly MachineChunk[]): string[] => {
+  const seen = shape(chunks);
+  const at = seen.indexOf('settled');
+  return at < 0 ? seen : seen.slice(0, at + 1);
+};
 
 /**
  * A verifier that holds each event until the test answers it by content — with
@@ -153,104 +173,181 @@ describe('the wait over what the gate holds, and its end', () => {
     // **Serial, which is what verification is**, and the arm records it: a
     // verifier that answered all five at once would leave the chunk list the
     // same and measure nothing, so the order each began and finished in is
-    // read as well as what was delivered.
-    const served: string[] = [];
-    let chain = Promise.resolve();
-    const serial: Verifier = (event) => {
-      chain = chain.then(async () => {
-        served.push(`began:${event.content}`);
-        await delay(300);
-        served.push(`ended:${event.content}`);
-      });
-      return chain.then(() => true);
-    };
-    const one = request(serial, { live: false, reqIdBase: 'dc1', timeoutMs: 8000 });
-    const backward = await one.subId('b');
-    for (let index = 0; index < 5; index += 1)
-      respondWithEvent(one.server, backward, fakeEvent({ content: `bulk-${String(index)}` }));
-    respondWithEose(one.server, backward);
-    await one.stop(4000);
-
+    // read as well as what was delivered. **Non-live and live**, which share
+    // the wait and not the end: a live request's stream runs on past its
+    // outcome, so an event delivered behind the outcome is visible there as
+    // order rather than as loss.
     const bulk = [0, 1, 2, 3, 4].map((index) => `bulk-${String(index)}`);
+    const runs: unknown[] = [];
+    for (const live of [false, true]) {
+      try {
+        const served: string[] = [];
+        let chain = Promise.resolve();
+        const serial: Verifier = (event) => {
+          chain = chain.then(async () => {
+            served.push(`began:${event.content}`);
+            await delay(300);
+            served.push(`ended:${event.content}`);
+          });
+          return chain.then(() => true);
+        };
+        const one = request(serial, {
+          live,
+          reqIdBase: `dc1-${live ? 'live' : 'once'}`,
+          timeoutMs: 8000
+        });
+        const backward = await one.subId('b');
+        for (const content of bulk) respondWithEvent(one.server, backward, fakeEvent({ content }));
+        respondWithEose(one.server, backward);
+        // Every verification answered, or long enough that they would have.
+        await vi.waitFor(() => expect(served).toHaveLength(bulk.length * 2), { timeout: 4000 });
+        await delay(100);
+        await one.stop();
+        runs.push({ live, chunks: shape(one.chunks), ends: endsOf(one.chunks), served });
+      } catch (error) {
+        runs.push({ live, failed: error instanceof Error ? error.message : String(error) });
+      }
+    }
     expect(
-      [shape(one.chunks), endsOf(one.chunks), served],
+      runs,
       'all five ahead of the one outcome, complete, each verified after the one before it finished'
-    ).toEqual([
-      [...bulk.map((content) => `event:${content}`), 'settled'],
-      [{ kind: 'complete' }],
-      bulk.flatMap((content) => [`began:${content}`, `ended:${content}`])
-    ]);
-  }, 15_000);
+    ).toEqual(
+      [false, true].map((live) => ({
+        live,
+        chunks: [...bulk.map((content) => `event:${content}`), 'settled'],
+        ends: [{ kind: 'complete' }],
+        served: bulk.flatMap((content) => [`began:${content}`, `ended:${content}`])
+      }))
+    );
+  }, 20_000);
 
   // @contracts A-ε-C7
   it('DC2: a live backlog settles at once while its forward leg is still being verified', async () => {
     // **On a clock the arm drives**, so "within 300ms of the EOSE" is a fact
     // about the machine's scheduling rather than about how busy the host is.
-    // The socket is open and both REQs are out before the clock is replaced;
-    // from then on every timer — the feed, the verifier's 60ms, the machine's
-    // own deadlines — and `Date` move only when the arm moves them.
-    let pending = 0;
-    const slow: Verifier = async () => {
-      pending += 1;
-      await delay(60);
-      pending -= 1;
-      return true;
+    // The socket is open and both REQs are out before `setTimeout`,
+    // `setInterval`, their two clears and `Date` are replaced. Every timer made
+    // after that — the feed, the verifier's cost, the machine's drain deadlines
+    // — moves only when the arm moves it; the request's own settle timer was
+    // made before and stays real, at 20s, and promise jobs run as they always
+    // do. What is measured is the machine's scheduling on that clock.
+    //
+    // **Twice: once as the row has it, and once after one forward event that
+    // cost two seconds**, because a bound that grew with what the forward leg
+    // cost is "a bound the forward leg sets" — which a feed that costs 60ms an
+    // event cannot tell from none.
+    const run = async (reqIdBase: string, heavyFirst: boolean): Promise<unknown> => {
+      let pending = 0;
+      const slow: Verifier = async (event) => {
+        pending += 1;
+        await delay(event.content === 'heavy' ? 2000 : 60);
+        pending -= 1;
+        return true;
+      };
+      const one = request(slow, { live: true, reqIdBase });
+      try {
+        const backward = await one.subId('b');
+        const forward = await one.subId('f');
+        vi.useFakeTimers({
+          toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date']
+        });
+        const events = (): MachineChunk[] => one.chunks.filter((chunk) => chunk.type === 'event');
+        let sent = 0;
+        let feed: ReturnType<typeof setInterval> | undefined;
+        const observed: Record<string, unknown> = {};
+        try {
+          if (heavyFirst) {
+            respondWithEvent(one.server, forward, fakeEvent({ content: 'heavy' }));
+            for (let step = 0; step < 300 && events().length < 1; step += 1)
+              await vi.advanceTimersByTimeAsync(10);
+            observed['heavyDeliveredFirst'] = shape(one.chunks)[0] === 'event:heavy';
+          }
+          const before = events().length;
+          feed = setInterval(() => {
+            sent += 1;
+            respondWithEvent(one.server, forward, fakeEvent({ content: `live-${String(sent)}` }));
+          }, 15);
+          // The forward leg is already delivering when the backlog finishes: a
+          // gate that is empty at the boundary drains at once whatever it is
+          // shared with, so this is the condition the claim turns on.
+          for (let step = 0; step < 200 && events().length - before < 2; step += 1)
+            await vi.advanceTimersByTimeAsync(5);
+          observed['deliveredBeforeTheEose'] = events().length - before;
+          observed['pendingAtTheEose'] = pending;
+          const chunksAtTheEose = one.chunks.length;
+          const eoseAt = Date.now();
+          respondWithEose(one.server, backward);
+          // The feed runs on for the whole window, outcome or not; when the
+          // outcome arrives, how many had been sent by then is noted.
+          let sentAtTheOutcome: number | undefined;
+          for (let step = 0; step < 120; step += 1) {
+            await vi.advanceTimersByTimeAsync(5);
+            if (sentAtTheOutcome === undefined && shape(one.chunks).includes('settled'))
+              sentAtTheOutcome = sent;
+          }
+          const settledIndex = one.chunks.findIndex((chunk) => chunk.type === 'settled');
+          const settledAt = settledIndex < 0 ? undefined : one.at[settledIndex];
+          observed['outcomeAfterTheEose'] = settledIndex >= chunksAtTheEose;
+          observed['interval'] =
+            settledAt === undefined ? 'no outcome in the window' : settledAt - eoseAt;
+          observed['sent'] = sent;
+          // Sent after the outcome and delivered: what an in-flight drain of
+          // the forward gate cannot account for.
+          observed['deliveredAfterTheOutcome'] = one.chunks
+            .slice(settledIndex < 0 ? one.chunks.length : settledIndex)
+            .filter(
+              (chunk) =>
+                chunk.type === 'event' &&
+                Number(chunk.packet.event.content.replace('live-', '')) >
+                  (sentAtTheOutcome ?? Infinity)
+            ).length;
+          observed['ends'] = endsOf(one.chunks);
+        } finally {
+          if (feed !== undefined) clearInterval(feed);
+          vi.useRealTimers();
+        }
+        return observed;
+      } catch (error) {
+        return { failed: error instanceof Error ? error.message : String(error) };
+      } finally {
+        await one.stop();
+      }
     };
-    const one = request(slow, { live: true, reqIdBase: 'dc2' });
-    const backward = await one.subId('b');
-    const forward = await one.subId('f');
-    vi.useFakeTimers({
-      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date']
-    });
-    let sent = 0;
-    let eoseAt: number | undefined;
-    let pendingAtEose: number | undefined;
-    const feed = setInterval(() => {
-      sent += 1;
-      respondWithEvent(one.server, forward, fakeEvent({ content: `live-${String(sent)}` }));
-    }, 15);
-    try {
-      // The forward leg is already delivering when the backlog finishes: a
-      // gate that is empty at the boundary drains at once whatever it is
-      // shared with, so this is the condition the claim turns on.
-      for (
-        let step = 0;
-        step < 200 && one.chunks.filter((c) => c.type === 'event').length < 2;
-        step += 1
-      )
-        await vi.advanceTimersByTimeAsync(5);
-      eoseAt = Date.now();
-      pendingAtEose = pending;
-      respondWithEose(one.server, backward);
-      // The feed runs on for the whole window, outcome or not.
-      for (let step = 0; step < 120; step += 1) await vi.advanceTimersByTimeAsync(5);
-    } finally {
-      clearInterval(feed);
-      vi.useRealTimers();
-    }
-    await one.stop();
+    const asTheRowHasIt = await run('dc2', false);
+    const afterACostlyOne = await run('dc2-heavy', true);
 
-    const settledIndex = one.chunks.findIndex((chunk) => chunk.type === 'settled');
-    const settledAt = settledIndex < 0 ? Number.NaN : (one.at[settledIndex] as number);
-    expect(
-      {
-        pendingAtEose: pendingAtEose !== undefined && pendingAtEose > 0,
-        sentAcrossTheWindow: sent > 25,
-        settledWithin300ms: eoseAt !== undefined && settledAt - eoseAt < 300,
-        deliveredAfterTheOutcome:
-          settledIndex >= 0 &&
-          one.chunks.slice(settledIndex).filter((chunk) => chunk.type === 'event').length > 3,
-        ends: endsOf(one.chunks)
-      },
-      'the forward gate was occupied at the EOSE; the outcome came within 300ms of it, complete, with live traffic either side'
-    ).toEqual({
-      pendingAtEose: true,
-      sentAcrossTheWindow: true,
-      settledWithin300ms: true,
-      deliveredAfterTheOutcome: true,
+    const judged = (observed: unknown) => {
+      const o = observed as Record<string, unknown>;
+      return {
+        failed: o['failed'],
+        heavyDeliveredFirst: o['heavyDeliveredFirst'],
+        trafficBeforeTheEose: (o['deliveredBeforeTheEose'] as number) >= 2,
+        forwardGateOccupiedAtTheEose: (o['pendingAtTheEose'] as number) > 0,
+        outcomeAfterTheEose: o['outcomeAfterTheEose'],
+        within300ms: typeof o['interval'] === 'number' && o['interval'] >= 0 && o['interval'] < 300,
+        moreThan25Sent: (o['sent'] as number) > 25,
+        moreThan3SentAfterAndDelivered: (o['deliveredAfterTheOutcome'] as number) > 3,
+        ends: o['ends']
+      };
+    };
+    const expected = {
+      failed: undefined,
+      trafficBeforeTheEose: true,
+      forwardGateOccupiedAtTheEose: true,
+      outcomeAfterTheEose: true,
+      within300ms: true,
+      moreThan25Sent: true,
+      moreThan3SentAfterAndDelivered: true,
       ends: [{ kind: 'complete' }]
+    };
+    expect(
+      { asTheRowHasIt: judged(asTheRowHasIt), afterACostlyOne: judged(afterACostlyOne) },
+      `the outcome within 300ms of the EOSE and after it, complete, with live traffic either side — observed ${JSON.stringify({ asTheRowHasIt, afterACostlyOne })}`
+    ).toEqual({
+      asTheRowHasIt: { ...expected, heavyDeliveredFirst: undefined },
+      afterACostlyOne: { ...expected, heavyDeliveredFirst: true }
     });
-  }, 15_000);
+  }, 20_000);
 
   // @contracts A-ε-C8
   it('DC3: what the backlog answers does not depend on the forward leg’s order or its history', async () => {
@@ -264,9 +361,9 @@ describe('the wait over what the gate holds, and its end', () => {
       reqIdBase: string,
       plan: (gate: ReturnType<typeof held>) => Promise<void>
     ): Promise<unknown> => {
+      const gate = held();
+      const one = request(gate.verify, { live: true, reqIdBase });
       try {
-        const gate = held();
-        const one = request(gate.verify, { live: true, reqIdBase });
         const backward = await one.subId('b');
         const forward = await one.subId('f');
         respondWithEvent(one.server, backward, fakeEvent({ content: 'b1' }));
@@ -276,17 +373,24 @@ describe('the wait over what the gate holds, and its end', () => {
           timeout: 2000
         });
         await plan(gate);
-        const seen = shape(one.chunks);
+        // The outcome, read together with the chunks up to it — waited for
+        // with a bound, and recorded as missing if it never came.
+        await vi
+          .waitFor(() => expect(shape(one.chunks)).toContain('settled'), { timeout: 2000 })
+          .catch(() => undefined);
+        const atTheOutcome = toTheOutcome(one.chunks);
         const forwardAnswered = gate.answered('f1');
         await one.stop(100);
         return {
-          end: endsOf(one.chunks)[0],
+          end: endsOf(one.chunks)[0] ?? 'no outcome',
           backlogEventPrecedesOutcome:
-            seen.includes('event:b1') && seen.indexOf('event:b1') < seen.indexOf('settled'),
+            atTheOutcome.includes('settled') && atTheOutcome.includes('event:b1'),
           forwardAnswered
         };
       } catch (error) {
         return failedRun(error);
+      } finally {
+        await one.stop();
       }
     };
     const forwardFirst = await orderRun('dc3a', async (gate) => {
@@ -308,12 +412,12 @@ describe('the wait over what the gate holds, and its end', () => {
     // whether one forward event was verified first, at 500ms against the
     // backward candidate's 1300ms — read at the outcome.
     const historyRun = async (reqIdBase: string, forwardFirst: boolean): Promise<unknown> => {
+      const costed: Verifier = async (event) => {
+        await delay(event.content.startsWith('fwd') ? 500 : 1300);
+        return true;
+      };
+      const one = request(costed, { live: true, reqIdBase });
       try {
-        const costed: Verifier = async (event) => {
-          await delay(event.content.startsWith('fwd') ? 500 : 1300);
-          return true;
-        };
-        const one = request(costed, { live: true, reqIdBase });
         const backward = await one.subId('b');
         const forward = await one.subId('f');
         if (forwardFirst) {
@@ -325,7 +429,7 @@ describe('the wait over what the gate holds, and its end', () => {
         respondWithEvent(one.server, backward, fakeEvent({ content: 'bwd-1' }));
         respondWithEose(one.server, backward);
         await vi.waitFor(() => expect(shape(one.chunks)).toContain('settled'), { timeout: 6000 });
-        const atTheOutcome = shape(one.chunks);
+        const atTheOutcome = toTheOutcome(one.chunks);
         await one.stop(50);
         return {
           end: endsOf(one.chunks)[0],
@@ -333,6 +437,8 @@ describe('the wait over what the gate holds, and its end', () => {
         };
       } catch (error) {
         return failedRun(error);
+      } finally {
+        await one.stop();
       }
     };
     const noHistory = await historyRun('dc3d', false);
@@ -386,18 +492,22 @@ describe('the wait over what the gate holds, and its end', () => {
     // held candidate was answered.
     const runs: unknown[] = [];
     for (const how of ['true', 'false', 'reject'] as const) {
+      const gate = held();
+      const one = request(gate.verify, { live: true, reqIdBase: `dc4-${how}` });
       try {
-        const gate = held();
-        const one = request(gate.verify, { live: true, reqIdBase: `dc4-${how}` });
         const backward = await one.subId('b');
         await one.subId('f');
         respondWithEvent(one.server, backward, fakeEvent({ content: `held-${how}` }));
         respondWithEose(one.server, backward);
         await vi.waitFor(() => expect(shape(one.chunks)).toContain('settled'), { timeout: 4000 });
         const atTheCut = shape(one.chunks);
-        const runningAtRelease = !one.returned();
         await gate.release(`held-${how}`, how);
-        await delay(150);
+        const runningAtRelease = !one.returned();
+        // **A horizon, and a stated one**: what is read is what arrived in the
+        // half second after the release. A delivery deferred past that is not
+        // seen here; the continuations of the verification are microtasks, so
+        // the leak this guards against arrives in the first few.
+        await delay(500);
         runs.push({
           how,
           runningAtRelease,
@@ -408,6 +518,8 @@ describe('the wait over what the gate holds, and its end', () => {
         await one.stop();
       } catch (error) {
         runs.push({ how, failed: error instanceof Error ? error.message : String(error) });
+      } finally {
+        await one.stop();
       }
     }
     expect(runs, 'the outcome alone, before and after, under its own cause').toEqual(
