@@ -45,6 +45,9 @@ import {
   respondWithEvent
 } from './helpers/relay.js';
 
+// `DC7`'s provider reads the framework's own context, not the setup's stand-in.
+vi.unmock('svelte');
+
 /** Every request an arm opened, so one a failed run left behind is ended too. */
 const opened: { stop: () => Promise<void> }[] = [];
 
@@ -140,26 +143,73 @@ function request(
 }
 
 /**
+ * Each prototype a projection meets, numbered once for the whole file: the
+ * same class reads alike in two runs, and two classes read apart even when
+ * they share a name.
+ */
+const prototypes = new Map<object | null, number>();
+
+/**
+ * Where a projection keeps what it says about a value rather than the value's
+ * own fields — its prototype and its symbol-keyed fields — so that nothing it
+ * adds can be mistaken for, or collide with, a published member.
+ */
+const PROJECTION = Symbol('projection');
+
+/**
  * What a handle publishes, read field by field rather than serialised. A spread
- * or `JSON.stringify` of an `Error` keeps only its enumerable own fields, so an
- * error is read through every own property name, `name` and `message`, with
- * `cause` and the rest recursively. The relay's address is replaced wherever
- * it appears by one token, and nothing else is: two runs are two relays.
+ * or `JSON.stringify` of an `Error` keeps only its enumerable own fields, so
+ * every value is read through all its own keys **and every field its classes
+ * define** — a getter on the prototype, or `name` and `message` on
+ * `Error.prototype`, which its own keys do not list — recursively. Methods are
+ * not fields. Symbol keys keep their identity, and a value's prototype is read
+ * by identity rather than by name. A value deeper than this reader opens fails
+ * the run rather than reading as a sentinel both runs share. The relay's
+ * address is replaced wherever it appears by one token, and nothing else is:
+ * two runs are two relays.
  */
 const publishedOf = (value: unknown, url: string, depth = 0): unknown => {
   if (typeof value === 'string') return value.split(url).join('<relay>');
   if (typeof value === 'function') return '<function>';
   if (value === null || typeof value !== 'object') return value;
-  if (depth > 8) return '<deeper than eight>';
-  if (Array.isArray(value)) return value.map((each) => publishedOf(each, url, depth + 1));
-  if (value instanceof Map || value instanceof Set)
-    return { '<collection>': [...value].map((each) => publishedOf(each, url, depth + 1)) };
-  const names = new Set(Object.getOwnPropertyNames(value));
-  if (value instanceof Error) for (const name of ['name', 'message']) names.add(name);
-  const out: Record<string, unknown> = {};
-  if (value instanceof Error) out['<class>'] = value.constructor.name;
-  for (const name of [...names].sort())
-    out[name] = publishedOf((value as Record<string, unknown>)[name], url, depth + 1);
+  if (depth > 16) throw new Error('a published value nested deeper than this reader opens');
+  const proto = Object.getPrototypeOf(value) as object | null;
+  if (!prototypes.has(proto)) prototypes.set(proto, prototypes.size);
+  const keys: (string | symbol)[] = Reflect.ownKeys(value);
+  for (
+    let above = proto;
+    above !== null && above !== Object.prototype && above !== Array.prototype;
+    above = Object.getPrototypeOf(above) as object | null
+  )
+    for (const key of Reflect.ownKeys(above)) {
+      if (key === 'constructor' || keys.includes(key)) continue;
+      const field = Object.getOwnPropertyDescriptor(above, key);
+      if (field !== undefined && (field.get !== undefined || typeof field.value !== 'function'))
+        keys.push(key);
+    }
+  const read = (key: string | symbol): unknown =>
+    publishedOf((value as Record<string | symbol, unknown>)[key], url, depth + 1);
+  const symbols = keys.filter((key): key is symbol => typeof key === 'symbol');
+  const strings = keys.filter((key): key is string => typeof key === 'string');
+  const about = {
+    prototype: prototypes.get(proto),
+    symbols: symbols.map((key) => [key, read(key)])
+  };
+  if (Array.isArray(value)) {
+    const items = value.map((each) => publishedOf(each, url, depth + 1));
+    const extra = strings.filter((key) => key !== 'length' && !/^\d+$/.test(key));
+    // An ordinary array reads as its items; one with anything more says so.
+    if (proto === Array.prototype && extra.length === 0 && symbols.length === 0) return items;
+    return {
+      '<items>': items,
+      ...Object.fromEntries(extra.map((key) => [key, read(key)])),
+      [PROJECTION]: about
+    };
+  }
+  const out: Record<string | symbol, unknown> = Object.fromEntries(
+    [...strings].sort().map((key) => [key, read(key)])
+  );
+  out[PROJECTION] = about;
   return out;
 };
 
@@ -194,8 +244,13 @@ function held() {
     { resolve: (ok: boolean) => void; reject: (e: unknown) => void }
   >();
   const answered = new Set<string>();
-  const verify: Verifier = (event) =>
-    new Promise<boolean>((resolve, reject) => answers.set(event.content, { resolve, reject }));
+  const handed: string[] = [];
+  const verify: Verifier = (event) => {
+    handed.push(event.content);
+    return new Promise<boolean>((resolve, reject) =>
+      answers.set(event.content, { resolve, reject })
+    );
+  };
   const admitted = (content: string): boolean => answers.has(content);
   const release = async (content: string, how: 'true' | 'false' | 'reject' = 'true') => {
     await vi.waitFor(() => expect(answers.has(content), `${content} was handed over`).toBe(true), {
@@ -213,7 +268,7 @@ function held() {
   return {
     verify,
     admitted,
-    handed: (): string[] => [...answers.keys()],
+    handed: (): string[] => [...handed],
     release,
     answered: (content: string) => answered.has(content)
   };
@@ -617,48 +672,66 @@ describe('the wait over what the gate holds, and its end', () => {
     // where a second wait over the same gate would put a whole drain period
     // between them — and an absorption nothing downstream can see: a deadline
     // armed over a gate that has already answered resolves into that answer.
-    // So the clock is the arm's (as in `DC2`), and every timer armed after the
-    // REQs are out with a delay inside 1000–4000ms is recorded: the range
-    // `armCut` clamps each of the gate's deadlines into. Not every long timer,
-    // because the dependency arms its own — rx-nostr's 10s `disconnectTimeout`
-    // once the backlog's subscription has closed. The recorder's positive
-    // control is the one deadline the machine does arm, over the gate the EOSE
-    // drew a boundary across.
+    // So the clock is the arm's, installed before the request is made so that
+    // its settle timer is on it too, and every `setTimeout` armed with a delay
+    // inside 1000–4000ms is recorded: the range `armCut` clamps each of the gate's
+    // deadlines into. Not every long timer, because the dependency arms its own
+    // — rx-nostr's 10s `disconnectTimeout` once the backlog's subscription has
+    // closed. The recorder's positive control is the one deadline the machine
+    // does arm, over the gate whose boundary was drawn.
     //
-    // **Two runs, because one edit reaches each and neither reaches both.** The
+    // **Three runs, because one edit reaches each and none reaches all.** The
     // first holds one candidate for ever, so the end is what is measured: a
     // second wait over the gate delays the return without arming anything a
     // later candidate could. The second holds two and answers one after the
     // cut, so a candidate leaving a gate that has answered is what is
     // measured — and the first run cannot see that, because nothing in it
-    // ever leaves.
+    // ever leaves. The third is the first with the settle timer drawing the
+    // boundary instead of an EOSE: a non-live request ends from the same
+    // outcome by either, and an end that followed only one of them leaves the
+    // other's generator running.
     const run = async (
       reqIdBase: string,
       candidates: readonly string[],
-      releasedAfterTheCut: string | undefined
+      releasedAfterTheCut: string | undefined,
+      drawnBy: 'eose' | 'timer' = 'eose'
     ): Promise<unknown> => {
       const gate = held();
-      const one = request(gate.verify, { live: false, reqIdBase });
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date']
+      });
+      const armed: number[] = [];
+      const faked = globalThis.setTimeout;
+      globalThis.setTimeout = ((handler: () => void, ms?: number, ...rest: unknown[]) => {
+        if ((ms ?? 0) >= 1000 && (ms ?? 0) <= 4000) armed.push(ms ?? 0);
+        return (faked as unknown as (...args: unknown[]) => unknown)(handler, ms, ...rest);
+      }) as unknown as typeof globalThis.setTimeout;
+      const one = request(gate.verify, {
+        live: false,
+        reqIdBase,
+        timeoutMs: drawnBy === 'timer' ? 150 : 20_000
+      });
+      const observed: Record<string, unknown> = {};
       try {
-        const backward = await one.subId('b');
-        vi.useFakeTimers({
-          toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date']
-        });
-        const armed: number[] = [];
-        const faked = globalThis.setTimeout;
-        globalThis.setTimeout = ((handler: () => void, ms?: number, ...rest: unknown[]) => {
-          if ((ms ?? 0) >= 1000 && (ms ?? 0) <= 4000) armed.push(ms ?? 0);
-          return (faked as unknown as (...args: unknown[]) => unknown)(handler, ms, ...rest);
-        }) as unknown as typeof globalThis.setTimeout;
-        const observed: Record<string, unknown> = {};
         try {
+          // The REQ, on the arm's clock: a millisecond at a time, so the
+          // candidates are in before a 150ms timer could fire.
+          let backward: string | undefined;
+          for (let step = 0; step < 100 && backward === undefined; step += 1) {
+            await vi.advanceTimersByTimeAsync(1);
+            backward = (one.server.messages as unknown[][])
+              .filter((frame) => frame[0] === 'REQ')
+              .map((frame) => String(frame[1]))
+              .find((id) => id.startsWith(`${reqIdBase}-b:`));
+          }
+          if (backward === undefined) throw new Error('the relay was never asked for the backlog');
           for (const content of candidates)
             respondWithEvent(one.server, backward, fakeEvent({ content }));
           for (let step = 0; step < 100 && !candidates.every(gate.admitted); step += 1)
-            await vi.advanceTimersByTimeAsync(5);
+            await vi.advanceTimersByTimeAsync(1);
           observed['admitted'] = candidates.filter(gate.admitted);
-          respondWithEose(one.server, backward);
-          for (let step = 0; step < 100 && armed.length === 0; step += 1)
+          if (drawnBy === 'eose') respondWithEose(one.server, backward);
+          for (let step = 0; step < 300 && armed.length === 0; step += 1)
             await vi.advanceTimersByTimeAsync(1);
           observed['armedAtTheBoundary'] = [...armed];
           for (let step = 0; step < 300 && !shape(one.chunks).includes('settled'); step += 1)
@@ -685,6 +758,8 @@ describe('the wait over what the gate holds, and its end', () => {
             outcomeAt !== undefined &&
             returnedAt !== undefined &&
             returnedAt - outcomeAt < 400;
+          // And over the whole run: the one deadline, and no other.
+          observed['armedInAll'] = [...armed];
         } finally {
           globalThis.setTimeout = faked;
           vi.useRealTimers();
@@ -698,10 +773,11 @@ describe('the wait over what the gate holds, and its end', () => {
     };
     const heldForEver = await run('dc5a', ['never-released'], undefined);
     const oneOfTwoAnsweredAfterTheCut = await run('dc5b', ['first', 'second'], 'first');
+    const drawnByTheTimer = await run('dc5c', ['never-released'], undefined, 'timer');
 
     const cut = [{ kind: 'incomplete', causes: ['verification-timeout'], error: undefined }];
     expect(
-      { heldForEver, oneOfTwoAnsweredAfterTheCut },
+      { heldForEver, oneOfTwoAnsweredAfterTheCut, drawnByTheTimer },
       'the outcome alone, the end in the same breath, and one deadline only'
     ).toEqual({
       heldForEver: {
@@ -709,7 +785,8 @@ describe('the wait over what the gate holds, and its end', () => {
         armedAtTheBoundary: [1000],
         atTheCut: ['settled'],
         ends: cut,
-        returnedOnItsOwnWithin400ms: true
+        returnedOnItsOwnWithin400ms: true,
+        armedInAll: [1000]
       },
       oneOfTwoAnsweredAfterTheCut: {
         admitted: ['first', 'second'],
@@ -718,7 +795,18 @@ describe('the wait over what the gate holds, and its end', () => {
         ends: cut,
         armedAfterTheRelease: [],
         afterTheRelease: ['settled'],
-        returnedOnItsOwnWithin400ms: true
+        returnedOnItsOwnWithin400ms: true,
+        armedInAll: [1000]
+      },
+      drawnByTheTimer: {
+        admitted: ['never-released'],
+        armedAtTheBoundary: [1000],
+        atTheCut: ['settled'],
+        ends: [
+          { kind: 'incomplete', causes: ['timeout', 'verification-timeout'], error: undefined }
+        ],
+        returnedOnItsOwnWithin400ms: true,
+        armedInAll: [1000]
       }
     });
   }, 20_000);
@@ -732,52 +820,71 @@ describe('the wait over what the gate holds, and its end', () => {
     // own arrivals**, not the delivered chunks: a late event admitted,
     // verified and then dropped delivers nothing either, and it is a wait this
     // row says was never extended.
-    const gate = held();
-    const one = request(gate.verify, { live: false, reqIdBase: 'dc6', timeoutMs: 150 });
-    let observed: Record<string, unknown>;
-    try {
-      const backward = await one.subId('b');
-      respondWithEvent(one.server, backward, fakeEvent({ content: 'at-the-boundary' }));
-      await vi.waitFor(() => expect(gate.admitted('at-the-boundary')).toBe(true), {
-        timeout: 2000
-      });
-      // Past the 150ms timer, and well inside the 1000ms drain floor that
-      // follows it: the boundary is drawn and the wait over it is still open.
-      await delay(250);
-      const openAtTheLateOffer = !closed(one.server, backward);
-      respondWithEvent(one.server, backward, fakeEvent({ content: 'past-the-boundary' }));
-      await delay(80);
-      await gate.release('at-the-boundary');
-      await vi
-        .waitFor(() => expect(shape(one.chunks)).toContain('settled'), { timeout: 2000 })
-        .catch(() => undefined);
-      // The reader's positive control: once the request has ended, the same
-      // reader sees the subscription closed.
-      await vi
-        .waitFor(() => expect(closed(one.server, backward)).toBe(true), { timeout: 1000 })
-        .catch(() => undefined);
-      observed = {
-        openAtTheLateOffer,
-        closedOnceItEnded: closed(one.server, backward),
-        handed: gate.handed(),
-        chunks: shape(one.chunks),
-        ends: endsOf(one.chunks)
-      };
-    } catch (error) {
-      observed = { failed: error instanceof Error ? error.message : String(error) };
-    } finally {
-      await one.stop(200);
-    }
-    expect(
-      observed,
-      'the first event and then the outcome; the second never handed to the verifier; the timer’s cause alone'
-    ).toEqual({
+    //
+    // **Twice: as the row has it, and with the relay's EOSE arriving after the
+    // late offer and before the held event is answered.** With no EOSE the
+    // target is still undetermined at the outcome, so `timeout` is said twice
+    // over and the run cannot tell whether the timer is one of the sayers;
+    // with the EOSE every target is determined, and the timer is the only
+    // thing left that can say it.
+    const run = async (reqIdBase: string, lateEose: boolean): Promise<unknown> => {
+      const gate = held();
+      const one = request(gate.verify, { live: false, reqIdBase, timeoutMs: 150 });
+      try {
+        const backward = await one.subId('b');
+        respondWithEvent(one.server, backward, fakeEvent({ content: 'at-the-boundary' }));
+        await vi.waitFor(() => expect(gate.admitted('at-the-boundary')).toBe(true), {
+          timeout: 2000
+        });
+        // Past the 150ms timer, and well inside the 1000ms drain floor that
+        // follows it: the boundary is drawn and the wait over it is still open.
+        await delay(250);
+        const openAtTheLateOffer = !closed(one.server, backward);
+        respondWithEvent(one.server, backward, fakeEvent({ content: 'past-the-boundary' }));
+        await delay(80);
+        if (lateEose) respondWithEose(one.server, backward);
+        // What the EOSE did, read before the release: it ended the backlog's
+        // subscription, and the outcome was not yet out.
+        await delay(50);
+        const backlogClosedBeforeTheOutcome =
+          closed(one.server, backward) && !shape(one.chunks).includes('settled');
+        await gate.release('at-the-boundary');
+        await vi
+          .waitFor(() => expect(shape(one.chunks)).toContain('settled'), { timeout: 2000 })
+          .catch(() => undefined);
+        // The reader's positive control: once the request has ended, the same
+        // reader sees the subscription closed.
+        await vi
+          .waitFor(() => expect(closed(one.server, backward)).toBe(true), { timeout: 1000 })
+          .catch(() => undefined);
+        return {
+          openAtTheLateOffer,
+          backlogClosedBeforeTheOutcome,
+          closedOnceItEnded: closed(one.server, backward),
+          handed: gate.handed(),
+          chunks: shape(one.chunks),
+          ends: endsOf(one.chunks)
+        };
+      } catch (error) {
+        return { failed: error instanceof Error ? error.message : String(error) };
+      } finally {
+        await one.stop(200);
+      }
+    };
+    const asTheRowHasIt = await run('dc6', false);
+    const withALateEose = await run('dc6-eose', true);
+    const answer = (backlogClosedBeforeTheOutcome: boolean) => ({
       openAtTheLateOffer: true,
+      backlogClosedBeforeTheOutcome,
       closedOnceItEnded: true,
       handed: ['at-the-boundary'],
       chunks: ['event:at-the-boundary', 'settled'],
       ends: [{ kind: 'incomplete', causes: ['timeout'], error: undefined }]
     });
+    expect(
+      { asTheRowHasIt, withALateEose },
+      'the first event and then the outcome; the second never handed to the verifier; the timer’s cause alone'
+    ).toEqual({ asTheRowHasIt: answer(false), withALateEose: answer(true) });
   });
 
   // @contracts A-ε-C13
@@ -788,7 +895,7 @@ describe('the wait over what the gate holds, and its end', () => {
     // `settled`. So the backlog answers complete and empty first, one matching
     // event is admitted to the forward gate, and the socket dies with it
     // inside. The verifier answers `true` once the cut is over — once the
-    // stream has ended, which it does one drain floor after the death with a
+    // stream has ended, which it does a drain floor after the death with a
     // candidate inside and at once without one.
     //
     // **Two runs, because the claim is an indistinguishability**: asserting the
@@ -796,7 +903,12 @@ describe('the wait over what the gate holds, and its end', () => {
     // publishes the discard. What is compared is everything the consumer's
     // handle publishes — its four members, every field under them, errors read
     // through and not serialised — and the outlet the request components
-    // render, with the argument it is handed.
+    // render, with the argument it is handed. **And read twice**: once the
+    // forward gate's wait is over in both, and once inside it, 300ms after the
+    // death, where the run holding a candidate is still `live` and the other
+    // is not. That one field is `A-ε-C5`'s wait, and a third run is what says
+    // so: the same candidate answered `true` inside the wait is delivered, and
+    // the request ends then rather than when the cut would have fallen.
     const plan: ReqPlan = {
       kind: 'request',
       descriptor: {
@@ -807,7 +919,7 @@ describe('the wait over what the gate holds, and its end', () => {
       }
     };
     const runs: Record<string, Record<string, unknown>> = {};
-    for (const arm of ['discarded', 'nothing-sent'] as const) {
+    for (const arm of ['discarded', 'nothing-sent', 'delivered-in-the-wait'] as const) {
       const url = nextUrl();
       const server = new WS(url, { jsonProtocol: true });
       const gate = held();
@@ -839,15 +951,35 @@ describe('the wait over what the gate holds, and its end', () => {
         const forward = ids.find((id) => id.includes('-f:')) as string;
         server.send(['EOSE', backward]);
         await vi.waitFor(() => expect(handle?.state.status).toBe('settled'), { timeout: 3000 });
-        if (arm === 'discarded') {
-          server.send(['EVENT', forward, fakeEvent({ content: 'discarded', created_at: 1000 })]);
-          await vi.waitFor(() => expect(gate.admitted('discarded')).toBe(true), {
+        const candidate = arm === 'nothing-sent' ? undefined : arm;
+        if (candidate !== undefined) {
+          server.send(['EVENT', forward, fakeEvent({ content: candidate, created_at: 1000 })]);
+          await vi.waitFor(() => expect(gate.admitted(candidate)).toBe(true), {
             timeout: 2000
           });
         }
         server.error({ code: 1006, reason: 'gone', wasClean: false });
+        // **Inside the forward gate's wait**: 300ms after the death, about
+        // 700ms before this arrangement's cut, with the leg's end and the
+        // query's state given that long to reach the handle.
+        await delay(300);
+        const inTheWait = publishedOf(handle as ReqHandle, url) as Record<string, unknown>;
+        const { activity: activityInTheWait, ...restInTheWait } = inTheWait;
+        let endedBeforeTheCut: boolean | undefined;
+        if (arm === 'delivered-in-the-wait') {
+          await gate.release(candidate as string);
+          // Ended by the verdict: idle well before the 1000ms deadline, which
+          // the wait would otherwise have run out to.
+          endedBeforeTheCut = await vi
+            .waitFor(() => expect(handle?.activity).toBe('idle'), { timeout: 400 })
+            .then(
+              () => true,
+              () => false
+            );
+        }
         await vi.waitFor(() => expect(handle?.activity).toBe('idle'), { timeout: 4000 });
-        const answeredBeforeTheStreamEnded = gate.answered('discarded');
+        const answeredBeforeTheStreamEnded =
+          candidate === undefined ? undefined : gate.answered(candidate);
         if (arm === 'discarded') await gate.release('discarded');
         await delay(200);
         const request = handle as ReqHandle;
@@ -855,7 +987,10 @@ describe('the wait over what the gate holds, and its end', () => {
         runs[arm] = {
           handed: gate.handed(),
           answeredBeforeTheStreamEnded,
-          answeredAfter: gate.answered('discarded'),
+          endedBeforeTheCut,
+          members: Reflect.ownKeys(request).map(String).sort(),
+          activityInTheWait,
+          restInTheWait,
           surface: publishedOf(request, url),
           outlet,
           outletArgument: publishedOf(argument, url),
@@ -871,49 +1006,93 @@ describe('the wait over what the gate holds, and its end', () => {
 
     const discarded = runs['discarded'] ?? {};
     const nothingSent = runs['nothing-sent'] ?? {};
-    const surface = (run: Record<string, unknown>) =>
-      (run['surface'] ?? {}) as {
-        state?: { status?: unknown; events?: unknown; hasMatchEvidence?: unknown };
-        diagnostics?: { legEnded?: { kind?: unknown } };
+    const delivered = runs['delivered-in-the-wait'] ?? {};
+    type Published = {
+      state?: { status?: unknown; events?: unknown; hasMatchEvidence?: unknown };
+      diagnostics?: { legEnded?: { kind?: unknown } };
+    };
+    // The answer as the row states it, read off a projected surface: the
+    // status, the contents of the events, the evidence and the leg's end.
+    const answerOf = (published: unknown) => {
+      const { state, diagnostics } = (published ?? {}) as Published;
+      return {
+        status: state?.status,
+        events: Array.isArray(state?.events)
+          ? (state.events as { content?: unknown }[]).map((event) => event.content)
+          : state?.events,
+        hasMatchEvidence: state?.hasMatchEvidence,
+        legEnded: diagnostics?.legEnded?.kind
       };
+    };
     const readOf = (run: Record<string, unknown>) => ({
       failed: run['failed'],
-      status: surface(run).state?.status,
-      events: surface(run).state?.events,
-      hasMatchEvidence: surface(run).state?.hasMatchEvidence,
-      legEnded: surface(run).diagnostics?.legEnded?.kind,
+      inTheWait: answerOf(run['restInTheWait']),
+      onceItEnded: answerOf(run['surface']),
       outlet: run['outlet'],
       outletHandsTheRequest: run['outletHandsTheRequest']
     });
-    const answer = {
-      failed: undefined,
+    const nothingFound = {
       status: 'settled',
       events: [],
       hasMatchEvidence: false,
-      legEnded: 'ended',
-      outlet: 'nodata',
-      outletHandsTheRequest: true
+      legEnded: 'ended'
     };
+    const found = { ...nothingFound, events: ['delivered-in-the-wait'], hasMatchEvidence: true };
+    const four = ['activity', 'diagnostics', 'refresh', 'state'];
     expect(
       {
-        // The run is the one the row is about: the verifier was handed the
-        // candidate, and answered it only after the stream had ended.
-        arrangement: {
-          discarded: [discarded['handed'], discarded['answeredBeforeTheStreamEnded']],
-          afterwards: discarded['answeredAfter'],
-          nothingSent: nothingSent['handed']
-        },
-        members: Object.keys((discarded['surface'] ?? {}) as object).sort(),
+        // Each run is the one it says it is: what the verifier was handed, and
+        // whether it had answered before the stream ended.
+        arrangement: [discarded, nothingSent, delivered].map((run) => [
+          run['handed'],
+          run['answeredBeforeTheStreamEnded'],
+          run['endedBeforeTheCut']
+        ]),
+        members: [discarded, nothingSent, delivered].map((run) => run['members']),
         discarded: readOf(discarded),
         nothingSent: readOf(nothingSent),
+        delivered: readOf(delivered),
+        // Inside the wait, one field apart: the activity, and nothing else.
+        inTheWait: {
+          activity: [discarded, nothingSent, delivered].map((run) => run['activityInTheWait']),
+          theRest: [discarded['restInTheWait'], delivered['restInTheWait']]
+        },
+        // Once it is over, nothing apart at all.
         sameSurface: { handle: discarded['surface'], outlet: discarded['outletArgument'] }
       },
-      'settled, nothing found, the leg’s end in both runs, and no field telling them apart'
-    ).toEqual({
-      arrangement: { discarded: [['discarded'], false], afterwards: true, nothingSent: [] },
-      members: ['activity', 'diagnostics', 'refresh', 'state'],
-      discarded: answer,
-      nothingSent: answer,
+      'settled, nothing found, the leg’s end in both runs, and no field telling them apart once the wait is over'
+    ).toStrictEqual({
+      arrangement: [
+        [['discarded'], false, undefined],
+        [[], undefined, undefined],
+        [['delivered-in-the-wait'], true, true]
+      ],
+      members: [four, four, four],
+      discarded: {
+        failed: undefined,
+        inTheWait: nothingFound,
+        onceItEnded: nothingFound,
+        outlet: 'nodata',
+        outletHandsTheRequest: true
+      },
+      nothingSent: {
+        failed: undefined,
+        inTheWait: nothingFound,
+        onceItEnded: nothingFound,
+        outlet: 'nodata',
+        outletHandsTheRequest: true
+      },
+      delivered: {
+        failed: undefined,
+        inTheWait: nothingFound,
+        onceItEnded: found,
+        outlet: 'events',
+        outletHandsTheRequest: true
+      },
+      inTheWait: {
+        activity: ['live', 'idle', 'live'],
+        theRest: [nothingSent['restInTheWait'], nothingSent['restInTheWait']]
+      },
       sameSurface: { handle: nothingSent['surface'], outlet: nothingSent['outletArgument'] }
     });
   }, 20_000);
@@ -932,7 +1111,10 @@ describe('the wait over what the gate holds, and its end', () => {
     // answered after the cut, and the arm says so. **The late EVENT goes
     // before the late EOSE**, with the subscription still open, so that its
     // refusal is the gate's and not a closed transport's; the one sent before
-    // the boundary, which the verifier was handed, is the control.
+    // the boundary, which the verifier was handed, is the control. **The order
+    // is held against a rank change and not against the sort**: both routes
+    // add the two causes in canonical order already, so a `causesOf` that
+    // stopped sorting would still pass here.
     const runs: unknown[] = [];
     for (const lateEose of [false, true]) {
       const arm = lateEose ? 'eose-inside-the-drain' : 'no-eose';
@@ -951,19 +1133,31 @@ describe('the wait over what the gate holds, and its end', () => {
         respondWithEvent(one.server, backward, fakeEvent({ content: `past-${arm}` }));
         await delay(80);
         if (lateEose) respondWithEose(one.server, backward);
+        // The arrangement, read rather than trusted: the late EOSE reached the
+        // client and ended the backlog's subscription before the outcome was
+        // derived, and with no EOSE that subscription is still open then.
+        await delay(50);
+        const backlogClosedBeforeTheOutcome =
+          closed(one.server, backward) && !shape(one.chunks).includes('settled');
         await vi.waitFor(() => expect(shape(one.chunks)).toContain('settled'), { timeout: 4000 });
         const atTheCut = shape(one.chunks);
         await gate.release(`held-${arm}`);
         const runningAtRelease = !one.returned();
         // The same stated horizon as `DC4`'s.
         await delay(500);
+        const afterTheRelease = shape(one.chunks);
+        // The reader's positive control: ended, the request has closed the
+        // subscription the late offer found open.
+        await one.stop();
         runs.push({
           arm,
           openAtTheLateOffer,
+          backlogClosedBeforeTheOutcome,
+          closedOnceItEnded: closed(one.server, backward),
           handed: gate.handed(),
           atTheCut,
           runningAtRelease,
-          afterTheRelease: shape(one.chunks),
+          afterTheRelease,
           ends: endsOf(one.chunks)
         });
       } catch (error) {
@@ -976,6 +1170,8 @@ describe('the wait over what the gate holds, and its end', () => {
       ['no-eose', 'eose-inside-the-drain'].map((arm) => ({
         arm,
         openAtTheLateOffer: true,
+        backlogClosedBeforeTheOutcome: arm === 'eose-inside-the-drain',
+        closedOnceItEnded: true,
         handed: [`held-${arm}`],
         atTheCut: ['settled'],
         runningAtRelease: true,

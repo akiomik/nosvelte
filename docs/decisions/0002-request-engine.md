@@ -2040,8 +2040,9 @@ lastError        : undefined
 
 The verifier answered `true` after the cut — held 2500ms against a drain floor of 1000ms — and
 nothing changed. The control arm — the same request with **no event ever sent** — publishes those
-same seven values, field for field. So a discarded candidate is today invisible below the leg's end,
-and the paragraph above used to claim the opposite for both legs.
+same seven values, field for field. So a discarded candidate is today invisible below the leg's end
+once the forward gate's wait is over — inside it the `activity` axis differs, which is recorded
+below — and the paragraph above used to claim the opposite for both legs.
 
 **The legs are not symmetric, and the asymmetry is one line.** A backward gate that is cut adds
 `verification-timeout` to the cause set — `if (gates.backward.phase === 'cut')` — so its answer is
@@ -2084,6 +2085,16 @@ under it.
 **Contracted silence is not hidden silence, and the falsifier is two-sided.** The decision is that
 the leg's end is the whole of the report, so a leg that ends and publishes no end falsifies A-ε
 exactly as a per-candidate field does. `EV4` measures both directions.
+
+**The silence is about the ended request, and its history differs for a while.** The end waits on
+the forward gate — `A-ε-C5`: a candidate the relay had sent when the end was decided is still
+delivered if its verification passes inside that wait — so until the wait is over a request holding
+a candidate says `activity` `live` while one holding none is already `idle`. That is a verification
+pending rather than a discard, and it closes when the wait does. But a consumer can see it and keep
+it, so "no field separates ended-holding-one from ended-holding-none" is true of the ended request's
+fields, not of everything it published on the way there. What a relay buys with it is one wait under
+the drain deadline, which tells nobody what became of the candidate. `A-ε-C13` contracts both
+readings.
 
 **The middle course does not exist.** Delivering the candidate once it verifies is the
 `settled, event` ordering this narrowing was found through, and it is worse than the loss: the

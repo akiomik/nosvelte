@@ -546,8 +546,10 @@ export type ReqState =
    * **A third route reaches `false` the same way, and it is what the boundary
    * clause above is for**: a matching event still being verified when its leg's
    * wait was cut never became `accepted`, so it is discarded and the verifier
-   * answering `true` afterwards changes nothing. That discard is reported by
-   * {@link ReqDiagnostics.legEnded} and by nothing finer — a per-candidate
+   * answering `true` afterwards changes nothing. Once the forward gate's wait
+   * is over, that discard is reported by {@link ReqDiagnostics.legEnded} and
+   * by nothing finer; inside the wait the request is still `live`, because a
+   * verdict passing there would deliver (`A-ε-C13`). A per-candidate
    * field would be a marker any relay could attach to a truthful "nothing
    * found" by sending one event it never lets verify. A-ε decides that silence
    * and carries its falsifier; `EV4` measures both of its directions.
@@ -861,6 +863,10 @@ export interface ReqDiagnostics {
    * The sixth event moves the activity axis, which tells a consumer that nothing
    * is being done — but not that nothing *can* be done. Without this, a request
    * whose leg died looks exactly like one that settled normally and went quiet.
+   *
+   * It can be set while the activity is still `live`: the end waits on the
+   * forward gate, so a request whose gate was holding a candidate when the leg
+   * ended keeps running until that gate's wait is over (`A-ε-C5`, `A-ε-C13`).
    */
   readonly legEnded: LegEnd | undefined;
   /** Every relay that refused, with what it said. A5's fifth event. */

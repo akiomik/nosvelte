@@ -50,7 +50,7 @@ export default {
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that last changed the arms, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { DC1: 7, DC2: 4, DC3: 8, DC4: 9, DC5: 4, DC6: 4, DC7: 6, DC8: 7 }
+    seconds: { DC1: 7, DC2: 4, DC3: 8, DC4: 9, DC5: 4, DC6: 5, DC7: 7, DC8: 7 }
   },
   entries: [
     {
@@ -467,7 +467,7 @@ export default {
       id: 'C10-the-end-waits-out-a-gate-that-has-already-answered',
       arm: 'DC5',
       describe:
-        'the end draws its boundary over the backward gate, which the cut has already answered, and a resolved gate can be drawn over again — a second wait, one drain floor long. Each edit alone leaves every drain arm green, measured by hand: the end over the forward gate is what the first removes, and the early exit for a resolved gate is unreachable while each leg is drawn once',
+        "the end draws its boundary over the backward gate, which the cut has already answered, and a resolved gate can be drawn over again — a second wait, one drain floor long. Each edit alone measured by hand: at `56595ed`, either left every drain arm green; since `DC7` reads the forward gate's wait, the first alone fails `DC7` (the end no longer waits for that gate) and the second alone still leaves every arm green, its early exit being unreachable while each leg is drawn once",
       edits: [
         {
           file: MACHINE,
@@ -687,8 +687,8 @@ export default {
       edits: [
         {
           file: ARMS,
-          from: '          if ((ms ?? 0) >= 1000 && (ms ?? 0) <= 4000) armed.push(ms ?? 0);',
-          to: '          if ((ms ?? 0) < 0) armed.push(ms ?? 0);'
+          from: '        if ((ms ?? 0) >= 1000 && (ms ?? 0) <= 4000) armed.push(ms ?? 0);',
+          to: '        if ((ms ?? 0) < 0) armed.push(ms ?? 0);'
         }
       ]
     },
@@ -696,7 +696,7 @@ export default {
       id: 'I-dc5-one-candidate-only',
       arm: 'DC5',
       describe:
-        'the second run admits one candidate, so nothing is left in the gate to re-arm it when that one leaves',
+        'the second run admits one candidate where it should admit two — killed where the arm records its own arrangement (`admitted`), which is what this entry shows: the run says what it arranged, so a run that no longer holds a second candidate to re-arm over cannot pass for one that does',
       edits: [
         {
           file: ARMS,
@@ -713,8 +713,8 @@ export default {
       edits: [
         {
           file: ARMS,
-          from: '      await delay(250);\n      const openAtTheLateOffer',
-          to: '      const openAtTheLateOffer'
+          from: '        await delay(250);\n        const openAtTheLateOffer',
+          to: '        const openAtTheLateOffer'
         }
       ]
     },
@@ -743,6 +743,201 @@ export default {
           to: '        const openAtTheLateOffer'
         }
       ]
+    },
+    {
+      id: 'C10-a-timer-boundary-does-not-end-a-non-live-request',
+      arm: 'DC5',
+      describe:
+        'a non-live request whose boundary the settle timer drew reports its outcome and never ends, where one whose EOSE drew it does',
+      edits: [
+        {
+          file: MACHINE,
+          from: '        if (!live || forwardEnded) finish();',
+          to: '        if ((!live && !viaTimer) || forwardEnded) finish();'
+        }
+      ]
+    },
+    {
+      id: 'C10-cut-forges',
+      arm: 'DC5',
+      describe: 'the cut hands the candidates it gave up on over unverified',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const admission: Admission = { discarded: false };',
+          to: "    const admission: Admission & { forge?: () => void } = {\n      discarded: false,\n      forge: () => push({ type: 'event', packet })\n    };"
+        },
+        {
+          file: MACHINE,
+          from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;",
+          to: "    if (phase === 'cut')\n      for (const each of gate.holding) {\n        each.discarded = true;\n        (each as { forge?: () => void }).forge?.();\n      }"
+        }
+      ]
+    },
+    {
+      id: 'C12-delivered-after-the-outcome',
+      arm: 'DC6',
+      describe:
+        'a verified candidate is delivered a microtask late, behind the outcome it belonged ahead of',
+      edits: [
+        {
+          file: MACHINE,
+          from: DELIVERED,
+          to: "      if (deliver && !admission.discarded) queueMicrotask(() => push({ type: 'event', packet }));"
+        }
+      ]
+    },
+    {
+      id: 'C13-discard-in-an-inherited-field',
+      arm: 'DC7',
+      describe:
+        "the forward leg's end carries the discard in a getter its class defines, which its own property names do not list",
+      edits: [
+        {
+          file: OWN,
+          from: 'export class ReqFailure extends Error {',
+          to: 'const DISCARDED = new WeakMap<object, number>();\nexport class ReqFailure extends Error {'
+        },
+        {
+          file: OWN,
+          from: '  override readonly cause: CapturedReqError | undefined;\n',
+          to: '  override readonly cause: CapturedReqError | undefined;\n  get discarded(): number | undefined {\n    return DISCARDED.get(this);\n  }\n'
+        },
+        {
+          file: OWN,
+          from: "export function relayFailure(message: string): RelayLegError {\n  const said = boundedMessage(message);\n  return snapshot({\n    thrownName: 'RelayFailure',\n    message: said.text,\n    source: 'relay',\n    truncated: said.truncated,\n    cause: undefined\n  });\n}",
+          to: "export function relayFailure(message: string, discarded = 0): RelayLegError {\n  const said = boundedMessage(message);\n  const made = snapshot({\n    thrownName: 'RelayFailure',\n    message: said.text,\n    source: 'relay',\n    truncated: said.truncated,\n    cause: undefined\n  });\n  if (discarded > 0) DISCARDED.set(made, discarded);\n  return made;\n}"
+        },
+        {
+          file: MACHINE,
+          from: "          `every relay in scope stopped the live request: ${[...targets.keys()].join(', ')}`\n        )",
+          to: "          `every relay in scope stopped the live request: ${[...targets.keys()].join(', ')}`,\n          gates.forward.holding.size\n        )"
+        }
+      ]
+    },
+    {
+      id: 'C13-cut-forges',
+      arm: 'DC7',
+      describe: 'the cut hands the candidates it gave up on over unverified',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const admission: Admission = { discarded: false };',
+          to: "    const admission: Admission & { forge?: () => void } = {\n      discarded: false,\n      forge: () => push({ type: 'event', packet })\n    };"
+        },
+        {
+          file: MACHINE,
+          from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;",
+          to: "    if (phase === 'cut')\n      for (const each of gate.holding) {\n        each.discarded = true;\n        (each as { forge?: () => void }).forge?.();\n      }"
+        }
+      ]
+    },
+    {
+      id: 'C14-cut-forges',
+      arm: 'DC8',
+      describe: 'the cut hands the candidates it gave up on over unverified',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const admission: Admission = { discarded: false };',
+          to: "    const admission: Admission & { forge?: () => void } = {\n      discarded: false,\n      forge: () => push({ type: 'event', packet })\n    };"
+        },
+        {
+          file: MACHINE,
+          from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;",
+          to: "    if (phase === 'cut')\n      for (const each of gate.holding) {\n        each.discarded = true;\n        (each as { forge?: () => void }).forge?.();\n      }"
+        }
+      ]
+    },
+    {
+      id: 'I-dc8-closed-reader-blind',
+      arm: 'DC8',
+      describe:
+        'the reader of a closed subscription never sees one, so an open subscription at the late offer is no longer measured — killed on its positive control, the subscription closed once the request ended',
+      edits: [
+        {
+          file: ARMS,
+          from: "  (server.messages as unknown[][]).some((frame) => frame[0] === 'CLOSE' && frame[1] === subId);",
+          to: "  (server.messages as unknown[][]).some((frame) => frame[0] === 'CLOSE' && frame[1] === subId) &&\n  false;"
+        }
+      ]
+    },
+    {
+      id: 'C10-a-cut-arms-a-deadline',
+      arm: 'DC5',
+      describe: 'the cut arms a fresh deadline over the gate it has just answered',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const then = gate.then;\n    gate.then = undefined;\n    then?.();\n  };',
+          to: "    const then = gate.then;\n    gate.then = undefined;\n    then?.();\n    if (phase === 'cut') armCut(gate);\n  };"
+        }
+      ]
+    },
+    {
+      id: 'C12-timer-firing-is-not-a-cause',
+      arm: 'DC6',
+      describe:
+        'the settle timer drawing the boundary is not itself a cause — seen only in the run whose late EOSE has determined every target',
+      edits: [
+        {
+          file: MACHINE,
+          from: "    if (viaTimer) present.add('timeout');\n",
+          to: '    void viaTimer;\n'
+        }
+      ]
+    },
+    {
+      id: 'C13-the-end-does-not-wait-for-the-forward-gate',
+      arm: 'DC7',
+      describe:
+        "the end draws its boundary over the backward gate, which has already answered, so the stream ends as the leg does and the forward gate's wait never happens — the candidate is let go by the generator's teardown instead of by a cut",
+      edits: [
+        {
+          file: MACHINE,
+          from: "      drawBoundary('forward', () => {",
+          to: "      drawBoundary('backward', () => {"
+        }
+      ]
+    },
+    {
+      id: 'I-dc6-closed-reader-blind',
+      arm: 'DC6',
+      describe:
+        'the reader of a closed subscription never sees one, so an open subscription at the late offer is no longer measured — killed on its positive control, the subscription closed once the request ended',
+      edits: [
+        {
+          file: ARMS,
+          from: "  (server.messages as unknown[][]).some((frame) => frame[0] === 'CLOSE' && frame[1] === subId);",
+          to: "  (server.messages as unknown[][]).some((frame) => frame[0] === 'CLOSE' && frame[1] === subId) &&\n  false;"
+        }
+      ]
+    },
+    {
+      id: 'I-dc8-late-eose-dropped',
+      arm: 'DC8',
+      describe:
+        "the second run sends no late EOSE, so both runs are the no-EOSE trace and the timer's own `timeout` is no longer separated — killed where the arm reads that the EOSE closed the backlog before the outcome",
+      edits: [
+        {
+          file: ARMS,
+          from: '        if (lateEose) respondWithEose(one.server, backward);\n        // The arrangement, read rather than trusted',
+          to: '        // The arrangement, read rather than trusted'
+        }
+      ]
+    },
+    {
+      id: 'C13-the-end-discards-what-its-wait-could-deliver',
+      arm: 'DC7',
+      describe:
+        'the end marks every forward candidate discarded as it begins, and still waits — so a verdict passing inside the wait delivers nothing, which only the run answered inside the wait can see',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    if (ended || ending) return;\n    ending = true;\n',
+          to: '    if (ended || ending) return;\n    ending = true;\n    for (const each of gates.forward.holding) each.discarded = true;\n'
+        }
+      ]
     }
   ],
   retired: [
@@ -752,7 +947,7 @@ export default {
       describe:
         'a candidate inside the forward gate at the cut is delivered when its verification passes later',
       reason:
-        "No entrance through this row's arrangement, measured: it survived `DC7`. The forward gate is cut only by the stream's end, the cut pushes that end in the same callback, and the generator returns once it has read it — so a candidate that passes afterwards is pushed into a queue nobody reads, discarded or not. The discard is the backward gate's to measure, which `C9-cut-does-not-discard-what-it-gave-up-on` and `C14-cut-does-not-discard-what-it-gave-up-on` do.",
+        "No entrance through this row's arrangement, measured: it survived `DC7`. The forward gate's boundary is drawn only by `finish()`, the cut that resolves it pushes the end in the same callback, and the generator drains what is queued and returns; `abandonGate` in its `finally` then marks any forward admission still held discarded. So a candidate that passes afterwards is pushed into a queue nobody reads, and is marked discarded twice over. Not measured: a verdict landing inside the cut's own macrotask, before the generator's continuation runs. The discard is the backward gate's to measure, which `C9-cut-does-not-discard-what-it-gave-up-on` and `C14-cut-does-not-discard-what-it-gave-up-on` do.",
       edits: [
         {
           file: MACHINE,
