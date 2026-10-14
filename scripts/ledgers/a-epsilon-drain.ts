@@ -938,6 +938,19 @@ export default {
           to: '    if (ended || ending) return;\n    ending = true;\n    for (const each of gates.forward.holding) each.discarded = true;\n'
         }
       ]
+    },
+    {
+      id: 'C13-the-wait-outlives-its-last-verdict',
+      arm: 'DC7',
+      describe:
+        'a forward gate emptied by a passing verdict ends the stream a deadline later rather than then — the candidate is delivered, but the request stays `live` as if the wait had run out, which only the run answered inside the wait can see',
+      edits: [
+        {
+          file: MACHINE,
+          from: "        drawBoundary('forward', () => {\n          if (ended) return;\n          ended = true;\n          push({ type: 'end' });\n        });",
+          to: "        drawBoundary('forward', () => {\n          const end = () => {\n            if (ended) return;\n            ended = true;\n            push({ type: 'end' });\n          };\n          if (gates.forward.phase === 'drained' && gates.forward.slowestVerifyMs > 0)\n            setTimeout(end, 1000);\n          else end();\n        });"
+        }
+      ]
     }
   ],
   retired: [
@@ -947,7 +960,7 @@ export default {
       describe:
         'a candidate inside the forward gate at the cut is delivered when its verification passes later',
       reason:
-        "No entrance through this row's arrangement, measured: it survived `DC7`. The forward gate's boundary is drawn only by `finish()`, the cut that resolves it pushes the end in the same callback, and the generator drains what is queued and returns; `abandonGate` in its `finally` then marks any forward admission still held discarded. So a candidate that passes afterwards is pushed into a queue nobody reads, and is marked discarded twice over. Not measured: a verdict landing inside the cut's own macrotask, before the generator's continuation runs. The discard is the backward gate's to measure, which `C9-cut-does-not-discard-what-it-gave-up-on` and `C14-cut-does-not-discard-what-it-gave-up-on` do.",
+        "No entrance through this row's arrangement, measured: it survived `DC7`. Two things stand between the edit and any consumer. The forward gate's boundary is drawn only by `finish()`, and the cut that resolves it pushes the end in the same callback; the generator drains what is queued and returns, and `abandonGate` in its `finally` marks every forward admission still held discarded — so a verdict passing afterwards pushes nothing. And even without that teardown, the consumer has returned, so a later push would have no reader. Not measured: a verdict landing inside the cut's own macrotask, before the generator's continuation runs. The discard is the backward gate's to measure, which `C9-cut-does-not-discard-what-it-gave-up-on` and `C14-cut-does-not-discard-what-it-gave-up-on` do.",
       edits: [
         {
           file: MACHINE,

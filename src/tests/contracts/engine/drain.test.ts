@@ -197,14 +197,19 @@ const publishedOf = (value: unknown, url: string, depth = 0): unknown => {
   };
   if (Array.isArray(value)) {
     const items = value.map((each) => publishedOf(each, url, depth + 1));
-    const extra = strings.filter((key) => key !== 'length' && !/^\d+$/.test(key));
-    // An ordinary array reads as its items; one with anything more says so.
+    // An index is the canonical spelling of a whole number below 2³² − 1;
+    // `'01'` is a field like any other.
+    const index = (key: string) => /^(0|[1-9]\d*)$/.test(key) && Number(key) < 2 ** 32 - 1;
+    const extra = strings.filter((key) => key !== 'length' && !index(key));
+    // An ordinary array reads as its items; one with anything more says so,
+    // with its items beside what the projection says rather than among its
+    // fields, where a field of the same name could stand in for them.
     if (proto === Array.prototype && extra.length === 0 && symbols.length === 0) return items;
-    return {
-      '<items>': items,
-      ...Object.fromEntries(extra.map((key) => [key, read(key)])),
-      [PROJECTION]: about
-    };
+    const out: Record<string | symbol, unknown> = Object.fromEntries(
+      [...extra].sort().map((key) => [key, read(key)])
+    );
+    out[PROJECTION] = { ...about, items };
+    return out;
   }
   const out: Record<string | symbol, unknown> = Object.fromEntries(
     [...strings].sort().map((key) => [key, read(key)])
@@ -674,8 +679,10 @@ describe('the wait over what the gate holds, and its end', () => {
     // armed over a gate that has already answered resolves into that answer.
     // So the clock is the arm's, installed before the request is made so that
     // its settle timer is on it too, and every `setTimeout` armed with a delay
-    // inside 1000–4000ms is recorded: the range `armCut` clamps each of the gate's
-    // deadlines into. Not every long timer, because the dependency arms its own
+    // inside 1000–4000ms is recorded — a call through the global as it stands
+    // when the call is made, which is how the machine reaches it, and not a
+    // timer function captured before the recorder was installed: the range
+    // `armCut` clamps each of the gate's deadlines into. Not every long timer, because the dependency arms its own
     // — rx-nostr's 10s `disconnectTimeout` once the backlog's subscription has
     // closed. The recorder's positive control is the one deadline the machine
     // does arm, over the gate whose boundary was drawn.
@@ -959,10 +966,15 @@ describe('the wait over what the gate holds, and its end', () => {
           });
         }
         server.error({ code: 1006, reason: 'gone', wasClean: false });
+        const diedAt = Date.now();
         // **Inside the forward gate's wait**: 300ms after the death, about
         // 700ms before this arrangement's cut, with the leg's end and the
         // query's state given that long to reach the handle.
+        // A delay asked for, not a time measured: a host that stalls past the
+        // deadline misses the window, and the arm fails rather than passes —
+        // the time the sample was actually taken is in its message.
         await delay(300);
+        const sampledAfterMs = Date.now() - diedAt;
         const inTheWait = publishedOf(handle as ReqHandle, url) as Record<string, unknown>;
         const { activity: activityInTheWait, ...restInTheWait } = inTheWait;
         let endedBeforeTheCut: boolean | undefined;
@@ -985,6 +997,7 @@ describe('the wait over what the gate holds, and its end', () => {
         const request = handle as ReqHandle;
         const [outlet, argument] = outlets.at(-1) ?? ['none', undefined];
         runs[arm] = {
+          sampledAfterMs,
           handed: gate.handed(),
           answeredBeforeTheStreamEnded,
           endedBeforeTheCut,
@@ -1060,7 +1073,7 @@ describe('the wait over what the gate holds, and its end', () => {
         // Once it is over, nothing apart at all.
         sameSurface: { handle: discarded['surface'], outlet: discarded['outletArgument'] }
       },
-      'settled, nothing found, the leg’s end in both runs, and no field telling them apart once the wait is over'
+      `settled, nothing found, the leg’s end in both runs, and no field telling them apart once the wait is over — sampled inside the wait ${JSON.stringify([discarded, nothingSent, delivered].map((run) => run['sampledAfterMs']))}ms after the death`
     ).toStrictEqual({
       arrangement: [
         [['discarded'], false, undefined],
