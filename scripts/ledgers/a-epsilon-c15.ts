@@ -298,6 +298,19 @@ export default {
       ]
     },
     {
+      id: 'C15-malformed-thrown-later',
+      arm: 'WB1',
+      describe:
+        'a candidate that is not an event is dropped and settles as it should, and an error is thrown out of the subscription for it',
+      edits: [
+        {
+          file: MACHINE,
+          from: DROPPED,
+          to: "    if (packet === undefined) {\n      queueMicrotask(() => {\n        throw new Error('a candidate that was not an event');\n      });\n      return;\n    }"
+        }
+      ]
+    },
+    {
       id: 'C15-malformed-held',
       arm: 'WB1',
       describe: 'a candidate that is not an event is counted against the gate and never released',

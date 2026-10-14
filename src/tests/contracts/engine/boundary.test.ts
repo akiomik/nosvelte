@@ -827,17 +827,22 @@ describe('the boundary where an event off the wire becomes this library’s own'
         ]);
       });
 
-      // Long enough for an error reported on a timer, or a rejection reported
-      // after the microtasks, to arrive while the collector listens.
+      // **Nothing thrown, as a part of its own**, so that it is read whatever
+      // the other parts did: an escape is the clause "not thrown", and it was
+      // not being reached at all when an earlier part had failed. Long enough
+      // first for an error reported on a timer, or a rejection reported after
+      // the microtasks, to arrive while the collector listens.
       await settle(100);
+      await part('nothing escaped but the two controls', () => {
+        expect(escaped.seen).toEqual([
+          { channel: 'uncaughtException', message: 'nosvelte test: the thrown control' },
+          { channel: 'unhandledRejection', message: 'nosvelte test: the rejected control' }
+        ]);
+      });
     } finally {
       escaped.restore();
     }
     // The parts that failed, by name, on the line a ledger reports.
     expect(failures, `every part of the row holds; failed: ${failed.join(', ')}`).toEqual([]);
-    expect(escaped.seen, 'nothing left uncaught but the two controls').toEqual([
-      { channel: 'uncaughtException', message: 'nosvelte test: the thrown control' },
-      { channel: 'unhandledRejection', message: 'nosvelte test: the rejected control' }
-    ]);
   }, 60_000);
 });
