@@ -1368,7 +1368,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **351 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **93 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **251 are
+Of those, **94 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **250 are
 TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1499,7 +1499,7 @@ A-ε-C11      internal      test:VG2
 A-ε-C12      internal      TBD
 A-ε-C13      internal      TBD
 A-ε-C14      internal      TBD
-A-ε-C15      internal      TBD
+A-ε-C15      internal      test:WB1
 A-ε-C16      public        TBD
 A-ε-C17      public        test:AH2
 A-ε-C18      public        test:AH1
@@ -2392,9 +2392,9 @@ stronger half.
 | A-ε-C12 | engine    | wire                                                                |
 | A-ε-C13 | engine    | query-core svelte-effects wire                                      |
 | A-ε-C14 | engine    | wire                                                                |
-| A-ε-C15 | engine    | svelte-effects wire                                                 |
+| A-ε-C15 | engine    | query-core svelte-context svelte-effects svelte-render wire         |
 | A-ε-C16 | svelte    | query-core svelte-context-presence svelte-effects wire              |
-| A-ε-C17 | engine    | svelte-effects wire                                                 |
+| A-ε-C17 | engine    | query-core svelte-context svelte-effects svelte-render wire         |
 | A-ε-C18 | engine    | query-core svelte-context svelte-effects svelte-render wire         |
 | A-ζ-C1  | engine    | clock wire                                                          |
 | A-δ-C1  | svelte    | clock query-core svelte-effects svelte-render wire                  |
