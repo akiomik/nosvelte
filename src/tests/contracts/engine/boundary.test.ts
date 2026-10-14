@@ -9,8 +9,9 @@
  * what it was handed**, and the wire's own object held by the test so it can be
  * written to — neither of which a consumer has (0005, "Port route"). So the arm
  * drives the machine directly for most of it, a provider built with a verifier
- * of the test's own for the hook and the cache, and the boundary function
- * itself for the fields no request can reach.
+ * of the test's own for the hook, the cache, the filters a request is made with
+ * and the provider's diagnostics, and the boundary function itself for values
+ * no relay can send as JSON and for candidates that answer twice.
  *
  * **The wire's object is the dependency's, and it is reached through `use`.**
  * The spike's `OW7` wrote to the test's own fixture after sending it, and the
@@ -18,14 +19,16 @@
  * the write reached nothing, and the arm's final identity assertion was what
  * held the claim. Here `probed()` wraps the client's `use`, keeps each
  * delivered packet's own `event` — the object the dependency parsed, and the
- * one a write while the gate is open has to reach — and counts every read of
- * `event` after that, which is how "the gate is read before the copy" becomes
- * a number (`AE24`).
+ * one a write while the gate is open has to reach — with its fields as they
+ * stood when it was delivered, and counts every read of each packet after
+ * that, per packet, which is how "the gate is read before the copy" becomes a
+ * number (`AE24`).
  *
  * **One arm, in parts that each run whatever the others did.** A landing has
  * to fail under a mutation of each clause, and a part that threw would
  * otherwise keep the parts after it from being measured at all; so each part
- * collects its own failure, and the arm fails on the list.
+ * collects its own failure, and the arm fails on the list. Each part also says
+ * it ran to its end, so a part that did not run at all is a failure too.
  *
  * Port band 9740-9759.
  */
@@ -43,7 +46,7 @@ import { isOwnedPacket, ownEvent } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
 import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
 import { referenceStream } from '$lib/v1/machine.js';
-import { MAX_RELAY_MESSAGE_UNITS } from '$lib/v1/normalize.js';
+import { MAX_RELAY_MESSAGE_UNITS, MAX_RENDERED } from '$lib/v1/normalize.js';
 import { createRelayScope } from '$lib/v1/scope.svelte.js';
 import type { MachineChunk } from '$lib/v1/stream.js';
 import { requestTargets } from '$lib/v1/stream.js';
@@ -68,33 +71,56 @@ const settle = (ms: number): Promise<void> => new Promise((done) => setTimeout(d
 type Verifier = (event: Nostr.Event) => Promise<boolean>;
 type Wire = Record<string, unknown> & { tags: unknown[][] };
 
+/** An event's fields, or `undefined` for a value whose shape will not read. */
+const fieldsOf = (value: unknown): unknown => {
+  try {
+    return viewOf(value).fields;
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * A client whose `use` is the probe: every packet it delivers is kept by its
- * own `event` — the dependency's object — and every read of `event` downstream
- * of the probe is counted.
+ * own `event` — the dependency's object — with that event's fields as they
+ * stood when it was delivered, before anything downstream ran; and every read
+ * of each delivered packet, of any property, is counted against it.
  */
 function probed(url: string) {
   const { rxNostr, server } = createTestRelay(url);
   const received: Wire[] = [];
+  const asDelivered: unknown[] = [];
   const handedDown: unknown[] = [];
-  let reads = 0;
+  const packets: object[] = [];
+  const reads = new Map<unknown, number>();
   const use = rxNostr.use.bind(rxNostr);
   rxNostr.use = ((...args: Parameters<RxNostr['use']>) =>
     use(...args).pipe(
       map((packet) => {
         const own = packet.event;
         received.push(own as unknown as Wire);
-        return Object.defineProperty({ ...packet }, 'event', {
-          enumerable: true,
-          get() {
-            reads += 1;
-            handedDown.push(own);
-            return own;
+        asDelivered.push(fieldsOf(own));
+        const counted = new Proxy(packet, {
+          get(target, key, receiver) {
+            reads.set(own, (reads.get(own) ?? 0) + 1);
+            if (key === 'event') handedDown.push(own);
+            return Reflect.get(target, key, receiver) as unknown;
           }
         });
+        packets.push(counted);
+        return counted;
       })
     )) as RxNostr['use'];
-  return { url, rxNostr, server, received, handedDown, reads: (): number => reads };
+  return {
+    url,
+    rxNostr,
+    server,
+    received,
+    asDelivered,
+    handedDown,
+    packets,
+    readsOf: (event: unknown): number => reads.get(event) ?? 0
+  };
 }
 
 /** One request through the machine over a probed relay, its chunks as they arrive. */
@@ -175,11 +201,37 @@ const viewOf = (value: unknown) => {
   };
 };
 
-/** A verifier that records, when it is called, what it was handed and how that stood. */
+/** At each depth of an event — itself, its tag list, each tag — whether it is frozen, sealed and extensible. */
+const integrityOf = (value: unknown) => {
+  const event = value as Wire;
+  return [event, event.tags, ...event.tags].map((object) => [
+    Object.isFrozen(object),
+    Object.isSealed(object),
+    Object.isExtensible(object)
+  ]);
+};
+
+/** The fields a copy carries: NIP-01's seven, and `ots` when the wire had one. */
+const copiedKeys = (wire: unknown): string[] =>
+  ['content', 'created_at', 'id', 'kind', 'pubkey', 'sig', 'tags', 'ots']
+    .filter((key) => key !== 'ots' || 'ots' in (wire as object))
+    .sort();
+
+/**
+ * A verifier that records, when it is called, what it was handed and how that
+ * stood — the call first, so a candidate whose shape will not read is still
+ * counted as verified.
+ */
 const recording = () => {
-  const handed: { event: Nostr.Event; then: ReturnType<typeof viewOf> }[] = [];
+  const handed: { event: Nostr.Event; then?: ReturnType<typeof viewOf> }[] = [];
   const verify: Verifier = async (event) => {
-    handed.push({ event, then: viewOf(event) });
+    const record: { event: Nostr.Event; then?: ReturnType<typeof viewOf> } = { event };
+    handed.push(record);
+    try {
+      record.then = viewOf(event);
+    } catch {
+      // What it was handed did not read; the assertions say whether it should.
+    }
     return true;
   };
   return { handed, verify };
@@ -206,16 +258,30 @@ const holding = () => {
   return { log, handed, verify, release };
 };
 
-/** Write into the wire's object the way anything still holding it could, and say whether it took. */
-const scribble = (wire: Wire, marker: string): boolean => {
-  try {
-    wire['content'] = marker;
-    wire.tags.push(['t', marker]);
-    (wire.tags[0] as unknown[]).push(marker);
-  } catch {
-    // A refusal is measured below, as a write that did not take.
-  }
-  return wire['content'] === marker;
+/**
+ * Write into the wire's object the way anything still holding it could — a
+ * field, the tag list, a tag — and say, for each, whether it took.
+ */
+const scribble = (wire: Wire, marker: string): boolean[] => {
+  const tags = wire.tags.length;
+  const tag = (wire.tags[0] as unknown[]).length;
+  for (const write of [
+    () => {
+      wire['content'] = marker;
+    },
+    () => wire.tags.push(['t', marker]),
+    () => (wire.tags[0] as unknown[]).push(marker)
+  ])
+    try {
+      write();
+    } catch {
+      // A refusal is measured below, as a write that did not take.
+    }
+  return [
+    wire['content'] === marker,
+    wire.tags.length === tags + 1,
+    (wire.tags[0] as unknown[]).length === tag + 1
+  ];
 };
 
 /**
@@ -233,9 +299,13 @@ const cachedPackets = (client: QueryClient): unknown[] =>
       return data?.entries instanceof Map ? [...data.entries.values()] : [];
     });
 
+/** The longest a value that is not text renders to: the inner bound, and its marker. */
+const INNER_BOUND = MAX_RENDERED + '… (cut)'.length;
+
 /**
- * A relay message as the bound sees it: short text as itself, long text by
- * where it stands against the cap.
+ * A relay message as the bounds see it: short text as itself, long text by
+ * where it stands — at the outer cap, within the inner rendering's bound, or
+ * neither.
  */
 const measured = (message: { text: string; truncated: boolean } | undefined): unknown =>
   message === undefined
@@ -246,9 +316,11 @@ const measured = (message: { text: string; truncated: boolean } | undefined): un
           ? message.text
           : message.text.length === MAX_RELAY_MESSAGE_UNITS
             ? 'at the cap'
-            : message.text.length < MAX_RELAY_MESSAGE_UNITS
-              ? 'under the cap'
-              : 'over the cap'
+            : message.text.length <= INNER_BOUND
+              ? 'within the inner bound'
+              : message.text.length < MAX_RELAY_MESSAGE_UNITS
+                ? 'under the cap'
+                : 'over the cap'
       ];
 
 const LIVE: ReqPlan = {
@@ -263,6 +335,9 @@ describe('the boundary where an event off the wire becomes this library’s own'
     vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
     const failures: string[] = [];
     const failed: string[] = [];
+    // Pushed by each part's own body as its last line, so a part the runner
+    // never ran is missing here rather than silently green.
+    const ran: string[] = [];
     const part = async (name: string, body: () => Promise<void> | void): Promise<void> => {
       try {
         await body();
@@ -303,13 +378,15 @@ describe('the boundary where an event off the wire becomes this library’s own'
         rxNostr.dispose();
         void Promise.reject(new Error('nosvelte test: the rejected control'));
         await vi.waitFor(() => expect(escaped.seen).toHaveLength(2), { timeout: 2000 });
+        ran.push('controls');
       });
 
       // **Part A, the copy (T1, T4)**, on both legs: what the verifier is handed
-      // is this library's copy — not the wire's object, every field the
-      // wire's, every array frozen when the verifier is called — and is the
-      // object the machine hands on; the wire's object is left unfrozen, and
-      // a write to it afterwards reaches nothing of ours.
+      // is this library's copy — not the wire's object; every field the wire
+      // delivered, and no field NIP-01 does not name; every array frozen when
+      // the verifier is called — and is the object the machine hands on. The
+      // wire's object is left as it was, at every depth, and a write to it
+      // afterwards takes, and reaches nothing of ours.
       await part('A: the copy, on each leg', async () => {
         const probe = probed(nextUrl());
         const verifier = recording();
@@ -327,7 +404,8 @@ describe('the boundary where an event off the wire becomes this library’s own'
                 ['p', 'x']
               ]
             }),
-            ots: 'proof'
+            ots: 'proof',
+            extra: { nested: ['x'] }
           }
         ]);
         probe.server.send(['EOSE', backward]);
@@ -344,49 +422,58 @@ describe('the boundary where an event off the wire becomes this library’s own'
         await request.stop();
 
         const wire = probe.received;
-        expect(wire, 'the premise: the dependency delivered both').toHaveLength(2);
         expect(
-          wire.map((object) => probe.handedDown.includes(object)),
-          'the premise: what the probe keeps is the object the library was handed'
-        ).toEqual([true, true]);
-        const wireThen = wire.map(viewOf);
+          [
+            wire.length,
+            wire.map((object) => probe.handedDown.includes(object)),
+            wire.map((object) => ['ots', 'extra'].map((key) => key in object))
+          ],
+          'the premise: both delivered, and handed to the library as they were kept; one with `ots` and a field NIP-01 does not name'
+        ).toEqual([
+          2,
+          [true, true],
+          [
+            [true, true],
+            [false, false]
+          ]
+        ]);
         expect(
           verifier.handed.map(({ event, then }, index) => ({
             ours: event !== (wire[index] as unknown),
-            keys: then.keys,
-            fields: then.fields,
-            frozen: then.frozen
+            keys: then?.keys,
+            fields: then?.fields,
+            frozen: then?.frozen
           })),
-          'the verifier was handed a frozen copy of every field, on each leg'
+          'the verifier was handed a frozen copy of the event as delivered, on each leg'
         ).toEqual(
-          wireThen.map((view) => ({
+          wire.map((object, index) => ({
             ours: true,
-            keys: view.keys,
-            fields: view.fields,
-            frozen: view.frozen.map(() => true)
+            keys: copiedKeys(object),
+            fields: probe.asDelivered[index],
+            frozen: viewOf(object).frozen.map(() => true)
           }))
         );
-        expect(
-          wireThen.map((view) => view.keys.includes('ots')),
-          'the premise: one carried `ots` and one did not'
-        ).toEqual([true, false]);
         const handedOn = delivered(request.chunks);
         expect(
           handedOn.map((event, index) => event === verifier.handed[index]?.event),
           'what the machine hands on is what the verifier was handed'
         ).toEqual([true, true]);
         expect(
-          wireThen.map((view) => view.frozen),
-          'the dependency’s object is not frozen by this library, at any depth'
-        ).toEqual(wireThen.map((view) => view.frozen.map(() => false)));
+          wire.map(integrityOf),
+          'the dependency’s object is not frozen, sealed or closed by this library, at any depth'
+        ).toEqual(wire.map((object) => integrityOf(object).map(() => [false, false, true])));
         expect(
           wire.map((object, index) => scribble(object, `written-afterwards-${String(index)}`)),
-          'the premise: a write to the dependency’s object takes'
-        ).toEqual([true, true]);
+          'the premise: each write to the dependency’s object takes'
+        ).toEqual([
+          [true, true, true],
+          [true, true, true]
+        ]);
         expect(
           handedOn.map((event) => viewOf(event).fields),
           'and it reaches nothing of ours'
-        ).toEqual(wireThen.map((view) => view.fields));
+        ).toEqual(probe.asDelivered);
+        ran.push('A-copy');
       });
 
       // **Part A, the order (T3)**, on both legs: the copy is taken before the
@@ -404,7 +491,8 @@ describe('the boundary where an event off the wire becomes this library’s own'
             timeout: 2000
           });
           const wire = probe.received[probe.received.length - 1] as Wire;
-          if (scribble(wire, `changed-${content}`)) verifier.log.push(`written:${content}`);
+          if (scribble(wire, `changed-${content}`).every(Boolean))
+            verifier.log.push(`written:${content}`);
           verifier.release(content);
         };
         await hold(backward, 'held-backward');
@@ -445,11 +533,13 @@ describe('the boundary where an event off the wire becomes this library’s own'
           handedOn.map((event, index) => event === verifier.handed[index]),
           'and it is the object the verifier was handed'
         ).toEqual([true, true]);
+        ran.push('A-order');
       });
 
       // **Part A, the gate before the copy (T9).** A held verifier keeps the
       // backward subscription open past the timer that draws the boundary, so a
-      // candidate the relay offers after it reaches the probe — and is not read.
+      // candidate the relay offers after it reaches the probe — and is not read
+      // at all. The reads are counted per packet, of any property.
       await part('A: past the boundary, nothing is read', async () => {
         const probe = probed(nextUrl());
         const verifier = holding();
@@ -463,22 +553,33 @@ describe('the boundary where an event off the wire becomes this library’s own'
         await vi.waitFor(() => expect(verifier.log).toContain('entered:before-the-boundary'), {
           timeout: 2000
         });
-        const readsWhenAdmitted = probe.reads();
         await settle(250);
         probe.server.send(['EVENT', backward, fakeEvent({ content: 'past-the-boundary' })]);
         await vi.waitFor(() => expect(probe.received).toHaveLength(2), { timeout: 2000 });
         await settle(80);
-        const readsAfterLate = probe.reads();
+        const [before, past] = probe.received;
+        const counted = [probe.readsOf(before), probe.readsOf(past)];
         verifier.release('before-the-boundary');
         await vi.waitFor(() => expect(kindsOf(request.chunks)).toContain('settled'), {
           timeout: 5000
         });
         await request.stop();
+        // **The counter's own control**: two more reads of the admitted packet
+        // are two more on its count, so it counts rather than marks.
+        const was = probe.readsOf(before);
+        const packet = probe.packets[0] as { event: unknown };
+        void packet.event;
+        void packet.event;
 
         expect(
-          [readsWhenAdmitted > 0, readsAfterLate - readsWhenAdmitted, verifier.log],
-          'an admitted candidate is read; one past the boundary is not read or verified'
-        ).toEqual([true, 0, ['entered:before-the-boundary', 'released:before-the-boundary']]);
+          [counted[0] !== undefined && counted[0] > 0, counted[1], probe.readsOf(before) - was],
+          'an admitted candidate is read; one past the boundary is not read at all; the counter counts'
+        ).toEqual([true, 0, 2]);
+        expect(verifier.log, 'and only the admitted one was verified').toEqual([
+          'entered:before-the-boundary',
+          'released:before-the-boundary'
+        ]);
+        ran.push('A-gate');
       });
 
       // **Part B, the hook and the cache (T2)**, on both legs, through a
@@ -556,13 +657,15 @@ describe('the boundary where an event off the wire becomes this library’s own'
           [true, true, true, true]
         ]);
         view.unmount();
+        ran.push('B');
       });
 
-      // **Part C, a candidate that is not an event (T5).** On a live request
-      // that asks for everything — internal, since a published descriptor
-      // requires `kinds`, and with `kinds` the dependency drops a candidate
-      // with no number there before this library sees it — each malformed
-      // EVENT is followed by a well-formed one and the EOSE.
+      // **Part C, a candidate that is not an event (T5)**, on both legs. On a
+      // live request that asks for everything, each malformed EVENT is followed
+      // by a well-formed one, on the backward leg before the EOSE and on the
+      // forward leg after it. A filter that names nothing is what lets every
+      // shape reach the boundary through a client that still matches before
+      // delivering, as this one does; the provider's does not (Part F).
       await part('C: a malformed candidate is dropped and nothing else is', async () => {
         const wireish = (over: Record<string, unknown>): Record<string, unknown> => ({
           ...fakeEvent({ content: 'malformed' }),
@@ -576,10 +679,16 @@ describe('the boundary where an event off the wire becomes this library’s own'
           ['an ots that is not a string', wireish({ ots: 7 })],
           ['not an object', 'EVENT?']
         ];
-        expect(
-          shapes.filter(([, value]) => ownEvent(JSON.parse(JSON.stringify(value))) !== undefined),
-          'the premise: the boundary refuses each, called directly'
-        ).toEqual([]);
+        // **The premise is recorded, not asserted first**, so a boundary that
+        // throws when it is called directly does not keep the wire half below
+        // from being measured.
+        const directly = (value: unknown): string => {
+          try {
+            return ownEvent(JSON.parse(JSON.stringify(value))) === undefined ? 'refused' : 'copied';
+          } catch {
+            return 'threw';
+          }
+        };
         const rows: unknown[] = [];
         for (const [index, [name, malformed]] of shapes.entries()) {
           const probe = probed(nextUrl());
@@ -593,22 +702,26 @@ describe('the boundary where an event off the wire becomes this library’s own'
             { live: true, reqIdBase: `wb1-c${String(index)}`, filters: [{}] }
           );
           const backward = await request.subId('b');
-          probe.server.send(['EVENT', backward, malformed]);
-          await vi.waitFor(() => expect(probe.received, name).toHaveLength(1), {
-            timeout: 2000
-          });
-          probe.server.send(['EVENT', backward, fakeEvent({ content: `after-${name}` })]);
-          await vi.waitFor(() => expect(probe.received, name).toHaveLength(2), {
-            timeout: 2000
-          });
+          const forward = await request.subId('f');
+          const offer = async (subId: string, event: unknown, count: number): Promise<void> => {
+            probe.server.send(['EVENT', subId, event]);
+            await vi.waitFor(() => expect(probe.received, name).toHaveLength(count), {
+              timeout: 2000
+            });
+          };
+          await offer(backward, malformed, 1);
+          await offer(backward, fakeEvent({ content: `backward-${name}` }), 2);
           probe.server.send(['EOSE', backward]);
           await vi.waitFor(() => expect(kindsOf(request.chunks), name).toContain('settled'), {
             timeout: 5000
           });
+          await offer(forward, malformed, 3);
+          await offer(forward, fakeEvent({ content: `forward-${name}` }), 4);
           await settle(30);
           await request.stop();
           rows.push({
             name,
+            directly: directly(malformed),
             verified: calls,
             delivered: delivered(request.chunks).map(
               (event) => (event as { content: string }).content
@@ -616,14 +729,19 @@ describe('the boundary where an event off the wire becomes this library’s own'
             ends: request.chunks.flatMap((chunk) => (chunk.type === 'settled' ? [chunk.end] : []))
           });
         }
-        expect(rows, 'dropped, not verified; the next event arrives and the EOSE settles').toEqual(
+        expect(
+          rows,
+          'refused; dropped on each leg, not verified; the next event arrives and the EOSE settles'
+        ).toEqual(
           shapes.map(([name]) => ({
             name,
-            verified: 1,
-            delivered: [`after-${name}`],
+            directly: 'refused',
+            verified: 2,
+            delivered: [`backward-${name}`, `forward-${name}`],
             ends: [{ kind: 'complete' }]
           }))
         );
+        ran.push('C');
       });
 
       // **Part D, the packets that are not events (T6, T8), at the machine.**
@@ -639,7 +757,9 @@ describe('the boundary where an event off the wire becomes this library’s own'
             timeoutMs: 1000
           });
           const backward = await request.subId('b');
-          if (unattributed) probe.server.send(['CLOSED', 7, 'rate-limited: no']);
+          // A subId that is not a string — a list holding this request's own,
+          // so a seam that turned it into text would attribute it.
+          if (unattributed) probe.server.send(['CLOSED', [backward], 'rate-limited: no']);
           probe.server.send(['CLOSED', backward, reason]);
           // The outcome, which arrives either way — by the refusal, or by the
           // timer when the refusal was lost — and then what it says.
@@ -659,25 +779,32 @@ describe('the boundary where an event off the wire becomes this library’s own'
         const object = await closing({ why: 'an object' }, true);
         const longText = await closing('x'.repeat(10_000), false);
         const longObject = await closing({ detail: 'x'.repeat(10_000) }, false);
+        const endsOf = (chunks: readonly MachineChunk[]) =>
+          chunks.flatMap((chunk) => (chunk.type === 'settled' ? [chunk.end] : []));
         expect(
-          [
-            refusalsOf(object).map(({ leg, notice }) => [leg, measured(notice)]),
-            object.some((chunk) => chunk.type === 'settled'),
-            refusalsOf(longText).map(({ notice }) => measured(notice)),
-            refusalsOf(longObject).map(({ notice }) => measured(notice))
-          ],
-          'one refusal, rendered, and an outcome; then each bound, and the flag that says so'
+          [object, longText, longObject].map((chunks) => ({
+            refusals: refusalsOf(chunks).map(({ leg, notice }) => [leg, measured(notice)]),
+            ends: endsOf(chunks)
+          })),
+          'one refusal each, rendered within each bound, with the flag that says so — and the backlog answered by it rather than by the timer'
         ).toEqual([
-          [['backward', [false, '{"why":"an object"}']]],
-          true,
-          [[true, 'at the cap']],
-          [[true, 'under the cap']]
+          {
+            refusals: [['backward', [false, '{"why":"an object"}']]],
+            ends: [{ kind: 'complete' }]
+          },
+          { refusals: [['backward', [true, 'at the cap']]], ends: [{ kind: 'complete' }] },
+          {
+            refusals: [['backward', [true, 'within the inner bound']]],
+            ends: [{ kind: 'complete' }]
+          }
         ]);
+        ran.push('D-closed');
       });
 
-      // **Part D, a NOTICE (T7, T8), through the provider's diagnostics.** Each
-      // stage is read before the next is sent.
-      await part('D: a NOTICE that is not text', async () => {
+      // **Part D, through the provider's diagnostics (T6, T7, T8).** A NOTICE,
+      // and then a CLOSED, whose words are not text, and long ones: each read
+      // on the relay axis before the next is sent.
+      await part('D: a NOTICE and a CLOSED reason on the relay axis', async () => {
         const url = nextUrl();
         const server = new WS(url, { jsonProtocol: true });
         let context: NostrContext | undefined;
@@ -695,29 +822,56 @@ describe('the boundary where an event off the wire becomes this library’s own'
             expect((server.messages as unknown[][]).some((frame) => frame[0] === 'REQ')).toBe(true),
           { timeout: 3000 }
         );
-        const lastNotice = () => Object.values(context?.diagnostics.relays ?? {})[0]?.lastNotice;
-        const seen: unknown[] = [];
+        const row = () => Object.values(context?.diagnostics.relays ?? {})[0];
+        const stage = async (
+          frame: unknown[],
+          read: () => { text: string; truncated: boolean } | undefined
+        ): Promise<unknown> => {
+          const before = read();
+          server.send(frame);
+          await vi.waitFor(() => expect(read()).not.toBe(before), { timeout: 2000 });
+          return measured(read());
+        };
+        const notices: unknown[] = [];
         for (const body of [
           { why: 'an object' },
           'and now a string',
           'x'.repeat(10_000),
           { detail: 'x'.repeat(10_000) }
-        ]) {
-          const before = lastNotice();
-          server.send(['NOTICE', body]);
-          await vi.waitFor(() => expect(lastNotice()).not.toBe(before), { timeout: 2000 });
-          seen.push(measured(lastNotice()));
-        }
+        ])
+          notices.push(await stage(['NOTICE', body], () => row()?.lastNotice));
+        const refusals: unknown[] = [];
+        for (const reason of [
+          { why: 'an object' },
+          'x'.repeat(10_000),
+          { detail: 'x'.repeat(10_000) }
+        ])
+          refusals.push(
+            await stage(['CLOSED', 'wb1-relay-axis', reason], () => row()?.lastRefusal?.notice)
+          );
         view.unmount();
-        expect(seen, 'rendered, bounded, and the next one read too').toEqual([
-          [false, '{"why":"an object"}'],
-          [false, 'and now a string'],
-          [true, 'at the cap'],
-          [true, 'under the cap']
-        ]);
+        expect(
+          { notices, refusals },
+          'rendered, bounded, flagged, and the next one read too, on the relay axis'
+        ).toEqual({
+          notices: [
+            [false, '{"why":"an object"}'],
+            [false, 'and now a string'],
+            [true, 'at the cap'],
+            [true, 'within the inner bound']
+          ],
+          refusals: [
+            [false, '{"why":"an object"}'],
+            [true, 'at the cap'],
+            [true, 'within the inner bound']
+          ]
+        });
+        ran.push('D-relay-axis');
       });
 
-      // **Part E, the boundary called directly (T5's unreachable fields, T10).**
+      // **Part E, the boundary called directly (T5, T10)**: every malformed
+      // field, including values no relay can send as JSON (`NaN`, `Infinity`,
+      // `undefined`), and candidates that answer differently when asked twice.
       // What it returns is a snapshot, not an observation of the cache.
       await part('E: every field refused, and each read once', () => {
         const wire = (over: Record<string, unknown>): unknown => ({
@@ -759,11 +913,23 @@ describe('the boundary where an event off the wire becomes this library’s own'
         ).toEqual(['direct', 'proof', [['t', 'ok'], []]]);
 
         // **Read once.** Each of these answers differently the second time it
-        // is asked, which a fresh object shows first.
-        const shifty = () => {
-          let idReads = 0;
-          let tagReads = 0;
-          let harmReads = 0;
+        // is asked — every scalar, the tag list, and a tag whose walk changes —
+        // which a fresh one shows first. The second answers are well-formed but
+        // somebody else's, except `content`'s and the harm case's, which are
+        // the `null` a frozen event must never hold.
+        const answering = (field: string, first: unknown, second: unknown) => {
+          let reads = 0;
+          const value = { ...(wire({}) as object) };
+          Object.defineProperty(value, field, {
+            enumerable: true,
+            get() {
+              reads += 1;
+              return reads === 1 ? first : second;
+            }
+          });
+          return { value, reads: () => reads };
+        };
+        const walkedTags = () => {
           let walks = 0;
           const walked = [['t', 'ok']];
           Object.defineProperty(walked[0], 1, {
@@ -773,58 +939,184 @@ describe('the boundary where an event off the wire becomes this library’s own'
               return walks === 1 ? 'ok' : null;
             }
           });
-          return {
-            id: {
-              ...(wire({}) as object),
-              get id(): unknown {
-                idReads += 1;
-                return idReads === 1 ? 'the-checked-id' : 'somebody-elses-id';
-              }
-            },
-            tags: {
-              ...(wire({}) as object),
-              get tags(): unknown {
-                tagReads += 1;
-                return tagReads === 1 ? [['t', 'ok']] : [['t', 'somebody elses']];
-              }
-            },
-            harm: {
-              ...(wire({}) as object),
-              get tags(): unknown {
-                harmReads += 1;
-                return harmReads === 1 ? [['t', 'ok']] : [['t', null]];
-              }
-            },
-            walked: wire({ tags: walked }),
-            reads: () => [idReads, tagReads, harmReads, walks]
-          };
+          return { value: wire({ tags: walked }), reads: () => walks };
         };
-        const premise = shifty();
-        const twice = (read: () => unknown): boolean =>
-          JSON.stringify(read()) !== JSON.stringify(read());
-        expect(
+        const cases: readonly (readonly [string, () => { value: unknown; reads: () => number }])[] =
           [
-            twice(() => (premise.id as { id: unknown }).id),
-            twice(() => (premise.tags as { tags: unknown }).tags),
-            twice(() => (premise.harm as { tags: unknown }).tags),
-            twice(() => ((premise.walked as { tags: unknown[][] }).tags[0] as unknown[])[1])
-          ],
-          'the premise: each answers differently the second time'
-        ).toEqual([true, true, true, true]);
-        const fresh = shifty();
-        const kept = [
-          ownEvent(fresh.id)?.id,
-          ownEvent(fresh.tags)?.tags,
-          ownEvent(fresh.harm)?.tags,
-          ownEvent(fresh.walked)?.tags
-        ];
+            ['id', () => answering('id', 'the-checked-id', 'somebody-elses-id')],
+            ['sig', () => answering('sig', 'the-checked-sig', 'somebody-elses-sig')],
+            ['kind', () => answering('kind', 1, 7)],
+            ['pubkey', () => answering('pubkey', 'the-checked-pubkey', 'somebody-elses-pubkey')],
+            ['content', () => answering('content', 'the-checked-content', null)],
+            ['created_at', () => answering('created_at', 10, 20)],
+            ['ots', () => answering('ots', 'the-checked-ots', 'somebody-elses-ots')],
+            ['tags', () => answering('tags', [['t', 'ok']], [['t', 'somebody elses']])],
+            ['tags, harmed', () => answering('tags', [['t', 'ok']], [['t', null]])],
+            ['a tag, walked', walkedTags]
+          ];
+        const fieldOf = (name: string): string => (name.startsWith('tags') ? 'tags' : name);
+        const readOf = (name: string, value: unknown): unknown =>
+          name === 'a tag, walked'
+            ? ((value as { tags: unknown[][] }).tags[0] as unknown[])[1]
+            : (value as Record<string, unknown>)[fieldOf(name)];
         expect(
-          [kept, fresh.reads()],
+          cases.map(([name, make]) => {
+            const { value } = make();
+            return JSON.stringify(readOf(name, value)) !== JSON.stringify(readOf(name, value));
+          }),
+          'the premise: each answers differently the second time'
+        ).toEqual(cases.map(() => true));
+        expect(
+          cases.map(([name, make]) => {
+            const fresh = make();
+            const kept = ownEvent(fresh.value) as Record<string, unknown> | undefined;
+            return [name, kept?.[name === 'a tag, walked' ? 'tags' : fieldOf(name)], fresh.reads()];
+          }),
           'the answer that was checked is the one kept, each asked once'
         ).toEqual([
-          ['the-checked-id', [['t', 'ok']], [['t', 'ok']], [['t', 'ok']]],
-          [1, 1, 1, 1]
+          ['id', 'the-checked-id', 1],
+          ['sig', 'the-checked-sig', 1],
+          ['kind', 1, 1],
+          ['pubkey', 'the-checked-pubkey', 1],
+          ['content', 'the-checked-content', 1],
+          ['created_at', 10, 1],
+          ['ots', 'the-checked-ots', 1],
+          ['tags', [['t', 'ok']], 1],
+          ['tags, harmed', [['t', 'ok']], 1],
+          ['a tag, walked', [['t', 'ok']], 1]
         ]);
+        ran.push('E');
+      });
+
+      // **Part F, the filters a request is made with (T5)**, through a
+      // provider, on both legs. The dependency matched an EVENT against the
+      // REQ's filters before delivering it, reading the fields a filter names —
+      // `tags` for `#t`, `pubkey` for `authors` — without checking them, so a
+      // candidate missing one threw there and ended the subscription. The
+      // provider's client no longer matches, and the engine matches the checked
+      // copy. Under each filter, a malformed candidate is followed by one the
+      // filter asks for and one it does not, on the backward leg and then the
+      // forward one.
+      await part('F: a filter the dependency would have read', async () => {
+        const A = 'a'.repeat(64);
+        const B = 'b'.repeat(64);
+        const filtered: readonly {
+          name: string;
+          filter: Nostr.Filter;
+          malformed: Record<string, unknown>;
+          asked: Record<string, unknown>;
+          unasked: Record<string, unknown>;
+        }[] = [
+          {
+            name: 'a tag filter',
+            filter: { kinds: [1], '#t': ['ok'] },
+            malformed: { tags: null },
+            asked: { tags: [['t', 'ok']] },
+            unasked: { tags: [['t', 'other']] }
+          },
+          {
+            name: 'an author filter',
+            filter: { kinds: [1], authors: [A] },
+            malformed: { pubkey: null },
+            asked: { pubkey: A },
+            unasked: { pubkey: B }
+          },
+          // And `kinds` alone, which the dependency's matcher reads without
+          // throwing: a kind that is text was dropped there before, and reaches
+          // the boundary now, which refuses it.
+          {
+            name: 'a kind filter',
+            filter: { kinds: [1] },
+            malformed: { kind: '1' },
+            asked: {},
+            unasked: { kind: 7 }
+          }
+        ];
+        const rows: unknown[] = [];
+        for (const { name, filter, malformed, asked, unasked } of filtered) {
+          const url = nextUrl();
+          const server = new WS(url, { jsonProtocol: true });
+          const verifier = recording();
+          let handle: ReqHandle | undefined;
+          const view = render(VerifiedRequest, {
+            relays: [url],
+            verifyEvent: verifier.verify,
+            plan: (): ReqPlan => ({
+              kind: 'request',
+              descriptor: {
+                filters: [filter],
+                live: true,
+                retain: 'unbounded',
+                settleTimeoutMs: 2000
+              }
+            }),
+            request: (held: ReqHandle) => {
+              handle = held;
+            },
+            seen: () => undefined
+          });
+          let ids: string[] = [];
+          await vi.waitFor(
+            () => {
+              ids = (server.messages as unknown[][])
+                .filter((frame) => frame[0] === 'REQ')
+                .map((frame) => String(frame[1]));
+              expect(ids.length, `${name}: both legs asked`).toBeGreaterThanOrEqual(2);
+            },
+            { timeout: 3000 }
+          );
+          const backward = ids.find((id) => id.includes('-b:')) as string;
+          const forward = ids.find((id) => id.includes('-f:')) as string;
+          const send = (subId: string, leg: string, at: number): void => {
+            server.send([
+              'EVENT',
+              subId,
+              { ...fakeEvent({ id: `malformed-${leg}` }), ...malformed }
+            ]);
+            server.send([
+              'EVENT',
+              subId,
+              { ...fakeEvent({ id: `asked-${leg}`, created_at: at }), ...asked }
+            ]);
+            server.send([
+              'EVENT',
+              subId,
+              { ...fakeEvent({ id: `unasked-${leg}`, created_at: at + 1 }), ...unasked }
+            ]);
+          };
+          send(backward, 'backward', 10);
+          server.send(['EOSE', backward]);
+          await vi.waitFor(() => expect(handle?.state.status).not.toBe('loading'), {
+            timeout: 3000
+          });
+          send(forward, 'forward', 20);
+          // Time rather than an event to wait for: what is waited on here is
+          // exactly what a regression loses.
+          await settle(300);
+          const published =
+            handle === undefined || handle.state.status === 'loading' ? [] : handle.state.events;
+          rows.push({
+            name,
+            status: handle?.state.status,
+            legEnded: handle?.diagnostics.legEnded,
+            verified: verifier.handed.map(({ event }) => event.id),
+            published: published.map((event) => event.id)
+          });
+          view.unmount();
+        }
+        expect(
+          rows,
+          'the malformed one dropped, the asked one kept, the unasked one dropped, and the request still going'
+        ).toEqual(
+          filtered.map(({ name }) => ({
+            name,
+            status: 'settled',
+            legEnded: undefined,
+            verified: ['asked-backward', 'asked-forward'],
+            published: ['asked-forward', 'asked-backward']
+          }))
+        );
+        ran.push('F');
       });
 
       // **Nothing thrown, as a part of its own**, so that it is read whatever
@@ -838,11 +1130,26 @@ describe('the boundary where an event off the wire becomes this library’s own'
           { channel: 'uncaughtException', message: 'nosvelte test: the thrown control' },
           { channel: 'unhandledRejection', message: 'nosvelte test: the rejected control' }
         ]);
+        ran.push('escapes');
       });
     } finally {
       escaped.restore();
     }
-    // The parts that failed, by name, on the line a ledger reports.
+    // The parts that failed, by name, on the line a ledger reports; then that
+    // every part ran to its end.
     expect(failures, `every part of the row holds; failed: ${failed.join(', ')}`).toEqual([]);
+    expect(ran, 'every part ran to its end').toEqual([
+      'controls',
+      'A-copy',
+      'A-order',
+      'A-gate',
+      'B',
+      'C',
+      'D-closed',
+      'D-relay-axis',
+      'E',
+      'F',
+      'escapes'
+    ]);
   }, 60_000);
 });

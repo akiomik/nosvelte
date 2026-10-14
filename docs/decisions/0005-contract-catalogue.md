@@ -2097,6 +2097,10 @@ question of them; their evidence did not move. **And `C6-C1`'s witness had to be
 sentence was true**: the arm it named passed with the framework's context replaced altogether, which
 is recorded in the row.
 
+**The seven are the set that round named, and the population has grown since.** `A-ε-C18`, `A-ε-C17`
+and `A-ε-C15` declare `svelte-context` too: their landings render a provider and the framework's own
+context (`AH1`, `AH2`, `WB1`), so a recurrence of that finding would re-open ten rows, not seven.
+
 `CAT31` holds the table's completeness both ways, the two vocabularies, `declared ⊇ computed`, the
 reverse rule for the three "nothing reached" words, both rosters against the prose above, the
 counts, and that a row needing what the stand-in takes away is witnessed where the framework is real

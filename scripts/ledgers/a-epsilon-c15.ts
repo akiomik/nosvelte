@@ -14,6 +14,13 @@ const MACHINE = 'src/lib/v1/machine.ts';
 const LEASE = 'src/lib/v1/lease.ts';
 const NORMALIZE = 'src/lib/v1/normalize.ts';
 const ARM = 'src/tests/contracts/engine/boundary.test.ts';
+const CONTEXT = 'src/lib/v1/context.svelte.ts';
+const DIAGNOSTICS = 'src/lib/v1/diagnostics.svelte.ts';
+const ESCAPES = 'src/tests/contracts/engine/helpers/escapes.ts';
+/** Where the machine judges the filters, on the checked copy. */
+const MATCHED = '    if (!isFiltered(packet.event as unknown as Nostr.Event, filters)) return;';
+/** The `ots` spread at the end of the copy. */
+const OTS = '    ...(snapshot.ots === undefined ? {} : { ots: snapshot.ots })';
 
 /** The one line `ownEvent` freezes and returns its copy on. */
 const RETURNED = '  return Object.freeze(owned);';
@@ -39,7 +46,7 @@ export default {
   calibration: {
     measured:
       "one run of WB1's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { WB1: 7 }
+    seconds: { WB1: 9 }
   },
   entries: [
     {
@@ -168,7 +175,7 @@ export default {
       id: 'C15-tags-null-thrown',
       arm: 'WB1',
       describe:
-        'a tag list that is not a list is walked anyway, and throws out of the subscription',
+        'a tag list that is not a list is walked anyway, which throws: out of the boundary when it is called directly, and out of the subscription on the wire, ending it',
       edits: [
         {
           file: EVENT,
@@ -337,7 +344,8 @@ export default {
     {
       id: 'C15-subid-unchecked',
       arm: 'WB1',
-      describe: 'a control message whose subId is not a string is attributed anyway',
+      describe:
+        'a control message whose subId is not a string is attributed anyway, and the attribution throws out of the subscription',
       edits: [
         {
           file: LEASE,
@@ -453,6 +461,246 @@ export default {
       ]
     },
     {
+      id: 'C15-dependency-matching-on',
+      arm: 'WB1',
+      describe: "the provider's client matches events against the filters before delivering them",
+      edits: [
+        {
+          file: CONTEXT,
+          from: '    skipValidateFilterMatching: true',
+          to: '    skipValidateFilterMatching: false'
+        }
+      ]
+    },
+    {
+      id: 'C15-matching-dropped',
+      arm: 'WB1',
+      describe: 'nothing matches events against the filters at all',
+      edits: [{ file: MACHINE, from: MATCHED, to: '    void isFiltered;' }]
+    },
+    {
+      id: 'C15-matching-before-copy',
+      arm: 'WB1',
+      describe:
+        "the machine matches the wire's event against the filters before the boundary checks it",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const packet = ownPacket(incoming);',
+          to: '    if (!isFiltered(incoming.event, filters)) return;\n    const packet = ownPacket(incoming);'
+        }
+      ]
+    },
+    {
+      id: 'C15-relay-axis-stringified',
+      arm: 'WB1',
+      describe: 'a `CLOSED` reason on the relay axis is turned into text by `String`, not rendered',
+      edits: [
+        {
+          file: DIAGNOSTICS,
+          from: '        const notice = relayMessage(packet.notice);',
+          to: '        const notice = relayMessage(String(packet.notice));'
+        }
+      ]
+    },
+    {
+      id: 'C15-relay-axis-classify-raw',
+      arm: 'WB1',
+      describe:
+        'a `CLOSED` reason on the relay axis is classified as the relay sent it, not as rendered',
+      edits: [
+        {
+          file: DIAGNOSTICS,
+          from: '          reason: classifyRefusal(notice.text),',
+          to: '          reason: classifyRefusal(packet.notice),'
+        }
+      ]
+    },
+    {
+      id: 'C15-refusal-state-dropped',
+      arm: 'WB1',
+      describe:
+        'a refusal whose reason classifies as nothing does not answer the backlog, which waits out its timer',
+      edits: [
+        {
+          file: MACHINE,
+          from: "      if (leg === 'backward') advanceBackward(packet.from, 'refused');",
+          to: "      if (leg === 'backward' && reason !== 'unknown') advanceBackward(packet.from, 'refused');"
+        }
+      ]
+    },
+    {
+      id: 'C15-copy-extras',
+      arm: 'WB1',
+      describe: 'the copy carries the fields NIP-01 does not name, as the wire had them',
+      edits: [
+        {
+          file: EVENT,
+          from: OTS,
+          to: `${OTS},\n    ...(Object.fromEntries(\n      Object.keys(source)\n        .filter((key) => !['id', 'sig', 'kind', 'pubkey', 'content', 'created_at', 'tags', 'ots'].includes(key))\n        .map((key) => [key, source[key]])\n    ) as object)`
+        }
+      ]
+    },
+    {
+      id: 'C15-seal-wire',
+      arm: 'WB1',
+      describe: "the boundary seals the dependency's event",
+      edits: [{ file: EVENT, from: RETURNED, to: `  Object.seal(value);\n${RETURNED}` }]
+    },
+    {
+      id: 'C15-source-written',
+      arm: 'WB1',
+      describe: "the boundary writes to the dependency's event before it takes its snapshot",
+      edits: [
+        {
+          file: EVENT,
+          from: '  const snapshot = {',
+          to: "  if (typeof source['sig'] === 'string') source['sig'] = 'tampered-signature';\n  const snapshot = {"
+        }
+      ]
+    },
+    {
+      id: 'C15-sig-read-twice',
+      arm: 'WB1',
+      describe: 'the copy reads `sig` off the candidate again, after the check',
+      edits: [
+        { file: EVENT, from: '    sig: snapshot.sig,', to: "    sig: source['sig'] as string," }
+      ]
+    },
+    {
+      id: 'C15-kind-read-twice',
+      arm: 'WB1',
+      describe: 'the copy reads `kind` off the candidate again, after the check',
+      edits: [
+        { file: EVENT, from: '    kind: snapshot.kind,', to: "    kind: source['kind'] as number," }
+      ]
+    },
+    {
+      id: 'C15-pubkey-read-twice',
+      arm: 'WB1',
+      describe: 'the copy reads `pubkey` off the candidate again, after the check',
+      edits: [
+        {
+          file: EVENT,
+          from: '    pubkey: snapshot.pubkey,',
+          to: "    pubkey: source['pubkey'] as string,"
+        }
+      ]
+    },
+    {
+      id: 'C15-content-read-twice',
+      arm: 'WB1',
+      describe: 'the copy reads `content` off the candidate again, after the check',
+      edits: [
+        {
+          file: EVENT,
+          from: '    content: snapshot.content,',
+          to: "    content: source['content'] as string,"
+        }
+      ]
+    },
+    {
+      id: 'C15-created-at-read-twice',
+      arm: 'WB1',
+      describe: 'the copy reads `created_at` off the candidate again, after the check',
+      edits: [
+        {
+          file: EVENT,
+          from: '    created_at: snapshot.created_at,',
+          to: "    created_at: source['created_at'] as number,"
+        }
+      ]
+    },
+    {
+      id: 'C15-ots-read-twice',
+      arm: 'WB1',
+      describe: 'the copy reads `ots` off the candidate again, after the check',
+      edits: [
+        {
+          file: EVENT,
+          from: OTS,
+          to: "    ...(snapshot.ots === undefined ? {} : { ots: source['ots'] as string })"
+        }
+      ]
+    },
+    {
+      id: 'C15-malformed-verified-forward',
+      arm: 'WB1',
+      describe: 'a candidate that is not an event is handed to the verifier on the forward leg',
+      edits: [
+        {
+          file: MACHINE,
+          from: DROPPED,
+          to: "    if (packet === undefined) {\n      if (leg === 'forward')\n        void Promise.resolve()\n          .then(() => verifyEvent(incoming.event))\n          .catch(() => undefined);\n      return;\n    }"
+        }
+      ]
+    },
+    {
+      id: 'C15-subid-coerced',
+      arm: 'WB1',
+      describe: 'a control message whose subId is not a string is turned into text, and attributed',
+      edits: [
+        {
+          file: LEASE,
+          from: ATTRIBUTABLE,
+          to: "        if (typeof held.from !== 'string' || held.subId == null) return undefined;"
+        },
+        {
+          file: LEASE,
+          from: '          subId: held.subId,',
+          to: '          subId: String(held.subId),'
+        }
+      ]
+    },
+    {
+      id: 'C15-inner-slice-doubled',
+      arm: 'WB1',
+      describe: 'the inner rendering keeps twice the bound it states',
+      edits: [
+        {
+          file: NORMALIZE,
+          from: '  const cut = rendered.slice(0, MAX_RENDERED);',
+          to: '  const cut = rendered.slice(0, MAX_RENDERED * 2);'
+        }
+      ]
+    },
+    {
+      id: 'I-collector-deaf-to-uncaught',
+      arm: 'WB1',
+      describe: 'the collector drops what reaches `uncaughtException`',
+      edits: [
+        {
+          file: ESCAPES,
+          from: '    (error: unknown): void => {\n      seen.push(',
+          to: "    (error: unknown): void => {\n      if (channel === 'uncaughtException') return;\n      seen.push("
+        }
+      ]
+    },
+    {
+      id: 'I-collector-deaf-to-rejections',
+      arm: 'WB1',
+      describe: 'the collector drops what reaches `unhandledRejection`',
+      edits: [
+        {
+          file: ESCAPES,
+          from: '    (error: unknown): void => {\n      seen.push(',
+          to: "    (error: unknown): void => {\n      if (channel === 'unhandledRejection') return;\n      seen.push("
+        }
+      ]
+    },
+    {
+      id: 'I-part-skipped',
+      arm: 'WB1',
+      describe: "the arm's runner skips one part",
+      edits: [
+        {
+          file: ARM,
+          from: '        await body();',
+          to: "        if (!name.startsWith('E:')) await body();"
+        }
+      ]
+    },
+    {
       id: 'I-write-after-answer',
       arm: 'WB1',
       describe:
@@ -460,16 +708,34 @@ export default {
       edits: [
         {
           file: ARM,
-          from: '          if (scribble(wire, `changed-${content}`)) verifier.log.push(`written:${content}`);\n          verifier.release(content);',
-          to: '          verifier.release(content);\n          if (scribble(wire, `changed-${content}`)) verifier.log.push(`written:${content}`);'
+          from: '          if (scribble(wire, `changed-${content}`).every(Boolean))\n            verifier.log.push(`written:${content}`);\n          verifier.release(content);',
+          to: '          verifier.release(content);\n          if (scribble(wire, `changed-${content}`).every(Boolean))\n            verifier.log.push(`written:${content}`);'
         }
       ]
     },
     {
       id: 'I-read-counter-deaf',
       arm: 'WB1',
-      describe: 'the probe does not count reads of `event`',
-      edits: [{ file: ARM, from: '            reads += 1;', to: '            reads += 0;' }]
+      describe: 'the probe does not count reads of a packet',
+      edits: [
+        {
+          file: ARM,
+          from: '            reads.set(own, (reads.get(own) ?? 0) + 1);',
+          to: '            reads.set(own, 0);'
+        }
+      ]
+    },
+    {
+      id: 'I-read-counter-marks',
+      arm: 'WB1',
+      describe: 'the probe marks a packet as read rather than counting its reads',
+      edits: [
+        {
+          file: ARM,
+          from: '            reads.set(own, (reads.get(own) ?? 0) + 1);',
+          to: '            reads.set(own, 1);'
+        }
+      ]
     },
     {
       id: 'I-wire-cloned',
@@ -486,12 +752,12 @@ export default {
     {
       id: 'I-shifty-stable',
       arm: 'WB1',
-      describe: "the arm's id getter answers the same both times",
+      describe: "the arm's changing getters answer the same both times",
       edits: [
         {
           file: ARM,
-          from: "                return idReads === 1 ? 'the-checked-id' : 'somebody-elses-id';",
-          to: "                return 'the-checked-id';"
+          from: '              return reads === 1 ? first : second;',
+          to: '              return reads > 0 ? first : second;'
         }
       ]
     },
