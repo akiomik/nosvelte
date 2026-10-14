@@ -14,6 +14,7 @@ import type { Ledger } from '../ledger.ts';
 const MACHINE = 'src/lib/v1/machine.ts';
 const GATE = 'src/tests/contracts/engine/gate.test.ts';
 const ADMISSION = 'src/tests/contracts/admission.test.ts';
+const ESCAPES = 'src/tests/contracts/engine/helpers/escapes.ts';
 
 /** The answer the machine reads off the verifier, and what it does with it. */
 const FULFILLED = '        (ok) => leave(ok === true),';
@@ -295,7 +296,7 @@ export default {
       describe: 'the collector drops what reaches `uncaughtException`',
       edits: [
         {
-          file: GATE,
+          file: ESCAPES,
           from: '    (error: unknown): void => {\n      seen.push(',
           to: "    (error: unknown): void => {\n      if (channel === 'uncaughtException') return;\n      seen.push("
         }
@@ -307,7 +308,7 @@ export default {
       describe: 'the collector drops what reaches `unhandledRejection`',
       edits: [
         {
-          file: GATE,
+          file: ESCAPES,
           from: '    (error: unknown): void => {\n      seen.push(',
           to: "    (error: unknown): void => {\n      if (channel === 'unhandledRejection') return;\n      seen.push("
         }

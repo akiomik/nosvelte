@@ -34,7 +34,7 @@
  */
 import type Nostr from 'nostr-typedef';
 import { createRxOneshotReq } from 'rx-nostr';
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import { referenceStream } from '$lib/v1/machine.js';
@@ -42,6 +42,7 @@ import { createRelayScope } from '$lib/v1/scope.svelte.js';
 import type { MachineChunk } from '$lib/v1/stream.js';
 import { requestTargets } from '$lib/v1/stream.js';
 
+import { escapes } from './helpers/escapes.js';
 import {
   createTestRelay,
   fakeEvent,
@@ -115,56 +116,6 @@ const contents = (chunks: readonly MachineChunk[]): string[] =>
 
 const endsOf = (chunks: readonly MachineChunk[]) =>
   chunks.flatMap((chunk) => (chunk.type === 'settled' ? [chunk.end] : []));
-
-/**
- * What leaves as an uncaught error while it is installed: Node's two process
- * events, with the runner's own listeners taken off for the duration and put
- * back by `restore`.
- *
- * **Those two events are where an error with no handler goes.** A throw in a
- * subscriber's `next` is reported by RxJS on a timer, which throws it again —
- * the application's RxJS and the copy the dependency bundles do the same, which
- * was measured once, before this was written — and a rejection nobody handles
- * is Node's `unhandledRejection`. The arm's positive controls measure both on
- * every run, the first through the capability the machine subscribes through,
- * whose subscriber is the application's RxJS.
- *
- * **Put back however the arm ends.** A test the runner times out is abandoned
- * rather than unwound, so its `finally` never runs, and the runner's listeners
- * stayed off for the rest of the worker — measured. So `restore` is also
- * registered with the runner, and running it twice does nothing the second
- * time. The listeners are saved raw, so one registered with `once` goes back
- * as its wrapper and stays once.
- */
-function escapes() {
-  const saved = {
-    uncaught: process.rawListeners('uncaughtException') as NodeJS.UncaughtExceptionListener[],
-    rejection: process.rawListeners('unhandledRejection') as NodeJS.UnhandledRejectionListener[]
-  };
-  const seen: { channel: string; message: string }[] = [];
-  const recorder =
-    (channel: string) =>
-    (error: unknown): void => {
-      seen.push({ channel, message: error instanceof Error ? error.message : String(error) });
-    };
-  const onUncaught = recorder('uncaughtException');
-  const onRejection = recorder('unhandledRejection');
-  process.removeAllListeners('uncaughtException');
-  process.removeAllListeners('unhandledRejection');
-  process.on('uncaughtException', onUncaught);
-  process.on('unhandledRejection', onRejection);
-  let restored = false;
-  const restore = (): void => {
-    if (restored) return;
-    restored = true;
-    process.removeListener('uncaughtException', onUncaught);
-    process.removeListener('unhandledRejection', onRejection);
-    for (const listener of saved.uncaught) process.on('uncaughtException', listener);
-    for (const listener of saved.rejection) process.on('unhandledRejection', listener);
-  };
-  onTestFinished(restore);
-  return { seen, restore };
-}
 
 describe('the verification gate', () => {
   // @contracts A-ε-C4

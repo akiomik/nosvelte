@@ -1368,7 +1368,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **351 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **93 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **251 are
+Of those, **94 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **250 are
 TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1499,7 +1499,7 @@ A-ε-C11      internal      test:VG2
 A-ε-C12      internal      TBD
 A-ε-C13      internal      TBD
 A-ε-C14      internal      TBD
-A-ε-C15      internal      TBD
+A-ε-C15      internal      test:WB1
 A-ε-C16      public        TBD
 A-ε-C17      public        test:AH2
 A-ε-C18      public        test:AH1
@@ -2097,6 +2097,10 @@ question of them; their evidence did not move. **And `C6-C1`'s witness had to be
 sentence was true**: the arm it named passed with the framework's context replaced altogether, which
 is recorded in the row.
 
+**The seven are the set that round named, and the population has grown since.** `A-ε-C18`, `A-ε-C17`
+and `A-ε-C15` declare `svelte-context` too: their landings render a provider and the framework's own
+context (`AH1`, `AH2`, `WB1`), so a recurrence of that finding would re-open ten rows, not seven.
+
 `CAT31` holds the table's completeness both ways, the two vocabularies, `declared ⊇ computed`, the
 reverse rule for the three "nothing reached" words, both rosters against the prose above, the
 counts, and that a row needing what the stand-in takes away is witnessed where the framework is real
@@ -2392,9 +2396,9 @@ stronger half.
 | A-ε-C12 | engine    | wire                                                                |
 | A-ε-C13 | engine    | query-core svelte-effects wire                                      |
 | A-ε-C14 | engine    | wire                                                                |
-| A-ε-C15 | engine    | svelte-effects wire                                                 |
+| A-ε-C15 | engine    | query-core svelte-context svelte-effects svelte-render wire         |
 | A-ε-C16 | svelte    | query-core svelte-context-presence svelte-effects wire              |
-| A-ε-C17 | engine    | svelte-effects wire                                                 |
+| A-ε-C17 | engine    | query-core svelte-context svelte-effects svelte-render wire         |
 | A-ε-C18 | engine    | query-core svelte-context svelte-effects svelte-render wire         |
 | A-ζ-C1  | engine    | clock wire                                                          |
 | A-δ-C1  | svelte    | clock query-core svelte-effects svelte-render wire                  |

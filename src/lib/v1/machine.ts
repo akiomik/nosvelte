@@ -5,7 +5,7 @@
 
 import type Nostr from 'nostr-typedef';
 import type { EventPacket } from 'rx-nostr';
-import { createRxForwardReq, createRxOneshotReq } from 'rx-nostr';
+import { createRxForwardReq, createRxOneshotReq, isFiltered } from 'rx-nostr';
 import type { Subscription } from 'rxjs';
 import { EMPTY } from 'rxjs';
 
@@ -481,6 +481,27 @@ export async function* referenceStream({
     // CLOSED are read as usual, so the request still reaches an outcome.
     const packet = ownPacket(incoming);
     if (packet === undefined) return;
+    // **What the filters asked for, judged on the checked copy.** The provider's
+    // client no longer matches before delivering (`skipValidateFilterMatching`,
+    // in `createLiveTransport`), because the dependency's matcher reads the
+    // fields a filter names without checking their shape and threw on a
+    // malformed candidate before it reached the copy above — ending the
+    // subscription, and losing the relay's next event with it. This is the same
+    // function, with the same default inclusivity, over the request's own
+    // filters, so an event they did not ask for is dropped here exactly as it
+    // was there: not verified, not counted against the gate, not delivered.
+    //
+    // **The same for the filters a request is made with, which is not every
+    // value this parameter could hold.** The dependency matches the filters it
+    // evaluated, and drops a field whose list is empty before it does — so
+    // `{ kinds: [1], authors: [] }` is `{ kinds: [1] }` to it and matches
+    // nothing here. A request never sends one: `wireFilters` (`stream.ts`)
+    // removes a filter with an empty set field before a REQ is made, since it
+    // can match nothing.
+    //
+    // A client a caller supplies at the engine's own seam may still match
+    // first, and then this runs a second time over what already matched.
+    if (!isFiltered(packet.event as unknown as Nostr.Event, filters)) return;
     const admission: Admission = { discarded: false };
     gate.holding.add(admission);
     const startedAt = Date.now();

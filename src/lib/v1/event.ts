@@ -122,7 +122,10 @@ function isWireTags(value: unknown): value is readonly (readonly string[])[] {
  * sees it. **`undefined` means the candidate never was an event**: it is not
  * verified, not stored, not delivered, and not thrown either. A relay that
  * sends a malformed EVENT loses that event and nothing else — its EOSE and its
- * CLOSED are read as usual and the request still reaches an outcome.
+ * CLOSED are read as usual and the request still reaches an outcome. That
+ * holds of the provider's client, which delivers without matching filters
+ * first; a client that matches can throw on such a candidate before it gets
+ * here (`createLiveTransport`).
  */
 export function ownEvent(value: unknown): ReqEvent | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
