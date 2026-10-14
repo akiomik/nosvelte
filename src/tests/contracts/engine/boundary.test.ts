@@ -262,10 +262,12 @@ describe('the boundary where an event off the wire becomes this library’s own'
     vi.stubGlobal('WebSocket', MockWebSocket);
     vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
     const failures: string[] = [];
+    const failed: string[] = [];
     const part = async (name: string, body: () => Promise<void> | void): Promise<void> => {
       try {
         await body();
       } catch (error) {
+        failed.push(name);
         failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
@@ -831,7 +833,8 @@ describe('the boundary where an event off the wire becomes this library’s own'
     } finally {
       escaped.restore();
     }
-    expect(failures, 'every part of the row holds').toEqual([]);
+    // The parts that failed, by name, on the line a ledger reports.
+    expect(failures, `every part of the row holds; failed: ${failed.join(', ')}`).toEqual([]);
     expect(escaped.seen, 'nothing left uncaught but the two controls').toEqual([
       { channel: 'uncaughtException', message: 'nosvelte test: the thrown control' },
       { channel: 'unhandledRejection', message: 'nosvelte test: the rejected control' }
