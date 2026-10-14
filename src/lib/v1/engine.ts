@@ -516,11 +516,16 @@ export type ReqState =
    * part of the definition.** A-ε owns the word and states it in two clauses;
    * restating it in three here is the paraphrase that rule exists to stop, and
    * it is redundant besides — an event this request's filters did not ask for is
-   * dropped by rx-nostr before it reaches the gate, so it cannot pass one. The
-   * check that drops it is the dependency's own and this library leaves it on:
-   * the provider takes exactly three configuration options and
-   * `skipValidateFilterMatching` is not among them (`WR13`). `EV2`'s `unasked`
-   * arm measures the consequence — `false` and `nodata` — and not the clause.
+   * dropped before it reaches the gate, so it cannot pass one. **The check that
+   * drops it is this library's own**: the provider's client does not match
+   * (`skipValidateFilterMatching`, in `createLiveTransport`), because the
+   * dependency's matcher read fields without checking them and threw on a
+   * malformed candidate under a tag or author filter, ending the subscription;
+   * `referenceStream` applies the same function, `isFiltered`, to the checked
+   * copy before the gate counts it (`A-ε-C15`). A consumer can turn neither
+   * off: the provider takes exactly three configuration options (`WR13`).
+   * `EV2`'s `unasked` arm measures the consequence — `false` and `nodata` — and
+   * not the clause.
    *
    * Today "the request accepted an event" and "the stored set is non-empty"
    * coincide and that is measured rather than assumed: the fold only ever

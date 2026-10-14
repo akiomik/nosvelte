@@ -702,14 +702,17 @@ describe("rx-nostr's own vocabulary, as a set", () => {
 
 describe('the defaults this design copied into its records', () => {
   it('DS31: rx-nostr drops an event whose kind the REQ did not ask for', async () => {
-    // **A dependency fact this library leans on to say a clause is
-    // unreachable.** `ownEvent` refuses an event whose `kind` is not a finite
-    // number, and no arm on the public path can reach that clause: the
-    // descriptor boundary requires `kinds`, and rx-nostr matches every event
-    // against the REQ's filters before a subscriber sees it. That second half
-    // is measured here rather than remembered — **if it ever stops, the clause
-    // becomes reachable and this arm is what says so**, rather than a comment
-    // in a test that has quietly become false.
+    // **The dependency's default, which the provider's client turns off.**
+    // rx-nostr matches every event against the REQ's filters before a
+    // subscriber sees it, and this library used to lean on that to call
+    // `ownEvent`'s `kind` clause unreachable. Its matcher reads the fields a
+    // filter names without checking them, though, so the provider's client
+    // does not match (`skipValidateFilterMatching`, `A-ε-C15`) and the engine
+    // matches the checked copy instead — on that path a `kind: '1'` under
+    // `kinds: [1]` reaches the boundary and is refused there. This stays
+    // measured because a client supplied at the engine's own seam, the
+    // harness's among them, still matches first, and because the engine's
+    // matching is meant to agree with this one.
     const { rxNostr, server } = createTestRelay(nextUrl());
     const seen: string[] = [];
     const req = createRxForwardReq('sen26');
@@ -729,8 +732,8 @@ describe('the defaults this design copied into its records', () => {
     ]);
     await settle();
 
-    // Only the one the REQ asked for. The other two never reach a subscriber,
-    // which is what makes `ownEvent`'s `kind` clause unreachable from a request.
+    // Only the one the REQ asked for. The other two never reach a subscriber
+    // of a client that matches.
     expect(seen).toEqual(['right-kind']);
 
     rxNostr.dispose();

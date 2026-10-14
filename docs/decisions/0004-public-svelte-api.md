@@ -1367,8 +1367,10 @@ four. So the provider takes none of it in v1, and the options that are neither d
 asked for by anybody — `connectionStrategy` and `disconnectTimeout` among them — are absent for C9's
 reason: adding a narrow option later is additive, and withdrawing one is not. **Those two used to be
 given as the whole remainder, and they are not it.** `RxNostrConfig` at 3.7.5 also carries `signer`,
-`okTimeout`, `authTimeout`, `skipValidateFilterMatching`, `skipFetchNip11` and `websocketCtor`, none
-of which the table above decides and none of which the verifier paragraph below covers.
+`okTimeout`, `authTimeout`, `skipFetchNip11` and `websocketCtor`, none of which the table above
+decides and none of which the verifier paragraph below covers. `skipValidateFilterMatching` has left
+that list the way `skipVerify` did: the provider writes it, `true`, and matches the request's
+filters itself, after the boundary that refuses a malformed event (`A-ε-C15`).
 
 **One of those is not free to leave at its default on the probe transports, and nothing observes
 it.** The scope's throwaway transports set `skipFetchNip11` deliberately: left at its default,
@@ -2271,9 +2273,13 @@ That is a true sentence about which arrivals can become evidence and not part of
 stating it here was the paraphrase the one-term-one-definition-site rule exists to stop — the same
 shape as the round in which this record defined the field without A-ε's timing clause and nothing
 could see the disagreement. It is redundant as well as out of place: an event this request's filters
-did not ask for is dropped by rx-nostr before it reaches the gate, so it never passes one. The
-provider takes three configuration options and `skipValidateFilterMatching` is not among them
-(`WR13`), so nothing here turns that check off.
+did not ask for is dropped before it reaches the gate, so it never passes one. **The check that
+drops it is this library's own**: the dependency's matcher reads the fields a filter names without
+checking them, so a relay that sent `tags: null` under a tag filter made it throw, which ended the
+subscription and lost the relay's next event. So the provider's client does not match
+(`skipValidateFilterMatching`), and the engine applies the same function to the checked copy before
+the gate counts it (`A-ε-C15`). The provider takes three configuration options (`WR13`), so a
+consumer can turn neither check off.
 
 The two-clause sentence is what a future accumulator inherits: A11 keeps the accumulation swappable,
 so the field cannot mean "this `Map` is non-empty", and an implementation that stores nothing,

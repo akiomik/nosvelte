@@ -57,6 +57,15 @@ const websocketCtor = WebSocket as unknown as IWebSocketConstructor;
  *
  * The last two are not test hygiene: they turn off behaviour that decisions are
  * written about. Pass `config` to measure under production defaults instead.
+ *
+ * **And one the other way round: this client still matches.** The provider's
+ * sets `skipValidateFilterMatching` (`A-ε-C15`) and matches the request's
+ * filters on its own checked copy, because the dependency's matcher threw on a
+ * malformed candidate under a tag or author filter. This one leaves the
+ * dependency's matching on, so an arm here meets both: what matches is matched
+ * twice, and a malformed candidate under such a filter still ends the
+ * subscription here as it did in the provider. That case is measured through
+ * the provider (`WB1`).
  */
 export interface TestRelayConfig {
   skipVerify?: boolean;

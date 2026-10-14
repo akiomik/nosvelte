@@ -573,6 +573,10 @@ export interface HarnessOverrides {
  * names the field {@link HarnessOverrides} no longer declares, since a spread
  * does not check for properties a declaration left out. That ordering is what
  * `CX15` measures, and it is the whole of what keeps the value the library's.
+ * Four are written after the spread: the EOSE timer, and the three checks the
+ * dependency would otherwise run on what a relay sends — expiry, the signature
+ * and the filters — each of which this library runs itself, behind its own
+ * boundary.
  * rx-nostr's `eoseTimeout` completes the backward observable (SEN14) and
  * defaults to 30s, so leaving it alone meant any `settleTimeoutMs` above that
  * was closed by the dependency first — with no EOSE and nothing on the wire to
@@ -581,7 +585,7 @@ export interface HarnessOverrides {
  */
 function createLiveTransport(harness: HarnessOverrides | undefined): RxNostr {
   return createRxNostr({
-    // **Before the harness spread, unlike the two below.** The library states
+    // **Before the harness spread, unlike the four below.** The library states
     // its own wait for an unanswered send rather than inheriting the
     // dependency's default, so a change upstream is not a change to `C6-C13`;
     // and it is the one value here a harness may move, because standing on the
@@ -625,7 +629,21 @@ function createLiveTransport(harness: HarnessOverrides | undefined): RxNostr {
     // defaults `verifier` to `emptyVerifier`, which throws, and `skipVerify` to
     // `false`. A provider that passed neither produced an uncaught rejection per
     // event and a backlog that waited out A-γ with nothing said (`AE8`).
-    skipVerify: true
+    skipVerify: true,
+    // **The dependency does not match events against the REQ's filters,
+    // because this library does, on its own copy.** rx-nostr matches each
+    // EVENT before delivering it, and its matcher reads the fields a filter
+    // names without checking their shape: `tags.find` for a `#t`, `pubkey`'s
+    // `startsWith` for `authors`, `id`'s for `ids`. So a relay that put
+    // `tags: null` on an EVENT under a tag filter threw inside the dependency,
+    // the subscription ended, and the relay's next event was lost — measured,
+    // `incomplete(['ended'])` where the request should have dropped the one
+    // event and settled. The boundary that refuses a malformed candidate is
+    // `ownEvent`, and a reader in front of it is exactly what it exists to
+    // remove; `referenceStream` applies the same function, `isFiltered`, to
+    // the checked copy instead (`A-ε-C15`). After the spread, for
+    // `eoseTimeout`'s reason.
+    skipValidateFilterMatching: true
   });
 }
 
