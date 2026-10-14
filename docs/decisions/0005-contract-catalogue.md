@@ -1368,7 +1368,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **351 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **94 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **250 are
+Of those, **98 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **246 are
 TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1490,10 +1490,10 @@ A-ε-C2       public        TBD
 A-ε-C3       public        TBD
 A-ε-C4       internal      test:VG1
 A-ε-C5       internal      TBD
-A-ε-C6       internal      TBD
-A-ε-C7       internal      TBD
-A-ε-C8       internal      TBD
-A-ε-C9       internal      TBD
+A-ε-C6       internal      test:DC1
+A-ε-C7       internal      test:DC2
+A-ε-C8       internal      test:DC3
+A-ε-C9       internal      test:DC4
 A-ε-C10      internal      TBD
 A-ε-C11      internal      test:VG2
 A-ε-C12      internal      TBD
@@ -2388,7 +2388,7 @@ stronger half.
 | A-ε-C4  | engine    | wire                                                                |
 | A-ε-C5  | transport | wire                                                                |
 | A-ε-C6  | engine    | wire                                                                |
-| A-ε-C7  | engine    | wire                                                                |
+| A-ε-C7  | engine    | clock wire                                                          |
 | A-ε-C8  | engine    | wire                                                                |
 | A-ε-C9  | engine    | wire                                                                |
 | A-ε-C10 | engine    | wire                                                                |
