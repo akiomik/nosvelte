@@ -3,8 +3,9 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * The mutation ledger of the drain-and-cut rows of A-ε and their landings:
- * `A-ε-C6` on `DC1`, `A-ε-C7` on `DC2`, `A-ε-C8` on `DC3` and `A-ε-C9` on
- * `DC4`. An id beginning `C<n>-` edits the library; one beginning `I-` edits
+ * `A-ε-C6` on `DC1`, `A-ε-C7` on `DC2`, `A-ε-C8` on `DC3`, `A-ε-C9` on `DC4`,
+ * `A-ε-C10` on `DC5`, `A-ε-C12` on `DC6`, `A-ε-C13` on `DC7` and `A-ε-C14` on
+ * `DC8`. An id beginning `C<n>-` edits the library; one beginning `I-` edits
  * one of the arms' own instruments. Entries ported from the spike's ledger keep
  * its id after the row's prefix; their kill sets here are measured afresh, not
  * copied.
@@ -12,6 +13,10 @@
 import type { Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
+const ENGINE = 'src/lib/v1/engine.ts';
+const EVENTSET = 'src/lib/v1/eventset.ts';
+const OWN = 'src/lib/v1/own.ts';
+const OUTLETS = 'src/lib/v1/components/RequestOutlets.svelte';
 const ARMS = 'src/tests/contracts/engine/drain.test.ts';
 /** The end of the outcome's callback, once the backlog is reported. */
 const SETTLE_END = '        if (!live || forwardEnded) finish();\n      });\n    });\n  };';
@@ -28,6 +33,11 @@ const EMPTIED = "      resolveGate(gate, 'drained');\n    };";
 /** A boundary drawn over a gate holding nothing. */
 const EMPTY_AT_THE_BOUNDARY =
   "    if (gate.holding.size === 0) {\n      resolveGate(gate, 'drained');\n      return;\n    }";
+/** A gate whose boundary is drawn admits nothing more. */
+const CLOSED_TO_ADMISSION = "    if (gate.phase !== 'open') return;\n";
+/** The same, with the late candidate handed to the verifier and then dropped. */
+const VERIFIED_AND_DROPPED =
+  "    if (gate.phase !== 'open') {\n      void Promise.resolve()\n        .then(() => verifyEvent(incoming.event as unknown as Nostr.Event))\n        .catch(() => undefined);\n      return;\n    }\n";
 /** A cut backward gate, as a cause of the outcome. */
 const CUT_IS_A_CAUSE =
   "    if (gates.backward.phase === 'cut') present.add('verification-timeout');";
@@ -35,12 +45,12 @@ const CUT_IS_A_CAUSE =
 export default {
   name: 'a-epsilon-drain',
   subject:
-    '`A-ε-C6`, `A-ε-C7`, `A-ε-C8` and `A-ε-C9` (the wait over what the gate holds, and its end): their landings, `DC1`–`DC4`',
+    '`A-ε-C6`–`A-ε-C10` and `A-ε-C12`–`A-ε-C14` (the wait over what the gate holds, and its end): their landings, `DC1`–`DC8`',
   files: [ARMS],
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that last changed the arms, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { DC1: 7, DC2: 4, DC3: 8, DC4: 9 }
+    seconds: { DC1: 7, DC2: 4, DC3: 8, DC4: 9, DC5: 4, DC6: 4, DC7: 6, DC8: 7 }
   },
   entries: [
     {
@@ -452,9 +462,305 @@ export default {
           to: 'live: false, reqIdBase: `dc4-${how}`'
         }
       ]
+    },
+    {
+      id: 'C10-the-end-waits-out-a-gate-that-has-already-answered',
+      arm: 'DC5',
+      describe:
+        'the end draws its boundary over the backward gate, which the cut has already answered, and a resolved gate can be drawn over again — a second wait, one drain floor long. Each edit alone leaves every drain arm green, measured by hand: the end over the forward gate is what the first removes, and the early exit for a resolved gate is unreachable while each leg is drawn once',
+      edits: [
+        {
+          file: MACHINE,
+          from: "      drawBoundary('forward', () => {",
+          to: "      drawBoundary('backward', () => {"
+        },
+        {
+          file: MACHINE,
+          from: "    if (gate.phase !== 'open') {\n      then();\n      return;\n    }\n",
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'C10-a-candidate-leaving-after-the-cut-rearms-the-gate',
+      arm: 'DC5',
+      describe:
+        'a candidate leaving a gate that has already answered arms a fresh deadline over it — absorbed, so the arming itself is the only trace',
+      edits: [
+        {
+          file: MACHINE,
+          from: "      if (gate.phase !== 'draining') return;\n      if (gate.holding.size > 0) {",
+          to: '      if (gate.holding.size > 0) {'
+        }
+      ]
+    },
+    {
+      id: 'C10-no-outcome',
+      arm: 'DC5',
+      describe: 'a non-live request whose wait was cut pushes no outcome',
+      edits: [
+        {
+          file: MACHINE,
+          from: SETTLE,
+          to: "      drawBoundary('backward', () => {\n        if (live) push({ type: 'settled', viaTimer });"
+        }
+      ]
+    },
+    {
+      id: 'C10-no-return-of-its-own',
+      arm: 'DC5',
+      describe: 'the generator returns only when aborted, never when its stream has ended',
+      edits: [
+        {
+          file: MACHINE,
+          from: '      if (finished || signal.aborted) return;',
+          to: '      if ((finished && signal.aborted) || signal.aborted) return;'
+        }
+      ]
+    },
+    {
+      id: 'C12-gate-stays-open-after-its-boundary',
+      arm: 'DC6',
+      describe: 'a candidate offered after the boundary is admitted into the gate',
+      edits: [{ file: MACHINE, from: CLOSED_TO_ADMISSION, to: '' }]
+    },
+    {
+      id: 'C12-late-candidate-verified-and-dropped',
+      arm: 'DC6',
+      describe:
+        'a candidate offered after the boundary is handed to the verifier and then dropped, joining no gate: nothing delivered changes and no wait is extended, so only the arrivals see it',
+      edits: [{ file: MACHINE, from: CLOSED_TO_ADMISSION, to: VERIFIED_AND_DROPPED }]
+    },
+    {
+      id: 'C12-drained-gate-is-a-cause',
+      arm: 'DC6',
+      describe: 'a backward gate that drained cleanly is still reported as `verification-timeout`',
+      edits: [
+        {
+          file: MACHINE,
+          from: CUT_IS_A_CAUSE,
+          to: "    if (gates.backward.phase !== 'open') present.add('verification-timeout');"
+        }
+      ]
+    },
+    {
+      id: 'C12-drain-bound-is-a-fixed-total',
+      arm: 'DC6',
+      describe:
+        'the wait after the timer boundary is a fixed 100ms, so the candidate it was holding is cut before it is answered',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const believed = Math.min(gate.slowestVerifyMs, VERIFY_DRAIN_FLOOR_MS);\n    const cap = Math.max(VERIFY_DRAIN_FLOOR_MS, Math.ceil(believed * VERIFY_DRAIN_SAFETY));',
+          to: '    void VERIFY_DRAIN_SAFETY;\n    const cap = 100;'
+        }
+      ]
+    },
+    {
+      id: 'C13-nothing-found-becomes-unreachable',
+      arm: 'DC7',
+      describe: 'every settled answer reports match evidence, so `nodata` is never chosen',
+      edits: [
+        {
+          file: ENGINE,
+          from: 'hasMatchEvidence: observed.data.entries.size > 0',
+          to: 'hasMatchEvidence: true'
+        }
+      ]
+    },
+    {
+      id: 'C13-forward-cut-publishes-the-discard',
+      arm: 'DC7',
+      describe: "the forward leg's end names how many candidates its gate was holding",
+      edits: [
+        {
+          file: MACHINE,
+          from: "          `every relay in scope stopped the live request: ${[...targets.keys()].join(', ')}`",
+          to: "          `every relay in scope stopped the live request: ${[...targets.keys()].join(', ')} (discarded ${gates.forward.holding.size})`"
+        }
+      ]
+    },
+    {
+      id: 'C13-discard-in-a-nested-field',
+      arm: 'DC7',
+      describe:
+        "the forward leg's end carries the discard in its error's `cause`, with its own name and message unchanged",
+      edits: [
+        {
+          file: OWN,
+          from: "export function relayFailure(message: string): RelayLegError {\n  const said = boundedMessage(message);\n  return snapshot({\n    thrownName: 'RelayFailure',\n    message: said.text,\n    source: 'relay',\n    truncated: said.truncated,\n    cause: undefined\n  });",
+          to: "export function relayFailure(message: string, discarded = 0): RelayLegError {\n  const said = boundedMessage(message);\n  return snapshot({\n    thrownName: 'RelayFailure',\n    message: said.text,\n    source: 'relay',\n    truncated: said.truncated,\n    cause: discarded > 0 ? relayFailure(`discarded ${String(discarded)}`) : undefined\n  });"
+        },
+        {
+          file: MACHINE,
+          from: "          `every relay in scope stopped the live request: ${[...targets.keys()].join(', ')}`\n        )",
+          to: "          `every relay in scope stopped the live request: ${[...targets.keys()].join(', ')}`,\n          gates.forward.holding.size\n        )"
+        }
+      ]
+    },
+    {
+      id: 'C13-leg-end-unpublished',
+      arm: 'DC7',
+      describe: "the forward leg's end is never pushed, so no run publishes it",
+      edits: [
+        {
+          file: MACHINE,
+          from: "    forwardEnded = true;\n    push({\n      type: 'legEnded',",
+          to: "    forwardEnded = true;\n    if (reason === null)\n      push({\n      type: 'legEnded',"
+        }
+      ]
+    },
+    {
+      id: 'C13-nodata-not-rendered',
+      arm: 'DC7',
+      describe: 'a list renders its events outlet over an empty answer that found nothing',
+      edits: [
+        {
+          file: OUTLETS,
+          from: "  {#if outlet.slot === 'nodata'}",
+          to: "  {#if outlet.slot === 'nodata' && shown.length > 0}"
+        }
+      ]
+    },
+    {
+      id: 'C14-timer-firing-is-not-a-cause',
+      arm: 'DC8',
+      describe:
+        'the settle timer drawing the boundary is not itself a cause — seen only where the EOSE has determined every target',
+      edits: [
+        {
+          file: MACHINE,
+          from: "    if (viaTimer) present.add('timeout');\n",
+          to: '    void viaTimer;\n'
+        }
+      ]
+    },
+    {
+      id: 'C14-a-cut-backward-gate-is-not-a-cause',
+      arm: 'DC8',
+      describe: 'a cut backward gate is not a cause of the outcome',
+      edits: [{ file: MACHINE, from: CUT_IS_A_CAUSE, to: '    void gates;' }]
+    },
+    {
+      id: 'C14-causes-out-of-canonical-order',
+      arm: 'DC8',
+      describe: '`verification-timeout` is ranked ahead of `timeout`',
+      edits: [
+        {
+          file: EVENTSET,
+          from: "  timeout: 1,\n  'verification-timeout': 2,",
+          to: "  timeout: 2,\n  'verification-timeout': 1,"
+        }
+      ]
+    },
+    {
+      id: 'C14-gate-stays-open-after-its-boundary',
+      arm: 'DC8',
+      describe: 'a candidate offered after the boundary is admitted into the gate',
+      edits: [{ file: MACHINE, from: CLOSED_TO_ADMISSION, to: '' }]
+    },
+    {
+      id: 'C14-late-candidate-verified-and-dropped',
+      arm: 'DC8',
+      describe:
+        'a candidate offered after the boundary is handed to the verifier and then dropped, joining no gate',
+      edits: [{ file: MACHINE, from: CLOSED_TO_ADMISSION, to: VERIFIED_AND_DROPPED }]
+    },
+    {
+      id: 'C14-cut-does-not-discard-what-it-gave-up-on',
+      arm: 'DC8',
+      describe:
+        'a candidate inside the gate at the cut is delivered when its verification passes later',
+      edits: [
+        {
+          file: MACHINE,
+          from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;\n",
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'I-dc5-recorder-blind',
+      arm: 'DC5',
+      describe:
+        'the deadline recorder records nothing, so an empty list after the release is no longer absorption — killed on its positive control, the deadline at the boundary',
+      edits: [
+        {
+          file: ARMS,
+          from: '          if ((ms ?? 0) >= 1000 && (ms ?? 0) <= 4000) armed.push(ms ?? 0);',
+          to: '          if ((ms ?? 0) < 0) armed.push(ms ?? 0);'
+        }
+      ]
+    },
+    {
+      id: 'I-dc5-one-candidate-only',
+      arm: 'DC5',
+      describe:
+        'the second run admits one candidate, so nothing is left in the gate to re-arm it when that one leaves',
+      edits: [
+        {
+          file: ARMS,
+          from: "await run('dc5b', ['first', 'second'], 'first')",
+          to: "await run('dc5b', ['first'], 'first')"
+        }
+      ]
+    },
+    {
+      id: 'I-dc6-late-offer-before-the-boundary',
+      arm: 'DC6',
+      describe:
+        'the second event is offered before the timer has drawn the boundary, so it is admitted as it should be',
+      edits: [
+        {
+          file: ARMS,
+          from: '      await delay(250);\n      const openAtTheLateOffer',
+          to: '      const openAtTheLateOffer'
+        }
+      ]
+    },
+    {
+      id: 'I-dc7-released-before-the-stream-ended',
+      arm: 'DC7',
+      describe:
+        'the held candidate is answered before the socket dies, so it is verified and delivered rather than cut',
+      edits: [
+        {
+          file: ARMS,
+          from: "        server.error({ code: 1006, reason: 'gone', wasClean: false });",
+          to: "        if (arm === 'discarded') await gate.release('discarded');\n        server.error({ code: 1006, reason: 'gone', wasClean: false });"
+        }
+      ]
+    },
+    {
+      id: 'I-dc8-late-offer-before-the-boundary',
+      arm: 'DC8',
+      describe:
+        'the late event is offered before the timer has drawn the boundary, so it is admitted as it should be',
+      edits: [
+        {
+          file: ARMS,
+          from: '        await delay(400);\n        const openAtTheLateOffer',
+          to: '        const openAtTheLateOffer'
+        }
+      ]
     }
   ],
   retired: [
+    {
+      id: 'C13-cut-does-not-discard-what-it-gave-up-on',
+      arm: 'DC7',
+      describe:
+        'a candidate inside the forward gate at the cut is delivered when its verification passes later',
+      reason:
+        "No entrance through this row's arrangement, measured: it survived `DC7`. The forward gate is cut only by the stream's end, the cut pushes that end in the same callback, and the generator returns once it has read it — so a candidate that passes afterwards is pushed into a queue nobody reads, discarded or not. The discard is the backward gate's to measure, which `C9-cut-does-not-discard-what-it-gave-up-on` and `C14-cut-does-not-discard-what-it-gave-up-on` do.",
+      edits: [
+        {
+          file: MACHINE,
+          from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;\n",
+          to: ''
+        }
+      ]
+    },
     {
       id: 'an-empty-gate-at-the-deadline-is-reported-as-cut',
       arm: 'DC1',
