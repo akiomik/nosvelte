@@ -2115,7 +2115,12 @@ was holding — admitted and not yet decided — at the moment an EOSE, a refusa
 state or A-γ's timer decided it, and the stream's end waits for the forward leg's. `AE14` states the
 consequence as an equality rather than as a wait — the backlog answers the same thing however the
 two legs interleave, the order where the forward leg has not finished at all included — because a
-shorter wait and an independent one are not the same claim.
+shorter wait and an independent one are not the same claim. **Independent of the other leg's order
+and history, not of the verifier's queue.** The backlog waits on its own candidates' answers, and a
+verifier that answers both legs' candidates through one queue answers the backward one later while
+the forward leg is busy; the backlog then answers a slower verification of its own candidate, which
+is the verifier's dependence on load rather than the machine's on the other leg. `A-ε-C8`'s arms use
+verifiers that answer each candidate on its own, and say so.
 
 **The bound over that boundary is measured, and the measurement is per leg for the same reason the
 boundary is.** What a draining gate waits under is the slowest verification _that leg_ has seen
@@ -2127,13 +2132,14 @@ and both boundaries read it, so one leg's history set the other's deadline. `A-�
 pair that measures it — the same backward event, the same EOSE and the same verifier, differing only
 in whether one forward event had been verified first — because separating the phases and sharing the
 estimate leaves the outcome exactly as coupled as before, and the row claims the backlog answers on
-its own leg alone.
+its own leg's verifications alone.
 
 **The bound itself is A-ζ's and the independence it buys is this one's**, which is the division the
 split below draws. What number a stopped gate is waited under — where it comes from, what clamps it,
 and that no caller supplies it — is decided under A-ζ. That the backlog's answer is a function of
-its own leg alone is decided here, and `A-ε-C8` is what measures it. The two met in one place while
-one estimate served both gates, and that is exactly why the estimate had to move onto the gate.
+its own leg's verifications alone is decided here, and `A-ε-C8` is what measures it. The two met in
+one place while one estimate served both gates, and that is exactly why the estimate had to move
+onto the gate.
 
 **What that pair does not reach, recorded as residue rather than as coverage.** It runs one
 direction: a forward verification's cost deciding the backward gate's cutoff, observed as a backlog
