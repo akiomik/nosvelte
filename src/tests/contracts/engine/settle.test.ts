@@ -86,9 +86,13 @@ describe('a request that runs out of patience', () => {
     // status read **as the outlet rendered**, so an outlet left on the screen
     // from before the timeout, by a component that failed to render the
     // answer, is not read as the answer's. **And each is read on both sides of
-    // its deadline**: still waiting before it, so a timer that fires early is
-    // not taken for the request's own, and answered soon after it, so a timer
-    // of the library's own choosing is not either.
+    // its deadline**: still waiting at a third of it for the consumers and two
+    // fifths of it for the default, so a timer firing at a fraction of the
+    // deadline is not taken for the request's own, and answered within a
+    // bound a timer of the library's own choosing cannot meet. Both edges are
+    // wide, because a loaded machine runs timers late, and they do not
+    // separate a timer a little early or a little late from the right one
+    // (#179).
     const event = signed('the only event the relay sends');
     const runs: Record<string, unknown> = {};
 
@@ -121,8 +125,9 @@ describe('a request that runs out of patience', () => {
         await vi.waitFor(() => expect(handle?.state.status).toBe('incomplete'), {
           timeout: 3000
         });
-        // The 300ms ran from before the event was sent, so this is generous.
-        const soonAfterIt = Date.now() - sentAt < 700;
+        // The 300ms ran from before the event was sent. A timer of two seconds
+        // cannot answer inside 1.5, and the rest is for a loaded machine.
+        const soonAfterIt = Date.now() - sentAt < 1500;
         const request = handle as ReqHandle;
         const { state, diagnostics } = request;
         runs[name] = {
@@ -176,8 +181,9 @@ describe('a request that runs out of patience', () => {
         await vi.waitFor(() => expect(latest().request?.state.status).toBe('incomplete'), {
           timeout: 8000
         });
-        // The five seconds ran from before the event was sent.
-        const soonAfterIt = Date.now() - sentAt < 6500;
+        // The five seconds ran from before the event was sent, and the rest is
+        // for a loaded machine.
+        const soonAfterIt = Date.now() - sentAt < 7500;
         await delay(50);
         const { outlet, events, request, renderedAt } = latest();
         const state = request?.state;

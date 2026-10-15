@@ -84,14 +84,14 @@ const typeErrors = (module: string, type: string, literal: string): string[] =>
   ]);
 
 /**
- * A call to the provider's factory with `harness` written as `literal`: the
+ * A call to the provider's factory with `extra` written among its options: the
  * input itself, so a widening at the parameter is read however the named
- * interface stands.
+ * interface stands — the timer as an option of its own, or inside `harness`.
  */
-const callErrors = (literal: string): string[] =>
+const callErrors = (extra: string): string[] =>
   refusals([
     "import { createNostrContext } from '$lib/v1/context.svelte.js';",
-    `export const build = () => createNostrContext({ relays: ['wss://a.example'], harness: ${literal} });`
+    `export const build = () => createNostrContext({ relays: ['wss://a.example'], ${extra} });`
   ]);
 
 describe('A-γ: the provider owns the upstream EOSE timer', () => {
@@ -106,10 +106,11 @@ describe('A-γ: the provider owns the upstream EOSE timer', () => {
     // so the request's timer always ends the backlog first — **with no harness
     // at all**, as the published `NostrApp` builds its provider, and with one.
     // A harness that names a timer anyway — past the type, as a JavaScript
-    // caller would — does not win. And no type a caller writes names it: the
-    // internal harness, as its interface and as the factory's parameter takes
-    // it, and the props of the published `NostrApp`, whose `$props()` is read
-    // off the component to be the outlet type asked about.
+    // caller would — does not win. And no type a caller writes at the provider
+    // names it: the internal harness as its interface, the factory's options
+    // and the harness inside them as a caller's call meets them, and the props
+    // of the published `NostrApp`, whose `$props()` is read off the component
+    // to be the outlet type asked about.
     // Each is asked of the compiler from here, with a value the type accepts as
     // the control, because a `@ts-expect-error` in this file is read by
     // `npm run check` and not by this arm.
@@ -148,8 +149,9 @@ describe('A-γ: the provider owns the upstream EOSE timer', () => {
     observed['typeErrors'] = {
       harnessNamesTheTimer: typeErrors(...harness, '{ eoseTimeout: 20 }'),
       harnessControl: typeErrors(...harness, '{ okTimeout: 20 }'),
-      theFactoryNamesTheTimer: callErrors('{ eoseTimeout: 20 }'),
-      theFactoryControl: callErrors('{ okTimeout: 20 }'),
+      theFactoryNamesTheTimer: callErrors('eoseTimeout: 20'),
+      theFactorysHarnessNamesTheTimer: callErrors('harness: { eoseTimeout: 20 }'),
+      theFactoryControl: callErrors('harness: { okTimeout: 20 }'),
       theProvidersPropsAre: propsTypeOf(
         readFileSync(resolve(process.cwd(), 'src/lib/v1/components/NostrApp.svelte'), 'utf8')
       ),
@@ -166,6 +168,7 @@ describe('A-γ: the provider owns the upstream EOSE timer', () => {
         harnessNamesTheTimer: ['excess property eoseTimeout'],
         harnessControl: [],
         theFactoryNamesTheTimer: ['excess property eoseTimeout'],
+        theFactorysHarnessNamesTheTimer: ['excess property eoseTimeout'],
         theFactoryControl: [],
         theProvidersPropsAre: 'NostrAppProps',
         propsNameTheTimer: ['excess property eoseTimeout'],

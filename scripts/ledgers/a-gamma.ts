@@ -56,7 +56,7 @@ export default {
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 4, TC2: 4, DC9: 13 }
+    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 5, TC2: 4, DC9: 13 }
   },
   entries: [
     {
@@ -511,6 +511,55 @@ export default {
           file: MACHINE,
           from: DRAIN_SAFETY,
           to: `${DRAIN_SAFETY}\nlet DEFAULT_SETTLE_TIMEOUT_MS = 5_000;\nvoid DEFAULT_SETTLE_TIMEOUT_MS;`
+        }
+      ]
+    },
+    {
+      id: 'C4-the-factory-options-name-the-timer',
+      arm: 'TC1',
+      describe:
+        "the provider's factory takes an EOSE timer as an option of its own, beside the harness",
+      edits: [
+        {
+          file: CONTEXT,
+          from: '  harness?: HarnessOverrides;\n',
+          to: '  harness?: HarnessOverrides;\n  eoseTimeout?: number;\n'
+        }
+      ]
+    },
+    {
+      id: 'C5-an-indirect-alias-export',
+      arm: 'WI29',
+      describe: 'the engine binds the default to a local of its own and exports that',
+      edits: [
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nconst handedDefault = DEFAULT_SETTLE_TIMEOUT_MS;\nexport { handedDefault as ENGINE_SETTLE_DEFAULT };`
+        }
+      ]
+    },
+    {
+      id: 'C5-a-namespace-re-export',
+      arm: 'WI29',
+      describe: "the engine re-exports the normalizer's namespace, the default among it",
+      edits: [
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nexport * as defaults from './normalize.js';`
+        }
+      ]
+    },
+    {
+      id: 'C5-a-parenthesized-default-export',
+      arm: 'WI29',
+      describe: 'the engine makes the default its own default export, in parentheses',
+      edits: [
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nexport default (DEFAULT_SETTLE_TIMEOUT_MS);`
         }
       ]
     },
