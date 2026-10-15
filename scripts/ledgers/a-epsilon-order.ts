@@ -184,8 +184,8 @@ export default {
       edits: [
         {
           file: ARMS,
-          from: "        await vi.waitFor(() => expect(shape()).toContain('settled'), { timeout: 3000 });\n",
-          to: ''
+          from: "          respondWithEose(server, backward);\n          await vi.waitFor(() => expect(shape()).toContain('settled'), { timeout: 3000 });\n        }\n        const beforeTheBatch",
+          to: '          respondWithEose(server, backward);\n        }\n        const beforeTheBatch'
         }
       ]
     },
@@ -241,7 +241,7 @@ export default {
       id: 'I-or1-the-refusal-for-another-subscription',
       arm: 'OR1',
       describe:
-        "the backlog's refusal is sent for another request's subscription, so nothing ends this backlog before its timer — killed where the arm reads the outcome, which shows the arm's refusal reaches the subscription it names. Not `<the backlog's id>-not`: the machine attributes a subscription by its request's prefix, so that spelling is still this backlog's refusal (measured), which gives a relay nothing it lacks — it can refuse its own subscription",
+        "the backlog's refusal is sent under a subId with another request's prefix, which the machine attributes to no leg — so where the refusal was the backlog's only end nothing ends it before its timer, and where an EOSE came in the same turn the EOSE ends it as `complete`; both runs read the wrong outcome. It shows the arm's refusal is attributed by the request's prefix it carries: `<the backlog's id>-not` keeps that prefix and is still this backlog's refusal (measured), which gives a relay nothing it lacks, since it can refuse its own subscription",
       edits: [
         {
           file: ARMS,
@@ -275,15 +275,12 @@ export default {
           to: "        await delay(400);\n        const waitingAtTheRefresh = one.request().state.status === 'loading';"
         }
       ]
-    }
-  ],
-  retired: [
+    },
     {
       id: 'C5-the-candidate-discarded-as-the-end-is-decided',
       arm: 'OR3',
-      describe: 'the forward candidates are marked discarded the moment the end is decided',
-      reason:
-        "No entrance through this row, by its own words: measured surviving `OR3`, in both its runs. When the forward leg's end sets `ending`, the event the relay sent in the same batch is still in the dependency's routing rather than in the gate, so there is nothing yet to mark; it enters the gate before the boundary is drawn a microtask later. `A-ε-C5` says in words that it does not claim where the candidate was at that instant, so an implementation that discards at the decision and still delivers this event satisfies it, and one that discarded later is what `C5-a-late-verdict-is-dropped` catches.",
+      describe:
+        "the forward candidates are marked discarded the moment the end is decided — invisible where the forward leg's end decides it, since the event is then still in the dependency's routing, and caught where the backlog's EOSE decides it after the event was admitted",
       edits: [
         {
           file: MACHINE,

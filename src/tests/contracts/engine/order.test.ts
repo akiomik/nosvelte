@@ -319,29 +319,38 @@ describe('what reaches a consumer around the end of a stream', () => {
 
   // @contracts A-ε-C5
   it('OR3: an event the relay sent before the end was decided is delivered, when its verdict comes inside the wait', async () => {
-    // **Live, with the backlog settled first, read rather than slept for**,
-    // then an EVENT and the forward leg's `CLOSED` in one batch. What is
+    // **Live, with an EVENT and the forward leg's `CLOSED` in one batch.** What is
     // asserted is membership: the row says the consumer receives the event,
     // and says in words that it does not say where the candidate was when the
     // end was decided, nor in what order the chunks arrive.
     //
-    // **Twice: a verifier that answers at once, and one that answers only once
-    // the forward leg's end has been published** — inside the wait, but after
-    // anything the end could have done in the turn that decided it. The Given
-    // is any verdict that comes before the wait ends, and the second is the one
-    // a discard that waited a task would reach. **And the stream is read to
+    // **Three runs.** The backlog settled first — read rather than slept for —
+    // and a verifier that answers at once; the same with a verifier that
+    // answers only once the forward leg's end has been published, inside the
+    // wait but after anything the end could have done in the turn that decided
+    // it, which is what a discard that waited a task would reach; and the
+    // backlog still waiting when the batch arrives, so that the end is decided
+    // only when its EOSE comes, with the candidate already held. The Given is
+    // any verdict before the wait ends, whichever way the end comes to be
+    // decided. **And the stream is read to
     // have ended**: a leg's end is published whether or not the end of the
     // stream follows, so the arm records which of the two finished first, the
     // stream or a two-second bound.
     //
     // **Where the candidate is on this tree, as a note beside the witness**:
-    // when the forward leg's end sets `ending` the event is not yet in the
-    // gate — it is still in the dependency's routing — and it is in the gate
-    // when the boundary is drawn a microtask later. So a discard at the moment
-    // `ending` is set survives this arm (measured), and nothing in the row asks
-    // it not to. A forward leg ended by a dead socket rather than a `CLOSED` is
+    // in the first two runs, when the forward leg's end sets `ending` the event
+    // is not yet in the gate — it is still in the dependency's routing — and it
+    // is in the gate when the boundary is drawn a microtask later. In the third
+    // the end is decided after the event has been admitted. So a discard at the
+    // moment `ending` is set survives the first two (measured) and fails the
+    // third. A forward leg ended by a dead socket rather than a `CLOSED` is
     // `DC7`'s third run.
-    const run = async (reqIdBase: string, answersLate: boolean): Promise<unknown> => {
+    const run = async (
+      reqIdBase: string,
+      verdict: 'atOnce' | 'late',
+      backlog: 'settledFirst' | 'stillWaiting'
+    ): Promise<unknown> => {
+      const answersLate = verdict === 'late';
       const url = nextUrl();
       const { rxNostr, server } = createTestRelay(url);
       const transport = permanentTransport(rxNostr);
@@ -389,8 +398,10 @@ describe('what reaches a consumer around the end of a stream', () => {
         );
         const backward = ids.find((id) => id.includes('-b:')) as string;
         const forward = ids.find((id) => id.includes('-f:')) as string;
-        respondWithEose(server, backward);
-        await vi.waitFor(() => expect(shape()).toContain('settled'), { timeout: 3000 });
+        if (backlog === 'settledFirst') {
+          respondWithEose(server, backward);
+          await vi.waitFor(() => expect(shape()).toContain('settled'), { timeout: 3000 });
+        }
         const beforeTheBatch = shape();
         server.send(['EVENT', forward, fakeEvent({ content: 'in the batch' })]);
         server.send(['CLOSED', forward, 'blocked: done']);
@@ -401,6 +412,11 @@ describe('what reaches a consumer around the end of a stream', () => {
           await vi.waitFor(() => expect(handed > 0 && shape().includes('legEnded')).toBe(true), {
             timeout: 2000
           });
+          if (backlog === 'stillWaiting') {
+            // Now the backlog answers, and that decides the end.
+            respondWithEose(server, backward);
+            await vi.waitFor(() => expect(shape()).toContain('settled'), { timeout: 3000 });
+          }
           heldInTheWait = !shape().includes('event:in the batch');
           await delay(20);
           answer(true);
@@ -424,10 +440,11 @@ describe('what reaches a consumer around the end of a stream', () => {
         rxNostr.dispose();
       }
     };
-    const atOnce = await run('or3', false);
-    const insideTheWait = await run('or3-late', true);
+    const atOnce = await run('or3', 'atOnce', 'settledFirst');
+    const insideTheWait = await run('or3-late', 'late', 'settledFirst');
+    const decidedByTheBacklog = await run('or3-pending', 'late', 'stillWaiting');
     expect(
-      { atOnce, insideTheWait },
+      { atOnce, insideTheWait, decidedByTheBacklog },
       'the event the relay sent before the end is delivered, whenever inside the wait its verdict comes'
     ).toEqual({
       atOnce: {
@@ -439,6 +456,13 @@ describe('what reaches a consumer around the end of a stream', () => {
       },
       insideTheWait: {
         beforeTheBatch: ['settled'],
+        heldInTheWait: true,
+        theStreamEnded: true,
+        theForwardLegEnded: true,
+        delivered: true
+      },
+      decidedByTheBacklog: {
+        beforeTheBatch: [],
         heldInTheWait: true,
         theStreamEnded: true,
         theForwardLegEnded: true,
