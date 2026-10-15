@@ -4,9 +4,10 @@
    * @copyright 2023 Akiomi Kamakura
    *
    * A consumer's own request, handed back to the test, and read by an effect
-   * every time it publishes — so a test can take what the handle said at the
-   * moment it said it, rather than what it says by the time the test looks.
-   * The effect tracks whatever `published` reads.
+   * every time it publishes — so a test can take what the handle said as of
+   * the Svelte flush in which it said it, rather than what it says by the time
+   * the test looks. Two writes inside one flush read as one. The effect tracks
+   * whatever `published` reads.
    */
   import { type ReqHandle, type ReqPlan, useReq } from '$lib/v1/index.js';
 

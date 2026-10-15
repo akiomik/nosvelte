@@ -8,16 +8,18 @@
  * **`OR1` and `OR2` go through the published entry and nothing else**, because
  * their rows' route is `public`: `NostrApp` with `relays` only, so the verifier
  * is the one the library supplies, a consumer's own `useReq` under it, and
- * what a relay puts on the wire. Each reads the handle twice — at the moment it
- * first published an outcome, through an effect (`WatchedRequest`), and once
- * the test has waited — because "reflected first" is a claim about the first.
- * **`OR3` drives `referenceStream`**, because its row is `internal`: what it
- * arranges is a verifier that answers at once.
+ * what a relay puts on the wire. `OR1` reads the handle twice — as of the
+ * Svelte flush in which it first published an outcome, through an effect
+ * (`WatchedRequest`), or on a refresh in the continuation of the promise it
+ * returned; and once the test has waited — because "reflected first" is a
+ * claim about the first. **`OR3` drives `referenceStream`**, because its row is
+ * `internal`: what it arranges is how the verifier answers.
  *
  * `A-ε-C3` is not here. Its Given needs a consumer that has not asked for the
  * next chunk, and the published entry's only consumer folds each chunk and
- * asks for the next in the same turn, so no public arrangement reaches the
- * window — measured on the two that might, and recorded as a phase-1 route
+ * asks for the next in the same turn. No public arrangement measured separates
+ * a producer released with the decision from one released when the consumer
+ * next asks, which is the row's subject; it is recorded as a phase-1 route
  * error to reopen (#175).
  *
  * Port band 9480-9499.
@@ -123,7 +125,9 @@ describe('what reaches a consumer around the end of a stream', () => {
     // returned, attached before the refusal is sent — as well as the one the
     // test reads once it has waited. An outcome reported `complete` because
     // the marker overtook its refusal, and a `refused` one whose refusal was
-    // not yet in the diagnostics, both fail the first.
+    // not yet in the diagnostics, both fail the first. **Exactly `['refused']`**:
+    // a `timeout` beside it is a cause this attempt does not have, which is
+    // what an outcome derived before its refusal reached the table reports.
     const nonLive: ReqPlan = {
       kind: 'request',
       descriptor: { filters: [{ kinds: [1] }], settleTimeoutMs: 2000 }
@@ -224,8 +228,10 @@ describe('what reaches a consumer around the end of a stream', () => {
     // started**, whose own forward subscription is the one refused — a
     // refusal of the first attempt's, followed by a refresh, would be
     // measuring another attempt. In both the relay never answers the backlog,
-    // so what ends the wait is the request's own timer, and the answer says
-    // so: `timeout` alone, not `complete` and not the forward leg's refusal.
+    // and the answer is `timeout` alone — not `complete`, not `ended`, and not
+    // the forward leg's refusal. Which of the two sources of that word ended
+    // the wait, the request's timer or the relay left undetermined, is not
+    // separated here: both say it (`A5-C16` is where the timer's is measured).
     const live: ReqPlan = {
       kind: 'request',
       descriptor: {
@@ -248,10 +254,13 @@ describe('what reaches a consumer around the end of a stream', () => {
       const one = published(live);
       try {
         const forward = await one.subId('f');
+        // The backlog is still waiting when the forward leg ends.
+        const waitingAtTheRefusal = ['loading', 'streaming'].includes(one.request().state.status);
         one.relay.send(['CLOSED', forward, 'blocked: theFirstAttempt']);
         await vi.waitFor(() => expect(one.request().activity).toBe('idle'), { timeout: 3000 });
         const outcome = firstOutcome(one.snapshots);
         runs['theFirstAttempt'] = {
+          waitingAtTheRefusal,
           anOutcome: outcome?.status,
           afterwards: snapshotOf(one.request())
         };
@@ -267,17 +276,25 @@ describe('what reaches a consumer around the end of a stream', () => {
       try {
         const backward = await one.subId('b');
         const forward = await one.subId('f');
-        // While the first attempt is still waiting on its backlog.
+        // While the first attempt is still waiting on its backlog, read rather
+        // than assumed.
+        const waitingAtTheRefresh = one.request().state.status === 'loading';
         const running = one.request().refresh();
         const againForward = await one.subId('f', [forward]);
         await one.subId('b', [backward]);
+        const waitingAtTheRefusal = ['loading', 'streaming'].includes(one.request().state.status);
         one.relay.send(['CLOSED', againForward, 'blocked: aRefreshedAttempt']);
         const outcome = await Promise.race([
           running,
           delay(3000).then(() => 'no outcome' as const)
         ]);
         await vi.waitFor(() => expect(one.request().activity).toBe('idle'), { timeout: 3000 });
-        runs['aRefreshedAttempt'] = { outcome, afterwards: snapshotOf(one.request()) };
+        runs['aRefreshedAttempt'] = {
+          waitingAtTheRefresh,
+          waitingAtTheRefusal,
+          outcome,
+          afterwards: snapshotOf(one.request())
+        };
       } catch (error) {
         runs['aRefreshedAttempt'] = failed(error);
       } finally {
@@ -287,10 +304,13 @@ describe('what reaches a consumer around the end of a stream', () => {
 
     expect(runs, 'an outcome, and it says the request stopped waiting').toEqual({
       theFirstAttempt: {
+        waitingAtTheRefusal: true,
         anOutcome: 'incomplete',
         afterwards: stoppedWaiting('theFirstAttempt')
       },
       aRefreshedAttempt: {
+        waitingAtTheRefresh: true,
+        waitingAtTheRefusal: true,
         outcome: { kind: 'incomplete', causes: ['timeout'] },
         afterwards: stoppedWaiting('aRefreshedAttempt')
       }
@@ -300,71 +320,130 @@ describe('what reaches a consumer around the end of a stream', () => {
   // @contracts A-ε-C5
   it('OR3: an event the relay sent before the end was decided is delivered, when its verdict comes inside the wait', async () => {
     // **Live, with the backlog settled first, read rather than slept for**,
-    // then an EVENT and the forward leg's `CLOSED` in one batch, under a
-    // verifier that answers at once. What is asserted is membership: the row
-    // says the consumer receives the event, and says in words that it does not
-    // say where the candidate was when the end was decided, nor in what order
-    // the chunks arrive.
-    const url = nextUrl();
-    const { rxNostr, server } = createTestRelay(url);
-    const transport = permanentTransport(rxNostr);
-    const scope = createRelayScope(rxNostr, [url]);
-    const ac = new AbortController();
-    const chunks: MachineChunk[] = [];
-    const done = (async () => {
-      for await (const chunk of referenceStream({
-        transport,
-        targets: requestTargets(transport, scope.current),
-        filters: [{ kinds: [1] }],
-        live: true,
-        reqIdBase: 'or3',
-        signal: ac.signal,
-        timeoutMs: 2000,
-        verifyEvent: acceptAnyEvent
-      })) {
-        chunks.push(chunk);
+    // then an EVENT and the forward leg's `CLOSED` in one batch. What is
+    // asserted is membership: the row says the consumer receives the event,
+    // and says in words that it does not say where the candidate was when the
+    // end was decided, nor in what order the chunks arrive.
+    //
+    // **Twice: a verifier that answers at once, and one that answers only once
+    // the forward leg's end has been published** — inside the wait, but after
+    // anything the end could have done in the turn that decided it. The Given
+    // is any verdict that comes before the wait ends, and the second is the one
+    // a discard that waited a task would reach. **And the stream is read to
+    // have ended**: a leg's end is published whether or not the end of the
+    // stream follows, so the arm records which of the two finished first, the
+    // stream or a two-second bound.
+    //
+    // **Where the candidate is on this tree, as a note beside the witness**:
+    // when the forward leg's end sets `ending` the event is not yet in the
+    // gate — it is still in the dependency's routing — and it is in the gate
+    // when the boundary is drawn a microtask later. So a discard at the moment
+    // `ending` is set survives this arm (measured), and nothing in the row asks
+    // it not to. A forward leg ended by a dead socket rather than a `CLOSED` is
+    // `DC7`'s third run.
+    const run = async (reqIdBase: string, answersLate: boolean): Promise<unknown> => {
+      const url = nextUrl();
+      const { rxNostr, server } = createTestRelay(url);
+      const transport = permanentTransport(rxNostr);
+      const scope = createRelayScope(rxNostr, [url]);
+      const ac = new AbortController();
+      const chunks: MachineChunk[] = [];
+      let handed = 0;
+      let answer: (ok: boolean) => void = () => {};
+      const verifyEvent = answersLate
+        ? () => {
+            handed += 1;
+            return new Promise<boolean>((resolve) => {
+              answer = resolve;
+            });
+          }
+        : acceptAnyEvent;
+      const done = (async () => {
+        for await (const chunk of referenceStream({
+          transport,
+          targets: requestTargets(transport, scope.current),
+          filters: [{ kinds: [1] }],
+          live: true,
+          reqIdBase,
+          signal: ac.signal,
+          timeoutMs: 2000,
+          verifyEvent
+        })) {
+          chunks.push(chunk);
+        }
+      })();
+      const shape = () =>
+        chunks.map((chunk) =>
+          chunk.type === 'event' ? `event:${chunk.packet.event.content}` : chunk.type
+        );
+      try {
+        let ids: string[] = [];
+        await vi.waitFor(
+          () => {
+            ids = (server.messages as unknown[][])
+              .filter((frame) => frame[0] === 'REQ')
+              .map((frame) => String(frame[1]));
+            expect(ids, 'the relay was asked for both legs').toHaveLength(2);
+          },
+          { timeout: 3000 }
+        );
+        const backward = ids.find((id) => id.includes('-b:')) as string;
+        const forward = ids.find((id) => id.includes('-f:')) as string;
+        respondWithEose(server, backward);
+        await vi.waitFor(() => expect(shape()).toContain('settled'), { timeout: 3000 });
+        const beforeTheBatch = shape();
+        server.send(['EVENT', forward, fakeEvent({ content: 'in the batch' })]);
+        server.send(['CLOSED', forward, 'blocked: done']);
+        let heldInTheWait: boolean | undefined;
+        if (answersLate) {
+          // The verifier has the event and the leg's end is out; then, and
+          // only then, the verdict.
+          await vi.waitFor(() => expect(handed > 0 && shape().includes('legEnded')).toBe(true), {
+            timeout: 2000
+          });
+          heldInTheWait = !shape().includes('event:in the batch');
+          await delay(20);
+          answer(true);
+        }
+        const theStreamEnded = await Promise.race([
+          done.then(() => true),
+          delay(2000).then(() => false)
+        ]);
+        return {
+          beforeTheBatch,
+          heldInTheWait,
+          theStreamEnded,
+          theForwardLegEnded: shape().includes('legEnded'),
+          delivered: shape().includes('event:in the batch')
+        };
+      } catch (error) {
+        return failed(error);
+      } finally {
+        ac.abort();
+        await Promise.race([done, delay(500)]);
+        rxNostr.dispose();
       }
-    })();
-    const shape = () =>
-      chunks.map((chunk) =>
-        chunk.type === 'event' ? `event:${chunk.packet.event.content}` : chunk.type
-      );
-    let observed: Record<string, unknown>;
-    try {
-      let ids: string[] = [];
-      await vi.waitFor(
-        () => {
-          ids = (server.messages as unknown[][])
-            .filter((frame) => frame[0] === 'REQ')
-            .map((frame) => String(frame[1]));
-          expect(ids, 'the relay was asked for both legs').toHaveLength(2);
-        },
-        { timeout: 3000 }
-      );
-      const backward = ids.find((id) => id.includes('-b:')) as string;
-      const forward = ids.find((id) => id.includes('-f:')) as string;
-      respondWithEose(server, backward);
-      await vi.waitFor(() => expect(shape()).toContain('settled'), { timeout: 3000 });
-      const beforeTheBatch = shape();
-      server.send(['EVENT', forward, fakeEvent({ content: 'in the batch' })]);
-      server.send(['CLOSED', forward, 'blocked: done']);
-      await Promise.race([done, delay(2000)]);
-      observed = {
-        beforeTheBatch,
-        theForwardLegEnded: shape().includes('legEnded'),
-        delivered: shape().includes('event:in the batch')
-      };
-    } catch (error) {
-      observed = failed(error);
-    } finally {
-      ac.abort();
-      await Promise.race([done, delay(500)]);
-      rxNostr.dispose();
-    }
-    expect(observed, 'the event the relay sent before the end is delivered').toEqual({
-      beforeTheBatch: ['settled'],
-      theForwardLegEnded: true,
-      delivered: true
+    };
+    const atOnce = await run('or3', false);
+    const insideTheWait = await run('or3-late', true);
+    expect(
+      { atOnce, insideTheWait },
+      'the event the relay sent before the end is delivered, whenever inside the wait its verdict comes'
+    ).toEqual({
+      atOnce: {
+        beforeTheBatch: ['settled'],
+        heldInTheWait: undefined,
+        theStreamEnded: true,
+        theForwardLegEnded: true,
+        delivered: true
+      },
+      insideTheWait: {
+        beforeTheBatch: ['settled'],
+        heldInTheWait: true,
+        theStreamEnded: true,
+        theForwardLegEnded: true,
+        delivered: true
+      }
     });
   });
 });
