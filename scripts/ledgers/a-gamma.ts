@@ -12,9 +12,10 @@
  * - `A-γ-C6` on `TC2`;
  * - `A-ζ-C1` on `DC9`.
  *
- * An id beginning `C<n>-` edits the library, and one beginning `D<n>-` edits
- * the dependency inside the ledger's own copy of `node_modules`, which the
- * runner clones per copy and restores after each entry.
+ * An id beginning `C<n>-` edits the library for `A-γ-C<n>`, and one beginning
+ * `Z1-` edits it for `A-ζ-C1`. One beginning `D<n>-` edits the dependency for
+ * `A-γ-C<n>`, inside the ledger's own copy of `node_modules`, which the runner
+ * clones per copy and restores after each entry as it restores the library.
  */
 import type { Ledger } from '../ledger.ts';
 
@@ -24,6 +25,13 @@ const NORMALIZE = 'src/lib/v1/normalize.ts';
 const CONTEXT = 'src/lib/v1/context.svelte.ts';
 const STREAM = 'src/lib/v1/stream.ts';
 const RX_NOSTR = 'node_modules/rx-nostr/dist/rx-nostr.js';
+const OUTLETS = 'src/lib/v1/components/outlets.ts';
+const EVENT_LIST = 'src/lib/v1/components/EventList.svelte';
+
+/** The request's own settle timer, armed when the backlog begins. */
+const SETTLE_TIMER = '    timer = setTimeout(() => settle(true), timeoutMs);';
+/** The multiplier on what a verification is believed to cost. */
+const DRAIN_SAFETY = 'const VERIFY_DRAIN_SAFETY = 4;';
 
 /** The engine's import of the normalizer's constants. */
 const ENGINE_IMPORT =
@@ -48,7 +56,7 @@ export default {
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { ST1: 9, NM5: 4, NM11: 4, TC1: 6, WI29: 4, TC2: 4, DC9: 13 }
+    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 4, TC2: 4, DC9: 13 }
   },
   entries: [
     {
@@ -126,7 +134,7 @@ export default {
       edits: [
         {
           file: MACHINE,
-          from: '    timer = setTimeout(() => settle(true), timeoutMs);',
+          from: SETTLE_TIMER,
           to: '    timer = setTimeout(() => settle(true), timeoutMs * 1000);'
         }
       ]
@@ -335,6 +343,194 @@ export default {
           file: MACHINE,
           from: "    if (phase === 'cut') for (const each of gate.holding) each.discarded = true;\n",
           to: ''
+        }
+      ]
+    },
+    {
+      id: 'C1-the-live-timer-never-armed',
+      arm: 'ST1',
+      describe: 'a live request arms no settle timer, so a silent relay holds its backlog open',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  if (timeoutMs !== undefined) {\n    timer = setTimeout(() => settle(true), timeoutMs);',
+          to: '  if (timeoutMs !== undefined && !live) {\n    timer = setTimeout(() => settle(true), timeoutMs);'
+        }
+      ]
+    },
+    {
+      id: 'C1-the-timer-fires-early',
+      arm: 'ST1',
+      describe:
+        "the request's timer fires at 50ms whatever the caller asked for — the outcome is right and too soon",
+      edits: [
+        {
+          file: MACHINE,
+          from: SETTLE_TIMER,
+          to: '    timer = setTimeout(() => settle(true), Math.min(timeoutMs, 50));'
+        }
+      ]
+    },
+    {
+      id: 'C4-no-timer-without-a-harness',
+      arm: 'TC1',
+      describe:
+        "the factory is handed the library's timer only when a harness is given, so the provider the published `NostrApp` builds runs on the dependency's",
+      edits: [
+        {
+          file: CONTEXT,
+          from: '    ...(harness ?? {}),\n    eoseTimeout: LIBRARY_EOSE_TIMEOUT_MS,\n',
+          to: '    ...(harness ?? {}),\n    ...(harness === undefined ? {} : { eoseTimeout: LIBRARY_EOSE_TIMEOUT_MS }),\n'
+        }
+      ]
+    },
+    {
+      id: 'C4-the-provider-props-name-the-timer',
+      arm: 'TC1',
+      describe: "the published provider's props accept an EOSE timer, so a consumer can write one",
+      edits: [
+        {
+          file: OUTLETS,
+          from: 'export type NostrAppProps = {\n',
+          to: 'export type NostrAppProps = {\n  eoseTimeout?: number;\n'
+        }
+      ]
+    },
+    {
+      id: 'C5-a-declaration-in-a-component-module',
+      arm: 'WI29',
+      describe: 'a component declares its own copy of the default in its module script',
+      edits: [
+        {
+          file: EVENT_LIST,
+          from: '<script lang="ts">\n',
+          to: '<script lang="ts" module>\n  export const DEFAULT_SETTLE_TIMEOUT_MS = 5_000;\n</script>\n\n<script lang="ts">\n'
+        }
+      ]
+    },
+    {
+      id: 'C5-a-wildcard-re-export',
+      arm: 'WI29',
+      describe: 'the engine re-exports everything the normalizer exports, the default among it',
+      edits: [
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nexport * from './normalize.js';`
+        }
+      ]
+    },
+    {
+      id: 'C6-no-timer-without-a-harness',
+      arm: 'TC2',
+      describe:
+        "the provider the published `NostrApp` builds is handed no timer of the library's, and runs on the dependency's own",
+      edits: [
+        {
+          file: CONTEXT,
+          from: '    ...(harness ?? {}),\n    eoseTimeout: LIBRARY_EOSE_TIMEOUT_MS,\n',
+          to: '    ...(harness ?? {}),\n    ...(harness === undefined ? {} : { eoseTimeout: LIBRARY_EOSE_TIMEOUT_MS }),\n'
+        }
+      ]
+    },
+    {
+      id: 'C1-the-timer-ignores-the-caller',
+      arm: 'ST1',
+      describe:
+        "the request's timer runs two seconds whatever the caller asked for — the outcome is right and late",
+      edits: [
+        {
+          file: MACHINE,
+          from: SETTLE_TIMER,
+          to: '    timer = setTimeout(() => settle(true), 2000);'
+        }
+      ]
+    },
+    {
+      id: 'C1-the-outlet-throws-on-incomplete',
+      arm: 'ST1',
+      describe:
+        "the component's outlet cannot be derived for an incomplete answer, so the outlet on the screen is the one from before the timeout",
+      edits: [
+        {
+          file: ENGINE,
+          from: "  if (state.events.length > 0) return { slot: 'default', error: undefined };",
+          to: "  if ((state.status as string) === 'incomplete') throw new Error('no outlet');\n  if (state.events.length > 0) return { slot: 'default', error: undefined };"
+        }
+      ]
+    },
+    {
+      id: 'C4-the-factory-parameter-names-the-timer',
+      arm: 'TC1',
+      describe:
+        "the provider's factory widens the harness it takes to name an EOSE timer, the named interface left as it was",
+      edits: [
+        {
+          file: CONTEXT,
+          from: '  harness?: HarnessOverrides;\n',
+          to: '  harness?: HarnessOverrides & { eoseTimeout?: number };\n'
+        }
+      ]
+    },
+    {
+      id: 'C5-a-literal-parameter-default',
+      arm: 'WI29',
+      describe:
+        "the engine's parameter defaults to a number of its own, the import kept and read elsewhere",
+      edits: [
+        {
+          file: STREAM,
+          from: '  settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS\n}: StreamParams)',
+          to: '  settleTimeoutMs = 5_000\n}: StreamParams)'
+        },
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nvoid DEFAULT_SETTLE_TIMEOUT_MS;`
+        }
+      ]
+    },
+    {
+      id: 'C5-an-alias-re-export',
+      arm: 'WI29',
+      describe: 'the engine re-exports the default under a name of its own',
+      edits: [
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nexport { DEFAULT_SETTLE_TIMEOUT_MS as STREAM_SETTLE_TIMEOUT_MS };`
+        }
+      ]
+    },
+    {
+      id: 'C5-a-let-declaration',
+      arm: 'WI29',
+      describe: 'the machine declares its own copy of the default with `let`, unexported',
+      edits: [
+        {
+          file: MACHINE,
+          from: DRAIN_SAFETY,
+          to: `${DRAIN_SAFETY}\nlet DEFAULT_SETTLE_TIMEOUT_MS = 5_000;\nvoid DEFAULT_SETTLE_TIMEOUT_MS;`
+        }
+      ]
+    },
+    {
+      id: 'Z1-safety-five',
+      arm: 'DC9',
+      describe:
+        'the wait is five times what a verification is believed to cost, so a clamped sample still waits past four floors',
+      edits: [{ file: MACHINE, from: DRAIN_SAFETY, to: 'const VERIFY_DRAIN_SAFETY = 5;' }]
+    },
+    {
+      id: 'Z1-the-released-candidate-dropped',
+      arm: 'DC9',
+      describe:
+        'a candidate that passes while its gate is draining is not delivered, so the outcome arrives alone',
+      edits: [
+        {
+          file: MACHINE,
+          from: "      if (deliver && !admission.discarded) push({ type: 'event', packet });",
+          to: "      if (deliver && !admission.discarded && gate.phase !== 'draining')\n        push({ type: 'event', packet });"
         }
       ]
     }

@@ -15,6 +15,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parse } from 'svelte/compiler';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -820,16 +821,48 @@ describe('this library mints where it constructs, and closes before it freezes',
 });
 
 /**
- * The module-level `const` declarations of each module, and the names each one
- * exports — read off TypeScript's syntax tree, so a declaration is found
- * however it is indented and wherever it sits in a list of declarators, a
- * destructured one included, and one inside a function is not module-level.
+ * The text of a component's module script, which is module-level; its instance
+ * script runs once per component and is not.
+ */
+function moduleScriptOf(source: string): string {
+  const parsed = parse(source, { modern: true });
+  const content = parsed.module?.content as unknown as { start: number; end: number } | undefined;
+  return content === undefined ? '' : source.slice(content.start, content.end);
+}
+
+/** Every module of the library: each `.ts` file, and each component's module script. */
+function libraryModules(): { name: string; text: string }[] {
+  const modules: { name: string; text: string }[] = [];
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(join(LIB, directory), { withFileTypes: true })) {
+      const name = directory === '' ? entry.name : `${directory}/${entry.name}`;
+      if (entry.isDirectory()) walk(name);
+      else if (name.endsWith('.ts')) modules.push({ name, text: sourceOf(name) });
+      else if (name.endsWith('.svelte'))
+        modules.push({ name, text: moduleScriptOf(sourceOf(name)) });
+    }
+  };
+  walk('');
+  return modules;
+}
+
+/**
+ * The module-level variable declarations of each module — `const`, `let` and
+ * `var` — with the exported `const`s apart, and the names each module exports,
+ * read off TypeScript's syntax tree, so a declaration is found however it is
+ * indented and wherever it sits in a list of declarators, a destructured one
+ * included, and one inside a function is not module-level. `export *` is
+ * followed to the module it names, so a wildcard is read as the names it
+ * exports. And every named or default export is read for the binding it hands
+ * on, through the module's own imports, so a re-export under another name is
+ * read as the name it came in as.
  */
 function moduleLevel(modules: readonly { name: string; text: string }[]) {
   const declared = new Map<string, string[]>();
-  const exported = new Map<string, string[]>();
-  const add = (into: Map<string, string[]>, key: string, module: string) =>
-    into.set(key, [...(into.get(key) ?? []), module]);
+  const exportedConsts = new Map<string, string[]>();
+  const reExported = new Map<string, string[]>();
+  const direct = new Map<string, Set<string>>();
+  const wildcards = new Map<string, string[]>();
   const namesIn = (binding: ts.BindingName, into: (name: string) => void): void => {
     if (ts.isIdentifier(binding)) into(binding.text);
     else
@@ -837,7 +870,23 @@ function moduleLevel(modules: readonly { name: string; text: string }[]) {
         if (!ts.isOmittedExpression(element)) namesIn(element.name, into);
   };
   for (const { name, text } of modules) {
+    const own = new Set<string>();
+    direct.set(name, own);
+    wildcards.set(name, []);
     const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
+    // Each local name an import binds, to the name it takes from its module.
+    const imported = new Map<string, string>();
+    for (const statement of file.statements)
+      if (
+        ts.isImportDeclaration(statement) &&
+        statement.importClause?.namedBindings !== undefined &&
+        ts.isNamedImports(statement.importClause.namedBindings)
+      )
+        for (const element of statement.importClause.namedBindings.elements)
+          imported.set(element.name.text, (element.propertyName ?? element.name).text);
+    const handsOn = (source: string): void => {
+      reExported.set(source, [...(reExported.get(source) ?? []), name]);
+    };
     for (const statement of file.statements) {
       const isExported =
         ts.canHaveModifiers(statement) &&
@@ -845,35 +894,85 @@ function moduleLevel(modules: readonly { name: string; text: string }[]) {
           (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword
         );
       if (ts.isVariableStatement(statement)) {
-        if ((statement.declarationList.flags & ts.NodeFlags.Const) === 0) continue;
+        const isConst = (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
         for (const declaration of statement.declarationList.declarations)
           namesIn(declaration.name, (each) => {
-            add(declared, each, name);
-            if (isExported) add(exported, each, name);
+            declared.set(each, [...(declared.get(each) ?? []), name]);
+            if (!isExported || !isConst) return;
+            own.add(each);
+            exportedConsts.set(each, [...(exportedConsts.get(each) ?? []), name]);
           });
       } else if (ts.isExportDeclaration(statement)) {
-        if (statement.exportClause === undefined) add(exported, '*', name);
-        else if (ts.isNamedExports(statement.exportClause))
-          for (const element of statement.exportClause.elements)
-            add(exported, element.name.text, name);
+        if (statement.exportClause === undefined) {
+          const target =
+            statement.moduleSpecifier !== undefined && ts.isStringLiteral(statement.moduleSpecifier)
+              ? statement.moduleSpecifier.text
+              : '';
+          const resolved = join(dirname(name), target).replace(/\.js$/, '.ts');
+          wildcards.get(name)?.push(resolved);
+        } else if (ts.isNamedExports(statement.exportClause))
+          for (const element of statement.exportClause.elements) {
+            own.add(element.name.text);
+            const local = (element.propertyName ?? element.name).text;
+            handsOn(
+              statement.moduleSpecifier === undefined ? (imported.get(local) ?? local) : local
+            );
+          }
+      } else if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) {
+        own.add('default');
+        handsOn(imported.get(statement.expression.text) ?? statement.expression.text);
       }
     }
   }
-  return { declared, exported };
+  const exportsOf = (name: string, seen: ReadonlySet<string> = new Set()): Set<string> => {
+    if (seen.has(name)) return new Set();
+    const all = new Set(direct.get(name) ?? []);
+    for (const target of wildcards.get(name) ?? [])
+      for (const each of exportsOf(target, new Set([...seen, name]))) all.add(each);
+    return all;
+  };
+  const exported = new Map<string, string[]>();
+  for (const { name } of modules)
+    for (const each of exportsOf(name)) exported.set(each, [...(exported.get(each) ?? []), name]);
+  return { declared, exportedConsts, exported, reExported };
 }
 
 describe('A-γ: one declaration of the default settle timeout', () => {
   // @contracts A-γ-C5
-  it('WI29: every module-level const is declared in one module, and the default settle timeout in the normalizer alone', () => {
+  it('WI29: every exported const is declared in one module, and the default settle timeout in the normalizer alone', () => {
+    // **The rule is over exported consts**: every `export const` in the
+    // library is declared in one module. A module's private helper may share a
+    // name with another module's export — the normalizer's `article`, which
+    // picks "a" or "an", and the `Article` component's descriptor — and that is
+    // not two declarations of one value. The default settle timeout is held to
+    // more: no module-level declaration of it anywhere but the normalizer,
+    // exported or not, `const` or not; no module handing it on, under its own
+    // name or another; and the engine's parameter defaulting to the imported
+    // binding, not to a number of its own.
+    //
     // **The reader first, against the spellings a pattern over lines misses**:
     // an indented declaration, the second of two declarators, a destructured
-    // one, and a re-export with and without `from` — each a second module
-    // declaring or exporting a name — and a declaration inside a function,
-    // which is not module-level and is not counted.
+    // one, a `let` and a `var`, a component's module script, and a re-export
+    // with and without `from`, under another name, as a default and as a
+    // wildcard — each a second module declaring or exporting a name — and a
+    // declaration inside a function or in a component's instance script, which
+    // is not module-level and is not counted.
     const control = moduleLevel([
       {
         name: 'a.ts',
-        text: 'export const A = 1;\nconst B = 1;\nconst C = 1;\nexport const D = 1;\nexport const E = 1;\nexport const F = 1;\n'
+        text: [
+          'export const A = 1;',
+          'const B = 1;',
+          'const C = 1;',
+          'export const D = 1;',
+          'export const E = 1;',
+          'export const F = 1;',
+          'export const G = 1;',
+          'const H = 1;',
+          'const I = 1;',
+          'const J = 1;',
+          ''
+        ].join('\n')
       },
       {
         name: 'b.ts',
@@ -885,54 +984,110 @@ describe('A-γ: one declaration of the default settle timeout', () => {
           "import { E as local } from './a.js';",
           'export { local as E };',
           'function inside() { const F = 2; return F; }',
+          'let I = 2;',
+          'var J = 2;',
           ''
         ].join('\n')
+      },
+      { name: 'c.ts', text: "export * from './a.js';\n" },
+      {
+        name: 'e.ts',
+        text: [
+          "export { A as Renamed } from './a.js';",
+          "import { G as fromComponent } from './d.svelte';",
+          'export default fromComponent;',
+          ''
+        ].join('\n')
+      },
+      {
+        name: 'd.svelte',
+        text: moduleScriptOf(
+          '<script module>\n  export const G = 2;\n</script>\n<script>\n  const H = 2;\n</script>\n'
+        )
       }
     ]);
+    const twice = (map: Map<string, string[]>) =>
+      [...map]
+        .filter(([, where]) => where.length > 1)
+        .map(([each]) => each)
+        .sort();
     expect(
       {
-        declaredTwice: [...control.declared]
-          .filter(([, where]) => where.length > 1)
-          .map(([n]) => n),
-        exportedTwice: [...control.exported].filter(([, where]) => where.length > 1).map(([n]) => n)
+        declaredTwice: twice(control.declared),
+        exportedConstsTwice: twice(control.exportedConsts),
+        exportedTwice: twice(control.exported),
+        handedOn: Object.fromEntries([...control.reExported].sort(([a], [b]) => a.localeCompare(b)))
       },
-      'the reader sees every module-level declaration and every export, and nothing inside a function'
-    ).toEqual({ declaredTwice: ['A', 'B', 'C'], exportedTwice: ['D', 'E'] });
+      'the reader sees every module-level declaration and every export, and nothing that is not module-level'
+    ).toEqual({
+      declaredTwice: ['A', 'B', 'C', 'G', 'I', 'J'],
+      exportedConstsTwice: ['G'],
+      exportedTwice: ['A', 'D', 'E', 'F', 'G'],
+      handedOn: { A: ['e.ts'], D: ['b.ts'], E: ['b.ts'], G: ['e.ts'] }
+    });
 
-    const names = readdirSync(LIB).filter((name) => name.endsWith('.ts'));
-    const { declared, exported } = moduleLevel(
-      names.map((name) => ({ name, text: sourceOf(name) }))
-    );
+    const modules = libraryModules();
+    const { declared, exportedConsts, exported, reExported } = moduleLevel(modules);
     const stream = ts.createSourceFile(
       'stream.ts',
       sourceOf('stream.ts'),
       ts.ScriptTarget.Latest,
       true
     );
-    const importedByTheEngine = stream.statements.flatMap((statement) =>
-      ts.isImportDeclaration(statement) &&
-      ts.isStringLiteral(statement.moduleSpecifier) &&
-      statement.moduleSpecifier.text === './normalize.js' &&
-      statement.importClause?.namedBindings !== undefined &&
-      ts.isNamedImports(statement.importClause.namedBindings)
-        ? statement.importClause.namedBindings.elements.map((element) => element.name.text)
-        : []
+    // Each local name the engine binds from the normalizer, to the name it
+    // takes from it.
+    const fromTheNormalizer = new Map(
+      stream.statements.flatMap((statement) =>
+        ts.isImportDeclaration(statement) &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        statement.moduleSpecifier.text === './normalize.js' &&
+        statement.importClause?.namedBindings !== undefined &&
+        ts.isNamedImports(statement.importClause.namedBindings)
+          ? statement.importClause.namedBindings.elements.map(
+              (element) => [element.name.text, (element.propertyName ?? element.name).text] as const
+            )
+          : []
+      )
     );
+    // What every parameter named `settleTimeoutMs` defaults to in the engine,
+    // read as the normalizer's name where it is one of its imports.
+    const defaults: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isBindingElement(node) || ts.isParameter(node)) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === 'settleTimeoutMs' &&
+        node.initializer !== undefined
+      )
+        defaults.push(
+          ts.isIdentifier(node.initializer)
+            ? (fromTheNormalizer.get(node.initializer.text) ?? `local ${node.initializer.text}`)
+            : node.initializer.getText(stream)
+        );
+      ts.forEachChild(node, visit);
+    };
+    visit(stream);
     expect(
       {
-        modulesRead: names.length > 20,
-        declaredTwice: [...declared].filter(([, where]) => where.length > 1),
+        componentsRead: modules.filter((one) => one.name.startsWith('components/')).length > 10,
+        modulesRead: modules.length > 30,
+        exportedConstsTwice: [...exportedConsts].filter(([, where]) => where.length > 1),
         theDefaultIsDeclaredIn: declared.get('DEFAULT_SETTLE_TIMEOUT_MS'),
         theDefaultIsExportedBy: exported.get('DEFAULT_SETTLE_TIMEOUT_MS'),
-        theEngineImportsIt: importedByTheEngine.includes('DEFAULT_SETTLE_TIMEOUT_MS')
+        theDefaultIsHandedOnBy: reExported.get('DEFAULT_SETTLE_TIMEOUT_MS') ?? [],
+        theEngineImportsIt: [...fromTheNormalizer.values()].includes('DEFAULT_SETTLE_TIMEOUT_MS'),
+        theEngineDefaultsTo: defaults
       },
-      'one declaration of every module-level const, the default in the normalizer, imported by the engine and exported by nobody else'
+      'one declaration of every exported const, the default in the normalizer, imported by the engine as its default and handed on by nobody'
     ).toEqual({
+      componentsRead: true,
       modulesRead: true,
-      declaredTwice: [],
+      exportedConstsTwice: [],
       theDefaultIsDeclaredIn: ['normalize.ts'],
       theDefaultIsExportedBy: ['normalize.ts'],
-      theEngineImportsIt: true
+      theDefaultIsHandedOnBy: [],
+      theEngineImportsIt: true,
+      theEngineDefaultsTo: ['DEFAULT_SETTLE_TIMEOUT_MS']
     });
   });
 });

@@ -1202,9 +1202,11 @@ describe('the wait over what the gate holds, and its end', () => {
     // enters the gate and where it leaves, so that is the clock moved: forward
     // by a minute across the first verification, and back. Time here is
     // measured on the clock as it was before the move. The next wait is four
-    // times the floor at most and the floor at least — more than two seconds
-    // and less than six — which an unclamped sample and one pinned to the
-    // floor each miss.
+    // times the floor at most and the floor at least — more than two seconds,
+    // and less than 4.6, which is four floors with 600ms for the timers to run
+    // late — which an unclamped sample and one pinned to the floor each miss.
+    // The row's own window ends at six; read at that, a sample believed at
+    // five times the floor passes, and its Then bounds the wait by four.
     //
     // **Twice: as the row has it, and live with a third candidate answered
     // after the cut**, because one never answered cannot show what the cut did
@@ -1249,7 +1251,7 @@ describe('the wait over what the gate holds, and its end', () => {
         }
         return {
           cutAfterMoreThan2s: cutAfterMs !== undefined && cutAfterMs > 2000,
-          cutAfterLessThan6s: cutAfterMs !== undefined && cutAfterMs < 6000,
+          cutAfterLessThan4600ms: cutAfterMs !== undefined && cutAfterMs < 4600,
           atTheCut,
           ends: endsOf(one.chunks),
           runningAtRelease,
@@ -1267,11 +1269,11 @@ describe('the wait over what the gate holds, and its end', () => {
     const cut = [{ kind: 'incomplete', causes: ['verification-timeout'], error: undefined }];
     expect(
       { asTheRowHasIt, answeredAfterTheCut },
-      'cut between two and six seconds after the jump, the released one ahead of the outcome, nothing behind it'
+      'cut between two and four floors after the jump, the released one ahead of the outcome, nothing behind it'
     ).toEqual({
       asTheRowHasIt: {
         cutAfterMoreThan2s: true,
-        cutAfterLessThan6s: true,
+        cutAfterLessThan4600ms: true,
         atTheCut: ['event:jumper', 'settled'],
         ends: cut,
         runningAtRelease: undefined,
@@ -1279,7 +1281,7 @@ describe('the wait over what the gate holds, and its end', () => {
       },
       answeredAfterTheCut: {
         cutAfterMoreThan2s: true,
-        cutAfterLessThan6s: true,
+        cutAfterLessThan4600ms: true,
         atTheCut: ['event:jumper', 'settled'],
         ends: cut,
         runningAtRelease: true,

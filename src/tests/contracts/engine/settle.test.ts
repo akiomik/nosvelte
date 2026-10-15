@@ -16,6 +16,7 @@ import { render } from '@testing-library/svelte';
 import { WebSocket as MockWebSocket } from 'mock-socket';
 import type Nostr from 'nostr-typedef';
 import { getEventHash, getPublicKey, getSignature } from 'rx-nostr-crypto';
+import { untrack } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
@@ -74,24 +75,33 @@ const failed = (error: unknown) => ({
 describe('a request that runs out of patience', () => {
   // @contracts A-γ-C1
   it('ST1: a relay that never sends EOSE leaves the request incomplete under timeout, keeping what it had', async () => {
-    // **Twice.** A consumer's own `useReq`, with a short settle timeout of its
-    // own, reads the answer: `incomplete` under `timeout` alone, the event the
-    // relay did send still there, and an `IncompleteResultError` among the
-    // diagnostics. A published `EventList` reads the slot — the one claim
-    // about a component rather than a handle — under the default timeout,
-    // with the request the outlet is handed read alongside the events, so the
-    // outlet that shows events before the timeout cannot pass for the one that
-    // shows them after it.
+    // **Three runs.** A consumer's own `useReq`, non-live and live, each with
+    // a 300ms settle timeout of its own, reads the answer: `incomplete` under
+    // `timeout` alone, the event the relay did send still there, and an
+    // `IncompleteResultError` among the diagnostics. A published `EventList`
+    // reads the slot — the one claim about a component rather than a handle —
+    // under the default timeout, with the request the outlet is handed read
+    // alongside the events, so the outlet that shows events before the
+    // timeout cannot pass for the one that shows them after it — and with the
+    // status read **as the outlet rendered**, so an outlet left on the screen
+    // from before the timeout, by a component that failed to render the
+    // answer, is not read as the answer's. **And each is read on both sides of
+    // its deadline**: still waiting before it, so a timer that fires early is
+    // not taken for the request's own, and answered soon after it, so a timer
+    // of the library's own choosing is not either.
     const event = signed('the only event the relay sends');
     const runs: Record<string, unknown> = {};
 
-    {
+    for (const live of [false, true]) {
+      const name = live ? 'aConsumersLiveRequest' : 'aConsumersRequest';
       const url = nextUrl();
       const { relay, subId } = await relayFor(url);
       let handle: ReqHandle | undefined;
       const plan: ReqPlan = {
         kind: 'request',
-        descriptor: { filters: [{ kinds: [1] }], settleTimeoutMs: 300 }
+        descriptor: live
+          ? { filters: [{ kinds: [1] }], live: true, retain: 'unbounded', settleTimeoutMs: 300 }
+          : { filters: [{ kinds: [1] }], settleTimeoutMs: 300 }
       };
       const view = render(PublishedRequest, {
         relays: [url],
@@ -104,12 +114,20 @@ describe('a request that runs out of patience', () => {
       try {
         const backward = await subId();
         relay.send(['EVENT', backward, event]);
+        const sentAt = Date.now();
+        // Well inside the 300ms: the event is in, and the request still waits.
+        await delay(100);
+        const beforeTheDeadline = handle?.state.status;
         await vi.waitFor(() => expect(handle?.state.status).toBe('incomplete'), {
           timeout: 3000
         });
+        // The 300ms ran from before the event was sent, so this is generous.
+        const soonAfterIt = Date.now() - sentAt < 700;
         const request = handle as ReqHandle;
         const { state, diagnostics } = request;
-        runs['aConsumersRequest'] = {
+        runs[name] = {
+          beforeTheDeadline,
+          soonAfterIt,
           status: state.status,
           causes: state.status === 'incomplete' ? [...state.causes] : undefined,
           events: state.status === 'loading' ? undefined : state.events.map((each) => each.id),
@@ -117,7 +135,7 @@ describe('a request that runs out of patience', () => {
           anIncompleteResultError: diagnostics.lastError instanceof IncompleteResultError
         };
       } catch (error) {
-        runs['aConsumersRequest'] = failed(error);
+        runs[name] = failed(error);
       } finally {
         view.unmount();
       }
@@ -126,34 +144,48 @@ describe('a request that runs out of patience', () => {
     {
       const url = nextUrl();
       const { relay, subId } = await relayFor(url);
-      const outlets: [string, unknown][] = [];
+      type Argument = { events?: readonly { id: string }[]; request?: ReqHandle } | undefined;
+      // Each outlet with the status its request had when it rendered, read
+      // without subscribing: a read that subscribed would re-run the outlet on
+      // its own when the status moved, whatever the component decided.
+      const outlets: [string, Argument, string | undefined][] = [];
       const view = render(ListedEvents, {
         relays: [url],
         ids: [event.id],
         held: (outlet: string, argument: unknown) => {
-          outlets.push([outlet, argument]);
+          const held = argument as Argument;
+          outlets.push([outlet, held, untrack(() => held?.request?.state.status)]);
         }
       });
       const latest = () => {
-        const [outlet, argument] = outlets.at(-1) ?? ['none', undefined];
-        const { events, request } = (argument ?? {}) as {
-          events?: readonly { id: string }[];
-          request?: ReqHandle;
+        const [outlet, argument, renderedAt] = outlets.at(-1) ?? ['none', undefined, undefined];
+        return {
+          outlet,
+          events: argument?.events?.map((each) => each.id),
+          request: argument?.request,
+          renderedAt
         };
-        return { outlet, events: events?.map((each) => each.id), request };
       };
       try {
         const backward = await subId();
         relay.send(['EVENT', backward, event]);
-        // The component's own default settle timeout, five seconds.
+        const sentAt = Date.now();
+        // Two seconds into the component's own default settle timeout of five.
+        await delay(2000);
+        const beforeTheDeadline = latest().request?.state.status;
         await vi.waitFor(() => expect(latest().request?.state.status).toBe('incomplete'), {
           timeout: 8000
         });
+        // The five seconds ran from before the event was sent.
+        const soonAfterIt = Date.now() - sentAt < 6500;
         await delay(50);
-        const { outlet, events, request } = latest();
+        const { outlet, events, request, renderedAt } = latest();
         const state = request?.state;
         runs['aPublishedList'] = {
+          beforeTheDeadline,
+          soonAfterIt,
           outlet,
+          renderedAt,
           events,
           status: state?.status,
           causes: state?.status === 'incomplete' ? [...state.causes] : undefined
@@ -170,6 +202,17 @@ describe('a request that runs out of patience', () => {
       'incomplete under timeout, the event kept, the default slot, and the error that says so'
     ).toEqual({
       aConsumersRequest: {
+        beforeTheDeadline: 'streaming',
+        soonAfterIt: true,
+        status: 'incomplete',
+        causes: ['timeout'],
+        events: [event.id],
+        lastError: 'IncompleteResultError',
+        anIncompleteResultError: true
+      },
+      aConsumersLiveRequest: {
+        beforeTheDeadline: 'streaming',
+        soonAfterIt: true,
         status: 'incomplete',
         causes: ['timeout'],
         events: [event.id],
@@ -177,7 +220,10 @@ describe('a request that runs out of patience', () => {
         anIncompleteResultError: true
       },
       aPublishedList: {
+        beforeTheDeadline: 'streaming',
+        soonAfterIt: true,
         outlet: 'events',
+        renderedAt: 'incomplete',
         events: [event.id],
         status: 'incomplete',
         causes: ['timeout']

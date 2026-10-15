@@ -197,14 +197,12 @@ describe('the normalization boundary', () => {
     expect(
       {
         carried: normalized.settleTimeoutMs,
-        named: DEFAULT_SETTLE_TIMEOUT_MS,
         finite: Number.isFinite(DEFAULT_SETTLE_TIMEOUT_MS),
         positive: DEFAULT_SETTLE_TIMEOUT_MS > 0
       },
       'an omitted settle timeout is normalized to the named, finite default'
     ).toEqual({
       carried: DEFAULT_SETTLE_TIMEOUT_MS,
-      named: DEFAULT_SETTLE_TIMEOUT_MS,
       finite: true,
       positive: true
     });
@@ -840,14 +838,14 @@ describe('A-γ: the request owns its settle timeout', () => {
     // boundary follows: a caller who asked for ten minutes and silently got one
     // would be told nothing, and the key would agree with neither request.
     expect(() => normalizeDescriptor({ ...base, settleTimeoutMs: 600_000 })).toThrow(
-      /must be at most 60000/
+      /must be at most 60000, and was/
     );
     // **And the row's own Given**: a settle timeout larger than the upstream
     // timer the provider sets is refused too — a boundary that refused only up
     // to some value below that timer would pass every probe above.
     expect(() =>
       normalizeDescriptor({ ...base, settleTimeoutMs: LIBRARY_EOSE_TIMEOUT_MS + 1 })
-    ).toThrow(/must be at most 60000/);
+    ).toThrow(/must be at most 60000, and was/);
 
     // And the headroom is real: the upstream timer has to be far enough above
     // the largest accepted value that it is never the one that fires.
