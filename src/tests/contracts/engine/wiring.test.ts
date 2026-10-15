@@ -11,10 +11,11 @@
  * spike's, as 0005 records them; they are history rather than files in this
  * repository.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parse } from 'svelte/compiler';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -816,5 +817,444 @@ describe('this library mints where it constructs, and closes before it freezes',
     } finally {
       Error.prepareStackTrace = previous;
     }
+  });
+});
+
+/**
+ * The text of a component's module script, which is module-level; its instance
+ * script runs once per component and is not.
+ */
+function moduleScriptOf(source: string): string {
+  const parsed = parse(source, { modern: true });
+  const content = parsed.module?.content as unknown as { start: number; end: number } | undefined;
+  return content === undefined ? '' : source.slice(content.start, content.end);
+}
+
+/** Every module of the library: each `.ts` file, and each component's module script. */
+function libraryModules(): { name: string; text: string }[] {
+  const modules: { name: string; text: string }[] = [];
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(join(LIB, directory), { withFileTypes: true })) {
+      const name = directory === '' ? entry.name : `${directory}/${entry.name}`;
+      if (entry.isDirectory()) walk(name);
+      else if (name.endsWith('.ts')) modules.push({ name, text: sourceOf(name) });
+      else if (name.endsWith('.svelte'))
+        modules.push({ name, text: moduleScriptOf(sourceOf(name)) });
+    }
+  };
+  walk('');
+  return modules;
+}
+
+/**
+ * The module-level variable declarations of each module — `const`, `let` and
+ * `var` — with the exported `const`s apart, and the names each module exports,
+ * read off TypeScript's syntax tree, so a declaration is found however it is
+ * indented and wherever it sits in a list of declarators, a destructured one
+ * included, and one inside a function is not module-level. `export *` is
+ * followed to the module it names, so a wildcard is read as the names it
+ * exports. And each named export, and each default export of a bare name, is
+ * read for the name it hands on, through the module's own imports, so a
+ * re-export under another name is read as the name it came in as. This is a
+ * reader of names, and it reads component module scripts; what a name is
+ * bound to is {@link bindingsOfTheDefault}'s, over the `.ts` modules.
+ */
+function moduleLevel(modules: readonly { name: string; text: string }[]) {
+  const declared = new Map<string, string[]>();
+  const exportedConsts = new Map<string, string[]>();
+  const reExported = new Map<string, string[]>();
+  const direct = new Map<string, Set<string>>();
+  const wildcards = new Map<string, string[]>();
+  const namesIn = (binding: ts.BindingName, into: (name: string) => void): void => {
+    if (ts.isIdentifier(binding)) into(binding.text);
+    else
+      for (const element of binding.elements)
+        if (!ts.isOmittedExpression(element)) namesIn(element.name, into);
+  };
+  for (const { name, text } of modules) {
+    const own = new Set<string>();
+    direct.set(name, own);
+    wildcards.set(name, []);
+    const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
+    // Each local name an import binds, to the name it takes from its module.
+    const imported = new Map<string, string>();
+    for (const statement of file.statements)
+      if (
+        ts.isImportDeclaration(statement) &&
+        statement.importClause?.namedBindings !== undefined &&
+        ts.isNamedImports(statement.importClause.namedBindings)
+      )
+        for (const element of statement.importClause.namedBindings.elements)
+          imported.set(element.name.text, (element.propertyName ?? element.name).text);
+    const handsOn = (source: string): void => {
+      reExported.set(source, [...(reExported.get(source) ?? []), name]);
+    };
+    for (const statement of file.statements) {
+      const isExported =
+        ts.canHaveModifiers(statement) &&
+        (ts.getModifiers(statement) ?? []).some(
+          (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword
+        );
+      if (ts.isVariableStatement(statement)) {
+        const isConst = (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
+        for (const declaration of statement.declarationList.declarations)
+          namesIn(declaration.name, (each) => {
+            declared.set(each, [...(declared.get(each) ?? []), name]);
+            if (!isExported || !isConst) return;
+            own.add(each);
+            exportedConsts.set(each, [...(exportedConsts.get(each) ?? []), name]);
+          });
+      } else if (ts.isExportDeclaration(statement)) {
+        if (statement.exportClause === undefined) {
+          const target =
+            statement.moduleSpecifier !== undefined && ts.isStringLiteral(statement.moduleSpecifier)
+              ? statement.moduleSpecifier.text
+              : '';
+          const resolved = join(dirname(name), target).replace(/\.js$/, '.ts');
+          wildcards.get(name)?.push(resolved);
+        } else if (ts.isNamedExports(statement.exportClause))
+          for (const element of statement.exportClause.elements) {
+            own.add(element.name.text);
+            const local = (element.propertyName ?? element.name).text;
+            handsOn(
+              statement.moduleSpecifier === undefined ? (imported.get(local) ?? local) : local
+            );
+          }
+      } else if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) {
+        own.add('default');
+        handsOn(imported.get(statement.expression.text) ?? statement.expression.text);
+      }
+    }
+  }
+  const exportsOf = (name: string, seen: ReadonlySet<string> = new Set()): Set<string> => {
+    if (seen.has(name)) return new Set();
+    const all = new Set(direct.get(name) ?? []);
+    for (const target of wildcards.get(name) ?? [])
+      for (const each of exportsOf(target, new Set([...seen, name]))) all.add(each);
+    return all;
+  };
+  const exported = new Map<string, string[]>();
+  for (const { name } of modules)
+    for (const each of exportsOf(name)) exported.set(each, [...(exported.get(each) ?? []), name]);
+  return { declared, exportedConsts, exported, reExported };
+}
+
+/** The repository's own options, so `$lib` resolves as the library's build resolves it. */
+const CHECKER_OPTIONS: ts.CompilerOptions = {
+  ...ts.parseJsonConfigFileContent(
+    ts.readConfigFile(join(ROOT, 'tsconfig.json'), (name) => ts.sys.readFile(name)).config,
+    ts.sys,
+    ROOT
+  ).options,
+  noEmit: true
+};
+
+/**
+ * Where a program reaches the default settle timeout through its binding, read
+ * by TypeScript's checker rather than by name: a local that shadows the import
+ * is not the default, and an alias, a namespace member or a shorthand property
+ * that is the default is. Two lists, over every module but the normalizer:
+ * each reference, by what it sits in — to the default, or to the normalizer's
+ * namespace, since whatever is done with a namespace hands the default on with
+ * it — and each export that resolves to the default or to that namespace. A
+ * parameter's default is named with the function that owns it. `virtual`
+ * holds the text of files that are not on disk, for the control.
+ */
+function bindingsOfTheDefault(
+  roots: readonly string[],
+  normalizer: string,
+  virtual: ReadonlyMap<string, string> = new Map()
+) {
+  const host = ts.createCompilerHost(CHECKER_OPTIONS, true);
+  const getSourceFile = host.getSourceFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+  const readFile = host.readFile.bind(host);
+  host.getSourceFile = (name, language, ...rest) => {
+    const text = virtual.get(name);
+    return text === undefined
+      ? getSourceFile(name, language, ...rest)
+      : ts.createSourceFile(name, text, language, true);
+  };
+  host.fileExists = (name) => virtual.has(name) || fileExists(name);
+  host.readFile = (name) => virtual.get(name) ?? readFile(name);
+  host.directoryExists = (name) =>
+    [...virtual.keys()].some((each) => each.startsWith(`${name}/`)) || ts.sys.directoryExists(name);
+  host.realpath = (name) => (virtual.has(name) ? name : (ts.sys.realpath?.(name) ?? name));
+  const program = ts.createProgram(roots, CHECKER_OPTIONS, host);
+  const checker = program.getTypeChecker();
+  const label = (file: string): string => relative(dirname(normalizer), file);
+  const home = program.getSourceFile(normalizer);
+  let target: ts.Symbol | undefined;
+  for (const statement of home?.statements ?? [])
+    if (ts.isVariableStatement(statement))
+      for (const declaration of statement.declarationList.declarations)
+        if (
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === 'DEFAULT_SETTLE_TIMEOUT_MS'
+        )
+          target = checker.getSymbolAtLocation(declaration.name);
+  if (target === undefined)
+    return { references: ['no declaration in the normalizer'], handedOn: [] };
+  const resolved = (symbol: ts.Symbol | undefined): ts.Symbol | undefined =>
+    symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0
+      ? checker.getAliasedSymbol(symbol)
+      : symbol;
+  const ownerOf = (node: ts.Node): string => {
+    for (let at = node.parent as ts.Node | undefined; at !== undefined; at = at.parent)
+      if (ts.isFunctionLike(at)) {
+        const name = at.name ?? (ts.isVariableDeclaration(at.parent) ? at.parent.name : undefined);
+        return name !== undefined && ts.isIdentifier(name) ? name.text : 'an unnamed function';
+      }
+    return 'no function';
+  };
+  const kindOf = (node: ts.Identifier, parent: ts.Node): string =>
+    ts.isImportSpecifier(parent)
+      ? 'import'
+      : (ts.isBindingElement(parent) || ts.isParameter(parent)) &&
+          parent.initializer === node &&
+          ts.isIdentifier(parent.name)
+        ? `the default of ${ownerOf(parent)}'s ${parent.name.text}`
+        : (ts.SyntaxKind[parent.kind] ?? String(parent.kind));
+  const references: string[] = [];
+  const handedOn: string[] = [];
+  for (const root of roots) {
+    if (root === normalizer) continue;
+    const file = program.getSourceFile(root);
+    if (file === undefined) {
+      references.push(`${label(root)}: not in the program`);
+      continue;
+    }
+    // One entry per construct and kind, since an aliased specifier names it
+    // twice and `n.DEFAULT_SETTLE_TIMEOUT_MS` reads both.
+    const seen = new Set<string>();
+    const record = (parent: ts.Node, entry: string): void => {
+      const key = `${String(parent.pos)}:${String(parent.end)}:${entry}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      references.push(`${label(root)}: ${entry}`);
+    };
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node)) {
+        const parent = node.parent;
+        const symbol =
+          ts.isShorthandPropertyAssignment(parent) && parent.name === node
+            ? checker.getShorthandAssignmentValueSymbol(parent)
+            : checker.getSymbolAtLocation(node);
+        const to = resolved(symbol);
+        if (to === target) record(parent, kindOf(node, parent));
+        else if (to?.declarations?.some((declaration) => declaration === home))
+          record(
+            parent,
+            `the normalizer's namespace, in ${ts.SyntaxKind[parent.kind] ?? String(parent.kind)}`
+          );
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    const module = checker.getSymbolAtLocation(file);
+    for (const each of module === undefined ? [] : checker.getExportsOfModule(module)) {
+      const to = resolved(each);
+      if (to === target) handedOn.push(`${label(root)}: ${each.name}`);
+      else if (to?.declarations?.some((declaration) => declaration === home))
+        handedOn.push(`${label(root)}: ${each.name}, the normalizer's namespace`);
+    }
+  }
+  return { references: references.sort(), handedOn: handedOn.sort() };
+}
+
+describe('A-γ: one declaration of the default settle timeout', () => {
+  // @contracts A-γ-C5
+  it('WI29: every exported const is declared in one module, and the default settle timeout in the normalizer alone', () => {
+    // **The rule is over exported consts**: every `export const` in the
+    // library is declared in one module. A module's private helper may share a
+    // name with another module's export — the normalizer's `article`, which
+    // picks "a" or "an", and the `Article` component's descriptor — and that is
+    // not two declarations of one value. The default settle timeout is held to
+    // more: no module-level declaration of it anywhere but the normalizer,
+    // exported or not, `const` or not; and, read by binding over the `.ts`
+    // modules, nothing outside the normalizer reaching it but the engine's
+    // import and its parameter's default, and no export resolving to it or to
+    // the normalizer's namespace.
+    //
+    // **The reader first, against the spellings a pattern over lines misses**:
+    // an indented declaration, the second of two declarators, a destructured
+    // one, a `let` and a `var`, a component's module script, and a re-export
+    // with and without `from`, under another name, as a default and as a
+    // wildcard — each a second module declaring or exporting a name — and a
+    // declaration inside a function or in a component's instance script, which
+    // is not module-level and is not counted.
+    const control = moduleLevel([
+      {
+        name: 'a.ts',
+        text: [
+          'export const A = 1;',
+          'const B = 1;',
+          'const C = 1;',
+          'export const D = 1;',
+          'export const E = 1;',
+          'export const F = 1;',
+          'export const G = 1;',
+          'const H = 1;',
+          'const I = 1;',
+          'const J = 1;',
+          ''
+        ].join('\n')
+      },
+      {
+        name: 'b.ts',
+        text: [
+          '  const A = 2;',
+          'const first = 0, B = 2;',
+          'const { C } = { C: 2 };',
+          "export { D } from './a.js';",
+          "import { E as local } from './a.js';",
+          'export { local as E };',
+          'function inside() { const F = 2; return F; }',
+          'let I = 2;',
+          'var J = 2;',
+          ''
+        ].join('\n')
+      },
+      { name: 'c.ts', text: "export * from './a.js';\n" },
+      {
+        name: 'e.ts',
+        text: [
+          "export { A as Renamed } from './a.js';",
+          "import { G as fromComponent } from './d.svelte';",
+          'export default fromComponent;',
+          ''
+        ].join('\n')
+      },
+      {
+        name: 'd.svelte',
+        text: moduleScriptOf(
+          '<script module>\n  export const G = 2;\n</script>\n<script>\n  const H = 2;\n</script>\n'
+        )
+      }
+    ]);
+    const twice = (map: Map<string, string[]>) =>
+      [...map]
+        .filter(([, where]) => where.length > 1)
+        .map(([each]) => each)
+        .sort();
+    expect(
+      {
+        declaredTwice: twice(control.declared),
+        exportedConstsTwice: twice(control.exportedConsts),
+        exportedTwice: twice(control.exported),
+        handedOn: Object.fromEntries([...control.reExported].sort(([a], [b]) => a.localeCompare(b)))
+      },
+      'the reader sees every module-level declaration and every export, and nothing that is not module-level'
+    ).toEqual({
+      declaredTwice: ['A', 'B', 'C', 'G', 'I', 'J'],
+      exportedConstsTwice: ['G'],
+      exportedTwice: ['A', 'D', 'E', 'F', 'G'],
+      handedOn: { A: ['e.ts'], D: ['b.ts'], E: ['b.ts'], G: ['e.ts'] }
+    });
+
+    const modules = libraryModules();
+    const { declared, exportedConsts, exported, reExported } = moduleLevel(modules);
+    // **And the default's bindings, read by the checker**, against the
+    // spellings a reader of names misses: a parameter that shadows the import
+    // while another function's default reads it, a local alias handed on, an
+    // import through `$lib`, a namespace re-exported, read through by name, by
+    // element, by a pattern or by a spread, a parenthesized default export, a
+    // shorthand property, a
+    // renamed re-export and a wildcard. The engine of the control is the clean
+    // one. The control's files are placed under `src/lib`, in a directory that
+    // is not on disk, so `$lib` reaches them as it reaches the library.
+    const V = join(LIB, '__wi29_control__');
+    const imported = "import { DEFAULT_SETTLE_TIMEOUT_MS } from './normalize.js';";
+    const virtual = new Map(
+      Object.entries({
+        'normalize.ts':
+          'export const DEFAULT_SETTLE_TIMEOUT_MS = 5_000;\nexport const own = DEFAULT_SETTLE_TIMEOUT_MS;\n',
+        'stream.ts': `${imported}\nexport function twoStageStream({ settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { settleTimeoutMs?: number }) { return settleTimeoutMs; }\n`,
+        'shadow.ts': `${imported}\nexport function twoStageStream({ fallback: DEFAULT_SETTLE_TIMEOUT_MS = 8000, settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { fallback?: number; settleTimeoutMs?: number }) { return settleTimeoutMs; }\nexport function helper({ settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { settleTimeoutMs?: number } = {}) { return settleTimeoutMs; }\n`,
+        'alias.ts':
+          "import { DEFAULT_SETTLE_TIMEOUT_MS as viaAlias } from '$lib/v1/__wi29_control__/normalize.js';\nexport const handed = viaAlias;\n",
+        'element.ts':
+          "import * as m from './normalize.js';\nexport const viaElement = m['DEFAULT_SETTLE_TIMEOUT_MS'];\nexport const { DEFAULT_SETTLE_TIMEOUT_MS: viaPattern } = m;\nexport const viaSpread = { ...m };\n",
+        'indirect.ts':
+          "import { DEFAULT_SETTLE_TIMEOUT_MS as d } from './normalize.js';\nconst handed = d;\nexport { handed as engineDefault };\n",
+        'namespace.ts': "export * as defaults from './normalize.js';\n",
+        'parenthesized.ts':
+          "import { DEFAULT_SETTLE_TIMEOUT_MS as local } from './normalize.js';\nexport default (local);\n",
+        'member.ts':
+          "import * as n from './normalize.js';\nexport const fromNamespace = n.DEFAULT_SETTLE_TIMEOUT_MS;\nexport { n };\n",
+        'shorthand.ts': `${imported}\nexport const bag = { DEFAULT_SETTLE_TIMEOUT_MS };\n`,
+        'renamed.ts': "export { DEFAULT_SETTLE_TIMEOUT_MS as X } from './normalize.js';\n",
+        'star.ts': "export * from './normalize.js';\n"
+      }).map(([name, text]) => [`${V}/${name}`, text] as const)
+    );
+    expect(
+      bindingsOfTheDefault([...virtual.keys()], `${V}/normalize.ts`, virtual),
+      'the checker resolves each binding, and a shadowing local is not the default'
+    ).toEqual({
+      references: [
+        'alias.ts: VariableDeclaration',
+        'alias.ts: import',
+        // The pattern's property is the default itself, read off the namespace.
+        'element.ts: BindingElement',
+        "element.ts: the normalizer's namespace, in ElementAccessExpression",
+        "element.ts: the normalizer's namespace, in NamespaceImport",
+        "element.ts: the normalizer's namespace, in SpreadAssignment",
+        "element.ts: the normalizer's namespace, in VariableDeclaration",
+        'indirect.ts: VariableDeclaration',
+        'indirect.ts: import',
+        'member.ts: PropertyAccessExpression',
+        "member.ts: the normalizer's namespace, in ExportSpecifier",
+        "member.ts: the normalizer's namespace, in NamespaceImport",
+        "member.ts: the normalizer's namespace, in PropertyAccessExpression",
+        "namespace.ts: the normalizer's namespace, in NamespaceExport",
+        'parenthesized.ts: ParenthesizedExpression',
+        'parenthesized.ts: import',
+        'renamed.ts: ExportSpecifier',
+        // The engine's parameter defaults to its own shadowing local, so the
+        // default this module reads is the helper's.
+        'shadow.ts: import',
+        "shadow.ts: the default of helper's settleTimeoutMs",
+        'shorthand.ts: ShorthandPropertyAssignment',
+        'shorthand.ts: import',
+        'stream.ts: import',
+        "stream.ts: the default of twoStageStream's settleTimeoutMs"
+      ],
+      handedOn: [
+        "member.ts: n, the normalizer's namespace",
+        "namespace.ts: defaults, the normalizer's namespace",
+        'renamed.ts: X',
+        'star.ts: DEFAULT_SETTLE_TIMEOUT_MS'
+      ]
+    });
+
+    const bound = bindingsOfTheDefault(
+      modules.filter((one) => one.name.endsWith('.ts')).map((one) => join(LIB, one.name)),
+      join(LIB, 'normalize.ts')
+    );
+    expect(
+      {
+        componentsRead: modules.filter((one) => one.name.startsWith('components/')).length > 10,
+        modulesRead: modules.length > 30,
+        exportedConstsTwice: [...exportedConsts].filter(([, where]) => where.length > 1),
+        theDefaultIsDeclaredIn: declared.get('DEFAULT_SETTLE_TIMEOUT_MS'),
+        theDefaultIsExportedBy: exported.get('DEFAULT_SETTLE_TIMEOUT_MS'),
+        theDefaultIsHandedOnBy: reExported.get('DEFAULT_SETTLE_TIMEOUT_MS') ?? [],
+        theDefaultIsReadBy: bound.references,
+        theDefaultResolvesFromTheExportsOf: bound.handedOn
+      },
+      'one declaration of every exported const, the default in the normalizer, imported by the engine as its default and handed on by nobody'
+    ).toEqual({
+      componentsRead: true,
+      modulesRead: true,
+      exportedConstsTwice: [],
+      theDefaultIsDeclaredIn: ['normalize.ts'],
+      theDefaultIsExportedBy: ['normalize.ts'],
+      theDefaultIsHandedOnBy: [],
+      theDefaultIsReadBy: [
+        'stream.ts: import',
+        "stream.ts: the default of twoStageStream's settleTimeoutMs"
+      ],
+      theDefaultResolvesFromTheExportsOf: []
+    });
   });
 });
