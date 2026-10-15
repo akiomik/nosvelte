@@ -27,6 +27,7 @@ import { describe, expect, it } from 'vitest';
 import { canonicalKey, UnsupportedFilterError } from '$lib/v1/key.js';
 import type { RawDescriptor, ReadonlyFilter } from '$lib/v1/normalize.js';
 import {
+  DEFAULT_SETTLE_TIMEOUT_MS,
   InvalidDescriptorError,
   LIBRARY_EOSE_TIMEOUT_MS,
   MAX_SETTLE_TIMEOUT_MS,
@@ -185,7 +186,29 @@ describe('the normalization boundary', () => {
     );
   });
 
+  // @contracts A-γ-C2
   it('NM5: the default is resolved before the key, so equal requests share one', () => {
+    // **A finite deadline, and the one the constant names.** A descriptor that
+    // says nothing about its settle timeout is normalized to the named default,
+    // which is a finite, positive number — so a silent relay cannot hold the
+    // request open forever, and the key carries a number either way. That the
+    // constant has one declaration is `A-γ-C5`'s, read off the module tree.
+    const normalized = normalizeDescriptor(base);
+    expect(
+      {
+        carried: normalized.settleTimeoutMs,
+        named: DEFAULT_SETTLE_TIMEOUT_MS,
+        finite: Number.isFinite(DEFAULT_SETTLE_TIMEOUT_MS),
+        positive: DEFAULT_SETTLE_TIMEOUT_MS > 0
+      },
+      'an omitted settle timeout is normalized to the named, finite default'
+    ).toEqual({
+      carried: DEFAULT_SETTLE_TIMEOUT_MS,
+      named: DEFAULT_SETTLE_TIMEOUT_MS,
+      finite: true,
+      positive: true
+    });
+
     const withDefault = keyOf({ ...base, settleTimeoutMs: 5_000 });
     const without = keyOf(base);
 
@@ -799,6 +822,7 @@ describe('A-γ: the request owns its settle timeout', () => {
     );
   });
 
+  // @contracts A-γ-C3
   it('NM11: a settle timeout the request could not own is refused, not clamped', () => {
     // The ceiling is about the dependency and not about taste. rx-nostr runs its
     // own `eoseTimeout`, which *completes* the backward observable (the spike sentinel `SEN14`), and
@@ -818,6 +842,12 @@ describe('A-γ: the request owns its settle timeout', () => {
     expect(() => normalizeDescriptor({ ...base, settleTimeoutMs: 600_000 })).toThrow(
       /must be at most 60000/
     );
+    // **And the row's own Given**: a settle timeout larger than the upstream
+    // timer the provider sets is refused too — a boundary that refused only up
+    // to some value below that timer would pass every probe above.
+    expect(() =>
+      normalizeDescriptor({ ...base, settleTimeoutMs: LIBRARY_EOSE_TIMEOUT_MS + 1 })
+    ).toThrow(/must be at most 60000/);
 
     // And the headroom is real: the upstream timer has to be far enough above
     // the largest accepted value that it is never the one that fires.

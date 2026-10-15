@@ -4,8 +4,8 @@
  *
  * How the machine waits for what the gate still holds, and how it stops
  * waiting: the landings of `A-ε-C6` (`DC1`), `A-ε-C7` (`DC2`), `A-ε-C8` (`DC3`),
- * `A-ε-C9` (`DC4`), `A-ε-C10` (`DC5`), `A-ε-C12` (`DC6`), `A-ε-C13` (`DC7`) and
- * `A-ε-C14` (`DC8`).
+ * `A-ε-C9` (`DC4`), `A-ε-C10` (`DC5`), `A-ε-C12` (`DC6`), `A-ε-C13` (`DC7`),
+ * `A-ε-C14` (`DC8`) and `A-ζ-C1` (`DC9`).
  *
  * **The rows are `internal`, because what they arrange is how the verifier
  * answers** — slowly, one at a time, held until the test releases it, or never
@@ -1195,4 +1195,96 @@ describe('the wait over what the gate holds, and its end', () => {
       }))
     );
   }, 20_000);
+
+  // @contracts A-ζ-C1
+  it('DC9: a clock that jumps across a verification bounds the next wait by the floor, not by the jump', async () => {
+    // **The clock the machine reads is `Date.now`**, sampled where a candidate
+    // enters the gate and where it leaves, so that is the clock moved: forward
+    // by a minute across the first verification, and back. Time here is
+    // measured on the clock as it was before the move. The next wait is four
+    // times the floor at most and the floor at least — more than two seconds
+    // and less than six — which an unclamped sample and one pinned to the
+    // floor each miss.
+    //
+    // **Twice: as the row has it, and live with a third candidate answered
+    // after the cut**, because one never answered cannot show what the cut did
+    // to it: a candidate is marked discarded where the cut falls and read
+    // where its verification returns. The live request is still running when
+    // that candidate passes, over a stated half-second horizon.
+    const realNow = Date.now;
+    const run = async (reqIdBase: string, live: boolean): Promise<unknown> => {
+      const gate = held();
+      const one = request(gate.verify, { live, reqIdBase, timeoutMs: 60_000 });
+      let skewMs = 0;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skewMs);
+      try {
+        const backward = await one.subId('b');
+        if (live) await one.subId('f');
+        const candidates = live ? ['jumper', 'stuck', 'late'] : ['jumper', 'stuck'];
+        for (const content of candidates)
+          respondWithEvent(one.server, backward, fakeEvent({ content }));
+        await vi.waitFor(() => expect(candidates.every(gate.admitted)).toBe(true), {
+          timeout: 2000
+        });
+        respondWithEose(one.server, backward);
+        await delay(50);
+        skewMs = 60_000;
+        const releasedAt = realNow();
+        await gate.release('jumper');
+        await delay(60);
+        skewMs = 0;
+        let cutAfterMs: number | undefined;
+        for (let waited = 0; waited < 7000 && cutAfterMs === undefined; waited += 25) {
+          if (shape(one.chunks).includes('settled')) cutAfterMs = realNow() - releasedAt;
+          else await delay(25);
+        }
+        const atTheCut = shape(one.chunks);
+        let afterTheRelease: string[] | undefined;
+        let runningAtRelease: boolean | undefined;
+        if (live) {
+          await gate.release('late');
+          runningAtRelease = !one.returned();
+          await delay(500);
+          afterTheRelease = shape(one.chunks);
+        }
+        return {
+          cutAfterMoreThan2s: cutAfterMs !== undefined && cutAfterMs > 2000,
+          cutAfterLessThan6s: cutAfterMs !== undefined && cutAfterMs < 6000,
+          atTheCut,
+          ends: endsOf(one.chunks),
+          runningAtRelease,
+          afterTheRelease
+        };
+      } catch (error) {
+        return { failed: error instanceof Error ? error.message : String(error) };
+      } finally {
+        clock.mockRestore();
+        await one.stop();
+      }
+    };
+    const asTheRowHasIt = await run('dc9', false);
+    const answeredAfterTheCut = await run('dc9-live', true);
+    const cut = [{ kind: 'incomplete', causes: ['verification-timeout'], error: undefined }];
+    expect(
+      { asTheRowHasIt, answeredAfterTheCut },
+      'cut between two and six seconds after the jump, the released one ahead of the outcome, nothing behind it'
+    ).toEqual({
+      asTheRowHasIt: {
+        cutAfterMoreThan2s: true,
+        cutAfterLessThan6s: true,
+        atTheCut: ['event:jumper', 'settled'],
+        ends: cut,
+        runningAtRelease: undefined,
+        afterTheRelease: undefined
+      },
+      answeredAfterTheCut: {
+        cutAfterMoreThan2s: true,
+        cutAfterLessThan6s: true,
+        atTheCut: ['event:jumper', 'settled'],
+        ends: cut,
+        runningAtRelease: true,
+        afterTheRelease: ['event:jumper', 'settled']
+      }
+    });
+  }, 30_000);
 });

@@ -11,7 +11,7 @@
  * spike's, as 0005 records them; they are history rather than files in this
  * repository.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -816,5 +816,123 @@ describe('this library mints where it constructs, and closes before it freezes',
     } finally {
       Error.prepareStackTrace = previous;
     }
+  });
+});
+
+/**
+ * The module-level `const` declarations of each module, and the names each one
+ * exports — read off TypeScript's syntax tree, so a declaration is found
+ * however it is indented and wherever it sits in a list of declarators, a
+ * destructured one included, and one inside a function is not module-level.
+ */
+function moduleLevel(modules: readonly { name: string; text: string }[]) {
+  const declared = new Map<string, string[]>();
+  const exported = new Map<string, string[]>();
+  const add = (into: Map<string, string[]>, key: string, module: string) =>
+    into.set(key, [...(into.get(key) ?? []), module]);
+  const namesIn = (binding: ts.BindingName, into: (name: string) => void): void => {
+    if (ts.isIdentifier(binding)) into(binding.text);
+    else
+      for (const element of binding.elements)
+        if (!ts.isOmittedExpression(element)) namesIn(element.name, into);
+  };
+  for (const { name, text } of modules) {
+    const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
+    for (const statement of file.statements) {
+      const isExported =
+        ts.canHaveModifiers(statement) &&
+        (ts.getModifiers(statement) ?? []).some(
+          (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword
+        );
+      if (ts.isVariableStatement(statement)) {
+        if ((statement.declarationList.flags & ts.NodeFlags.Const) === 0) continue;
+        for (const declaration of statement.declarationList.declarations)
+          namesIn(declaration.name, (each) => {
+            add(declared, each, name);
+            if (isExported) add(exported, each, name);
+          });
+      } else if (ts.isExportDeclaration(statement)) {
+        if (statement.exportClause === undefined) add(exported, '*', name);
+        else if (ts.isNamedExports(statement.exportClause))
+          for (const element of statement.exportClause.elements)
+            add(exported, element.name.text, name);
+      }
+    }
+  }
+  return { declared, exported };
+}
+
+describe('A-γ: one declaration of the default settle timeout', () => {
+  // @contracts A-γ-C5
+  it('WI29: every module-level const is declared in one module, and the default settle timeout in the normalizer alone', () => {
+    // **The reader first, against the spellings a pattern over lines misses**:
+    // an indented declaration, the second of two declarators, a destructured
+    // one, and a re-export with and without `from` — each a second module
+    // declaring or exporting a name — and a declaration inside a function,
+    // which is not module-level and is not counted.
+    const control = moduleLevel([
+      {
+        name: 'a.ts',
+        text: 'export const A = 1;\nconst B = 1;\nconst C = 1;\nexport const D = 1;\nexport const E = 1;\nexport const F = 1;\n'
+      },
+      {
+        name: 'b.ts',
+        text: [
+          '  const A = 2;',
+          'const first = 0, B = 2;',
+          'const { C } = { C: 2 };',
+          "export { D } from './a.js';",
+          "import { E as local } from './a.js';",
+          'export { local as E };',
+          'function inside() { const F = 2; return F; }',
+          ''
+        ].join('\n')
+      }
+    ]);
+    expect(
+      {
+        declaredTwice: [...control.declared]
+          .filter(([, where]) => where.length > 1)
+          .map(([n]) => n),
+        exportedTwice: [...control.exported].filter(([, where]) => where.length > 1).map(([n]) => n)
+      },
+      'the reader sees every module-level declaration and every export, and nothing inside a function'
+    ).toEqual({ declaredTwice: ['A', 'B', 'C'], exportedTwice: ['D', 'E'] });
+
+    const names = readdirSync(LIB).filter((name) => name.endsWith('.ts'));
+    const { declared, exported } = moduleLevel(
+      names.map((name) => ({ name, text: sourceOf(name) }))
+    );
+    const stream = ts.createSourceFile(
+      'stream.ts',
+      sourceOf('stream.ts'),
+      ts.ScriptTarget.Latest,
+      true
+    );
+    const importedByTheEngine = stream.statements.flatMap((statement) =>
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text === './normalize.js' &&
+      statement.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(statement.importClause.namedBindings)
+        ? statement.importClause.namedBindings.elements.map((element) => element.name.text)
+        : []
+    );
+    expect(
+      {
+        modulesRead: names.length > 20,
+        declaredTwice: [...declared].filter(([, where]) => where.length > 1),
+        theDefaultIsDeclaredIn: declared.get('DEFAULT_SETTLE_TIMEOUT_MS'),
+        theDefaultIsExportedBy: exported.get('DEFAULT_SETTLE_TIMEOUT_MS'),
+        theEngineImportsIt: importedByTheEngine.includes('DEFAULT_SETTLE_TIMEOUT_MS')
+      },
+      'one declaration of every module-level const, the default in the normalizer, imported by the engine and exported by nobody else'
+    ).toEqual({
+      modulesRead: true,
+      declaredTwice: [],
+      theDefaultIsDeclaredIn: ['normalize.ts'],
+      theDefaultIsExportedBy: ['normalize.ts'],
+      theEngineImportsIt: true
+    });
   });
 });
