@@ -1368,7 +1368,7 @@ that does not hold.
 | `discharged`   | **2**   | nothing; the row names the decision that discharged it and how it comes back                                                                                       |
 
 **351 rows require a phase-2 disposition**, which is every route except `no-test` and `discharged`.
-Of those, **102 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **242
+Of those, **105 are test-backed**, **7 are absent**, **0 carry another terminal form**, and **239
 are TBD**.
 
 **Five numbers rather than one — a total and the four it splits into — because a reviewer measured
@@ -1485,11 +1485,11 @@ A-γ-C3       internal      TBD
 A-γ-C6       architecture  TBD
 A-γ-C4       internal      TBD
 A-γ-S1       sentinel      test:DS14
-A-ε-C1       public        TBD
-A-ε-C2       public        TBD
+A-ε-C1       public        test:OR1
+A-ε-C2       public        test:OR2
 A-ε-C3       public        TBD
 A-ε-C4       internal      test:VG1
-A-ε-C5       internal      TBD
+A-ε-C5       internal      test:OR3
 A-ε-C6       internal      test:DC1
 A-ε-C7       internal      test:DC2
 A-ε-C8       internal      test:DC3
@@ -2098,9 +2098,9 @@ sentence was true**: the arm it named passed with the framework's context replac
 is recorded in the row.
 
 **The seven are the set that round named, and the population has grown since.** `A-ε-C18`,
-`A-ε-C17`, `A-ε-C15` and `A-ε-C13` declare `svelte-context` too: their landings render a provider
-and the framework's own context (`AH1`, `AH2`, `WB1`, `DC7`), so a recurrence of that finding would
-re-open eleven rows, not seven.
+`A-ε-C17`, `A-ε-C15`, `A-ε-C13`, `A-ε-C1` and `A-ε-C2` declare `svelte-context` too: their landings
+render a provider and the framework's own context (`AH1`, `AH2`, `WB1`, `DC7`, `OR1`, `OR2`), so a
+recurrence of that finding would re-open thirteen rows, not seven.
 
 `CAT31` holds the table's completeness both ways, the two vocabularies, `declared ⊇ computed`, the
 reverse rule for the three "nothing reached" words, both rosters against the prose above, the
@@ -2383,8 +2383,8 @@ stronger half.
 | A-γ-C6  | engine    | svelte-effects                                                      |
 | A-γ-C4  | engine    | svelte-effects                                                      |
 | A-γ-S1  | rationale | wire                                                                |
-| A-ε-C1  | engine    | svelte-effects wire                                                 |
-| A-ε-C2  | engine    | svelte-effects wire                                                 |
+| A-ε-C1  | engine    | svelte-context svelte-effects svelte-render wire                    |
+| A-ε-C2  | engine    | svelte-context svelte-effects svelte-render wire                    |
 | A-ε-C3  | transport | wire                                                                |
 | A-ε-C4  | engine    | wire                                                                |
 | A-ε-C5  | transport | wire                                                                |
