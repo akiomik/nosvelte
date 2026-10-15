@@ -125,8 +125,11 @@ describe('a request that runs out of patience', () => {
         await vi.waitFor(() => expect(handle?.state.status).toBe('incomplete'), {
           timeout: 3000
         });
-        // The 300ms ran from before the event was sent. A timer of two seconds
-        // cannot answer inside 1.5, and the rest is for a loaded machine.
+        // The 300ms ran from before the event was sent: the timer is armed as
+        // the backlog begins, and the event follows the arm's own polling for
+        // the `REQ`. A timer of two seconds answers inside 1.5 of the event
+        // only if that polling took half a second, and the rest of the edge is
+        // for a loaded machine.
         const soonAfterIt = Date.now() - sentAt < 1500;
         const request = handle as ReqHandle;
         const { state, diagnostics } = request;

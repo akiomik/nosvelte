@@ -56,7 +56,7 @@ export default {
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 5, TC2: 4, DC9: 13 }
+    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 6, TC2: 4, DC9: 13 }
   },
   entries: [
     {
@@ -560,6 +560,54 @@ export default {
           file: STREAM,
           from: ENGINE_IMPORT,
           to: `${ENGINE_IMPORT}\nexport default (DEFAULT_SETTLE_TIMEOUT_MS);`
+        }
+      ]
+    },
+    {
+      id: 'C5-a-shadow-with-a-helper-default',
+      arm: 'WI29',
+      describe:
+        "the engine's parameter defaults to a local that shadows the import, and a helper of its own defaults to the import instead",
+      edits: [
+        {
+          file: STREAM,
+          from: '  settleTimeoutMs?: number | undefined;\n',
+          to: '  defaultTimeoutMs?: number | undefined;\n  settleTimeoutMs?: number | undefined;\n'
+        },
+        {
+          file: STREAM,
+          from: '  settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS\n}: StreamParams)',
+          to: '  defaultTimeoutMs: DEFAULT_SETTLE_TIMEOUT_MS = 8000,\n  settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS\n}: StreamParams)'
+        },
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nexport function gammaDefault({ settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { settleTimeoutMs?: number } = {}): number {\n  return settleTimeoutMs;\n}`
+        }
+      ]
+    },
+    {
+      id: 'C5-a-namespace-element-access',
+      arm: 'WI29',
+      describe:
+        "the engine reads the default out of the normalizer's namespace by element, and exports it",
+      edits: [
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nimport * as normalizer from './normalize.js';\nexport const handedDefault = normalizer['DEFAULT_SETTLE_TIMEOUT_MS'];`
+        }
+      ]
+    },
+    {
+      id: 'C5-a-path-alias-import',
+      arm: 'WI29',
+      describe: 'the engine imports the default a second time, through `$lib`, and exports it',
+      edits: [
+        {
+          file: STREAM,
+          from: ENGINE_IMPORT,
+          to: `${ENGINE_IMPORT}\nimport { DEFAULT_SETTLE_TIMEOUT_MS as viaAlias } from '$lib/v1/normalize.js';\nexport const handedDefault = viaAlias;`
         }
       ]
     },

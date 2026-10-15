@@ -939,13 +939,14 @@ function moduleLevel(modules: readonly { name: string; text: string }[]) {
   return { declared, exportedConsts, exported, reExported };
 }
 
+/** The repository's own options, so `$lib` resolves as the library's build resolves it. */
 const CHECKER_OPTIONS: ts.CompilerOptions = {
-  target: ts.ScriptTarget.ESNext,
-  module: ts.ModuleKind.ESNext,
-  moduleResolution: ts.ModuleResolutionKind.Bundler,
-  noEmit: true,
-  skipLibCheck: true,
-  types: []
+  ...ts.parseJsonConfigFileContent(
+    ts.readConfigFile(join(ROOT, 'tsconfig.json'), (name) => ts.sys.readFile(name)).config,
+    ts.sys,
+    ROOT
+  ).options,
+  noEmit: true
 };
 
 /**
@@ -953,9 +954,11 @@ const CHECKER_OPTIONS: ts.CompilerOptions = {
  * by TypeScript's checker rather than by name: a local that shadows the import
  * is not the default, and an alias, a namespace member or a shorthand property
  * that is the default is. Two lists, over every module but the normalizer:
- * each reference, by what it sits in, and each export that resolves to the
- * default or to the normalizer's namespace. `virtual` holds the text of files
- * that are not on disk, for the control.
+ * each reference, by what it sits in — to the default, or to the normalizer's
+ * namespace, since whatever is done with a namespace hands the default on with
+ * it — and each export that resolves to the default or to that namespace. A
+ * parameter's default is named with the function that owns it. `virtual`
+ * holds the text of files that are not on disk, for the control.
  */
 function bindingsOfTheDefault(
   roots: readonly string[],
@@ -996,14 +999,21 @@ function bindingsOfTheDefault(
     symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0
       ? checker.getAliasedSymbol(symbol)
       : symbol;
+  const ownerOf = (node: ts.Node): string => {
+    for (let at = node.parent as ts.Node | undefined; at !== undefined; at = at.parent)
+      if (ts.isFunctionLike(at)) {
+        const name = at.name ?? (ts.isVariableDeclaration(at.parent) ? at.parent.name : undefined);
+        return name !== undefined && ts.isIdentifier(name) ? name.text : 'an unnamed function';
+      }
+    return 'no function';
+  };
   const kindOf = (node: ts.Identifier, parent: ts.Node): string =>
     ts.isImportSpecifier(parent)
       ? 'import'
       : (ts.isBindingElement(parent) || ts.isParameter(parent)) &&
           parent.initializer === node &&
-          ts.isIdentifier(parent.name) &&
-          parent.name.text === 'settleTimeoutMs'
-        ? 'the default of settleTimeoutMs'
+          ts.isIdentifier(parent.name)
+        ? `the default of ${ownerOf(parent)}'s ${parent.name.text}`
         : (ts.SyntaxKind[parent.kind] ?? String(parent.kind));
   const references: string[] = [];
   const handedOn: string[] = [];
@@ -1014,8 +1024,15 @@ function bindingsOfTheDefault(
       references.push(`${label(root)}: not in the program`);
       continue;
     }
-    // One entry per construct, since an aliased specifier names it twice.
-    const seen = new Set<ts.Node>();
+    // One entry per construct and kind, since an aliased specifier names it
+    // twice and `n.DEFAULT_SETTLE_TIMEOUT_MS` reads both.
+    const seen = new Set<string>();
+    const record = (parent: ts.Node, entry: string): void => {
+      const key = `${String(parent.pos)}:${String(parent.end)}:${entry}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      references.push(`${label(root)}: ${entry}`);
+    };
     const visit = (node: ts.Node): void => {
       if (ts.isIdentifier(node)) {
         const parent = node.parent;
@@ -1023,10 +1040,13 @@ function bindingsOfTheDefault(
           ts.isShorthandPropertyAssignment(parent) && parent.name === node
             ? checker.getShorthandAssignmentValueSymbol(parent)
             : checker.getSymbolAtLocation(node);
-        if (resolved(symbol) === target && !seen.has(parent)) {
-          seen.add(parent);
-          references.push(`${label(root)}: ${kindOf(node, parent)}`);
-        }
+        const to = resolved(symbol);
+        if (to === target) record(parent, kindOf(node, parent));
+        else if (to?.declarations?.some((declaration) => declaration === home))
+          record(
+            parent,
+            `the normalizer's namespace, in ${ts.SyntaxKind[parent.kind] ?? String(parent.kind)}`
+          );
       }
       ts.forEachChild(node, visit);
     };
@@ -1135,18 +1155,26 @@ describe('A-γ: one declaration of the default settle timeout', () => {
     const modules = libraryModules();
     const { declared, exportedConsts, exported, reExported } = moduleLevel(modules);
     // **And the default's bindings, read by the checker**, against the
-    // spellings a reader of names misses: a parameter that shadows the import,
-    // a local alias handed on, a namespace re-exported or read through, a
-    // parenthesized default export, a shorthand property, a renamed re-export
-    // and a wildcard. The engine of the control is the clean one.
-    const V = '/nosvelte-wi29-control';
+    // spellings a reader of names misses: a parameter that shadows the import
+    // while another function's default reads it, a local alias handed on, an
+    // import through `$lib`, a namespace re-exported, read through by name, by
+    // element, by a pattern or by a spread, a parenthesized default export, a
+    // shorthand property, a
+    // renamed re-export and a wildcard. The engine of the control is the clean
+    // one. The control's files are placed under `src/lib`, in a directory that
+    // is not on disk, so `$lib` reaches them as it reaches the library.
+    const V = join(LIB, '__wi29_control__');
     const imported = "import { DEFAULT_SETTLE_TIMEOUT_MS } from './normalize.js';";
     const virtual = new Map(
       Object.entries({
         'normalize.ts':
           'export const DEFAULT_SETTLE_TIMEOUT_MS = 5_000;\nexport const own = DEFAULT_SETTLE_TIMEOUT_MS;\n',
-        'stream.ts': `${imported}\nexport function run({ settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { settleTimeoutMs?: number }) { return settleTimeoutMs; }\n`,
-        'shadow.ts': `${imported}\nexport function run({ fallback: DEFAULT_SETTLE_TIMEOUT_MS = 8000, settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { fallback?: number; settleTimeoutMs?: number }) { return settleTimeoutMs; }\n`,
+        'stream.ts': `${imported}\nexport function twoStageStream({ settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { settleTimeoutMs?: number }) { return settleTimeoutMs; }\n`,
+        'shadow.ts': `${imported}\nexport function twoStageStream({ fallback: DEFAULT_SETTLE_TIMEOUT_MS = 8000, settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { fallback?: number; settleTimeoutMs?: number }) { return settleTimeoutMs; }\nexport function helper({ settleTimeoutMs = DEFAULT_SETTLE_TIMEOUT_MS }: { settleTimeoutMs?: number } = {}) { return settleTimeoutMs; }\n`,
+        'alias.ts':
+          "import { DEFAULT_SETTLE_TIMEOUT_MS as viaAlias } from '$lib/v1/__wi29_control__/normalize.js';\nexport const handed = viaAlias;\n",
+        'element.ts':
+          "import * as m from './normalize.js';\nexport const viaElement = m['DEFAULT_SETTLE_TIMEOUT_MS'];\nexport const { DEFAULT_SETTLE_TIMEOUT_MS: viaPattern } = m;\nexport const viaSpread = { ...m };\n",
         'indirect.ts':
           "import { DEFAULT_SETTLE_TIMEOUT_MS as d } from './normalize.js';\nconst handed = d;\nexport { handed as engineDefault };\n",
         'namespace.ts': "export * as defaults from './normalize.js';\n",
@@ -1164,19 +1192,32 @@ describe('A-γ: one declaration of the default settle timeout', () => {
       'the checker resolves each binding, and a shadowing local is not the default'
     ).toEqual({
       references: [
+        'alias.ts: VariableDeclaration',
+        'alias.ts: import',
+        // The pattern's property is the default itself, read off the namespace.
+        'element.ts: BindingElement',
+        "element.ts: the normalizer's namespace, in ElementAccessExpression",
+        "element.ts: the normalizer's namespace, in NamespaceImport",
+        "element.ts: the normalizer's namespace, in SpreadAssignment",
+        "element.ts: the normalizer's namespace, in VariableDeclaration",
         'indirect.ts: VariableDeclaration',
         'indirect.ts: import',
         'member.ts: PropertyAccessExpression',
+        "member.ts: the normalizer's namespace, in ExportSpecifier",
+        "member.ts: the normalizer's namespace, in NamespaceImport",
+        "member.ts: the normalizer's namespace, in PropertyAccessExpression",
+        "namespace.ts: the normalizer's namespace, in NamespaceExport",
         'parenthesized.ts: ParenthesizedExpression',
         'parenthesized.ts: import',
         'renamed.ts: ExportSpecifier',
-        // The shadowing parameter's default is its own local, so the import is
-        // all this module reads.
+        // The engine's parameter defaults to its own shadowing local, so the
+        // default this module reads is the helper's.
         'shadow.ts: import',
+        "shadow.ts: the default of helper's settleTimeoutMs",
         'shorthand.ts: ShorthandPropertyAssignment',
         'shorthand.ts: import',
         'stream.ts: import',
-        'stream.ts: the default of settleTimeoutMs'
+        "stream.ts: the default of twoStageStream's settleTimeoutMs"
       ],
       handedOn: [
         "member.ts: n, the normalizer's namespace",
@@ -1209,7 +1250,10 @@ describe('A-γ: one declaration of the default settle timeout', () => {
       theDefaultIsDeclaredIn: ['normalize.ts'],
       theDefaultIsExportedBy: ['normalize.ts'],
       theDefaultIsHandedOnBy: [],
-      theDefaultIsReadBy: ['stream.ts: import', 'stream.ts: the default of settleTimeoutMs'],
+      theDefaultIsReadBy: [
+        'stream.ts: import',
+        "stream.ts: the default of twoStageStream's settleTimeoutMs"
+      ],
       theDefaultResolvesFromTheExportsOf: []
     });
   });
