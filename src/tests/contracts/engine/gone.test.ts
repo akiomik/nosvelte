@@ -13,24 +13,25 @@
  * ways a relay can.
  *
  * **Three ways for a relay to go, all over the wire.**
- * - **Refused**: the relay closes the open socket with 4000, DONT_RETRY, and
- *   rx-nostr reports `rejected` at once. The spike forced that state by
- *   overwriting `getAllRelayStatus`, on the reading that the socket mock
- *   cannot refuse a handshake; the state is reached by the close code instead.
+ * - **Refused**: the relay closes the open socket with 4000, DONT_RETRY. That
+ *   is the only way into rx-nostr's `rejected`: the dependency sets it for that
+ *   close code and nothing else. The socket mock can refuse a handshake too,
+ *   but it closes with 1000, which rx-nostr retries. The spike forced
+ *   `rejected` by overwriting `getAllRelayStatus` instead.
  * - **Died**: the relay drops the socket abnormally (1006). The shipping
- *   policy waits a second or so and reconnects, the request is sent again on
- *   the new socket, and the arm reads the request still running there — it is
- *   recovering, which ends nothing — before the relay refuses the retried
- *   socket with 4000. So a death passes through the state every death on a
- *   real network passes through, and ends in `rejected`.
- * - **Exhausted** (`GN3`'s second run): the relay stops accepting, and every
- *   retry fails before it opens, until rx-nostr gives up with `error`. The
- *   retries are about thirty seconds of the dependency's own timers, so that
- *   run is on a fake clock.
+ *   policy waits a second or so and reconnects, and the request is sent again
+ *   on the new socket. The arm reads the request while the relay waits to
+ *   retry and again once it has, before the relay refuses the retried socket
+ *   with 4000. That is one terminal loss — through recovery into `rejected` —
+ *   and not the ordinary one.
+ * - **Exhausted**: the ordinary one. The relay stops accepting, every retry
+ *   fails before it opens, and rx-nostr gives up with `error` once its five
+ *   retries are spent — about thirty seconds of its own timers. Those runs are
+ *   on a fake clock installed before the request is made, so the request's own
+ *   timer runs on the same clock and is set above the retries, at 60s.
  *
- * Every request's own settle timeout is 30s, or 60s where the retries run out,
- * and the arms read well inside it, so an answer that arrives is not the
- * request's own timer.
+ * Every other request's own settle timeout is 30s, and the arms read well
+ * inside it, so an answer that arrives is not the request's own timer.
  *
  * Port band 9520–9559.
  */
@@ -73,6 +74,20 @@ const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
 /** Within this of the last relay going, an answer is the relays' and not the timer's. */
 const PROMPTLY_MS = 2000;
 
+/**
+ * What the fake clock fakes: the timers and the clocks, and not the promise
+ * machinery — microtasks and `nextTick` stay native, so Svelte, the query core
+ * and the socket mock settle between the steps the arm advances.
+ */
+const FAKED = [
+  'setTimeout',
+  'clearTimeout',
+  'setInterval',
+  'clearInterval',
+  'Date',
+  'performance'
+] as const;
+
 const SECKEY = '7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a';
 
 /** An event signed correctly over its own fields, as a relay would carry one. */
@@ -85,10 +100,11 @@ const signed = (content: string): Nostr.Event => {
 /**
  * The published entry's globals: the socket mock, and no relay metadata. Every
  * socket the dependency constructs is recorded by its url, including one that
- * never opens — which is what a retry against a relay that is gone is.
+ * never opens — which is what a retry against a relay that is gone is. Called
+ * again with the same list after a relay server is made, since making one puts
+ * the plain mock back.
  */
-function stubTheWire(): string[] {
-  const constructed: string[] = [];
+function stubTheWire(constructed: string[] = []): string[] {
   class Recorded extends MockWebSocket {
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols);
@@ -100,8 +116,32 @@ function stubTheWire(): string[] {
   return constructed;
 }
 
+/** How many sockets were constructed for `url`. */
+const constructedFor = (constructed: readonly string[], url: string): number =>
+  constructed.filter((each) => each.startsWith(url)).length;
+
 interface Closable {
   close(options: { code: number }): void;
+}
+
+/** Whether `done` holds within `ms` of real time. */
+async function until(done: () => boolean, ms: number): Promise<boolean> {
+  try {
+    await vi.waitFor(() => expect(done()).toBe(true), { timeout: ms });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Advance the fake clock a step at a time until `done` holds, or `ms` of it
+ * have passed — the fake clock's `until`, since a wait on real time would
+ * watch a clock that is not moving.
+ */
+async function advanceUntil(done: () => boolean, ms: number, step = 100): Promise<boolean> {
+  for (let spent = 0; spent < ms && !done(); spent += step) await vi.advanceTimersByTimeAsync(step);
+  return done();
 }
 
 /** A relay the published entry connects to, whose sockets it closes as a relay would. */
@@ -111,55 +151,68 @@ function relayAt(url: string) {
   server.on('connection', (socket) => {
     sockets.push(socket as unknown as Closable);
   });
+  const frames = (): unknown[][] => server.messages as unknown[][];
   const reqs = (): string[] =>
-    (server.messages as unknown[][])
+    frames()
       .filter((frame) => frame[0] === 'REQ')
       .map((frame) => String(frame[1]));
   return {
     url,
     server,
     connections: (): number => sockets.length,
+    frames: (): number => frames().length,
     reqs,
     /** Wait until `count` subscriptions have been asked of this relay in all. */
     asked: async (count: number): Promise<void> => {
       await vi.waitFor(
         () => expect(reqs().length, `${url} was asked`).toBeGreaterThanOrEqual(count),
-        {
-          timeout: 3000
-        }
+        { timeout: 3000 }
       );
     },
     /** The open socket closed with 4000, which rx-nostr reports as `rejected`. */
     refuse: (): void => {
       sockets.at(-1)?.close({ code: 4000 });
     },
-    /**
-     * The open socket dropped abnormally, and this waits for the shipping
-     * policy to reconnect and for the request to be sent again on the new
-     * socket — so it returns with the relay recovering, not gone.
-     */
-    drop: async (): Promise<void> => {
-      const connected = sockets.length;
-      const asked = reqs().length;
+    /** The open socket dropped abnormally (1006), which the shipping policy retries. */
+    drop: (): void => {
       sockets.at(-1)?.close({ code: 1006 });
-      await vi.waitFor(
-        () => {
-          expect(sockets.length, `${url} reconnected`).toBe(connected + 1);
-          expect(reqs().length, `${url} was asked again`).toBeGreaterThan(asked);
-        },
-        { timeout: 5000 }
-      );
+    },
+    /**
+     * The server closed and removed, with `code` delivered to every socket in
+     * the same turn — the close a socket's own proxy delivers later. With 1006
+     * every retry then fails before it opens.
+     */
+    shut: (code: number): void => {
+      server.close({ code, reason: 'gone', wasClean: false });
     }
   };
 }
 
 type Relay = ReturnType<typeof relayAt>;
 
-/** A relay that dies: dropped, recovering, and then refused on the retried socket. */
-async function dies(relay: Relay, whileRecovering: () => void): Promise<void> {
-  await relay.drop();
-  whileRecovering();
-  relay.refuse();
+/**
+ * A relay that dies: dropped abnormally, read while it waits to retry and
+ * again once it has reconnected and been asked, then ended by `end` — refused
+ * on the retried socket unless the arm says otherwise. What the wire did is
+ * returned rather than thrown, so a reading taken before a step that did not
+ * happen is still reported.
+ */
+async function dies(
+  relay: Relay,
+  read: (when: 'waiting' | 'recovering') => void,
+  end: () => void = () => relay.refuse()
+): Promise<{ reconnected: boolean; askedAgain: boolean }> {
+  const connected = relay.connections();
+  const asked = relay.reqs().length;
+  relay.drop();
+  // The first retry is at least a second away.
+  await delay(200);
+  read('waiting');
+  const reconnected = await until(() => relay.connections() === connected + 1, 5000);
+  const askedAgain = await until(() => relay.reqs().length > asked, 2000);
+  read('recovering');
+  end();
+  return { reconnected, askedAgain };
 }
 
 /** What a handle says, as the rows read it. */
@@ -176,12 +229,6 @@ function readingOf(handle: ReqHandle | undefined) {
     activity: handle?.activity
   };
 }
-
-/** The relays a published leg end names, in the order given. */
-const namedBy = (handle: ReqHandle | undefined, relays: readonly Relay[]): string[] =>
-  relays
-    .map((relay) => relay.url)
-    .filter((url) => handle?.diagnostics.legEnded?.error?.message.includes(url) === true);
 
 /** A plan that makes a request, which is every plan these arms hand the published entry. */
 type RequestPlan = Extract<ReqPlan, { kind: 'request' }>;
@@ -200,17 +247,24 @@ const backlog = (namespace: string, kinds: number[], settleTimeoutMs = 30_000): 
   descriptor: { filters: [{ kinds }], settleTimeoutMs, namespace }
 });
 
+/** What reached each relay after a moment: every frame, and every socket constructed for it. */
+interface Since {
+  frames: number[];
+  sockets: number[];
+}
+
 /**
  * Two requests under one provider: the first opens the relays' sockets, `before`
  * does what it does to them, and the second — under its own namespace and
  * filters, so it is a request of its own and not a read of the first one's
- * answer — begins only then.
+ * answer — begins only then. `read` is handed what reached each relay from
+ * that moment on.
  */
 async function inTurn(
   relays: readonly Relay[],
   second: RequestPlan,
   before: () => Promise<void>,
-  read: (second: ReqHandle | undefined, framesBefore: number[]) => Promise<unknown>
+  read: (second: ReqHandle | undefined, since: () => Since) => Promise<unknown>
 ): Promise<unknown> {
   const handles: Partial<Record<'first' | 'second', ReqHandle>> = {};
   const first = backlog(`${second.descriptor.namespace ?? ''}-opener`, [30_001]);
@@ -223,14 +277,20 @@ async function inTurn(
       handles[which] = request;
     }
   };
-  stubTheWire();
+  const constructed = stubTheWire();
   const view = render(RequestsInTurn, props);
   try {
     for (const relay of relays) await relay.asked(1);
     await before();
-    const framesBefore = relays.map((relay) => relay.reqs().length);
+    const frames = relays.map((relay) => relay.frames());
+    const sockets = relays.map((relay) => constructedFor(constructed, relay.url));
     await view.rerender({ ...props, later: true });
-    return await read(handles.second, framesBefore);
+    return await read(handles.second, () => ({
+      frames: relays.map((relay, at) => relay.frames() - (frames[at] ?? 0)),
+      sockets: relays.map(
+        (relay, at) => constructedFor(constructed, relay.url) - (sockets[at] ?? 0)
+      )
+    }));
   } catch (error) {
     return failed(error);
   } finally {
@@ -238,13 +298,20 @@ async function inTurn(
   }
 }
 
-/** One request through the published entry, handed to `run`, unmounted after. */
+/**
+ * One request through the published entry, handed to `run`, unmounted after.
+ * With `onAFakeClock`, the clock is installed before the request is made, so
+ * the request's own settle timer runs on the same clock as the dependency's
+ * retries; it is put back after the unmount.
+ */
 async function published(
   relays: readonly Relay[],
   plan: ReqPlan,
-  run: (handle: () => ReqHandle | undefined, constructed: readonly string[]) => Promise<unknown>
+  run: (handle: () => ReqHandle | undefined, constructed: readonly string[]) => Promise<unknown>,
+  { onAFakeClock = false }: { onAFakeClock?: boolean } = {}
 ): Promise<unknown> {
   let handle: ReqHandle | undefined;
+  if (onAFakeClock) vi.useFakeTimers({ toFake: [...FAKED] });
   const constructed = stubTheWire();
   const view = render(PublishedRequest, {
     relays: relays.map((relay) => relay.url),
@@ -260,8 +327,39 @@ async function published(
     return failed(error);
   } finally {
     view.unmount();
+    if (onAFakeClock) {
+      await vi.advanceTimersByTimeAsync(1000);
+      vi.useRealTimers();
+    }
   }
 }
+
+/**
+ * Every relay taken away for good, together, on the fake clock `published`
+ * installed: closed and removed, so each retry fails before it opens and the
+ * retry count is never reset by a socket that opened, until the dependency
+ * gives up with `error`. Together, because one relay's retries after
+ * another's could outrun a 60s timer. Returns once the request has answered
+ * and stopped, or the retries' thirty-odd seconds and some have passed.
+ */
+async function exhaust(
+  relays: readonly Relay[],
+  handle: () => ReqHandle | undefined
+): Promise<void> {
+  for (const relay of relays) relay.shut(1006);
+  await advanceUntil(
+    () => handle()?.state.status === 'incomplete' && handle()?.activity === 'idle',
+    45_000,
+    500
+  );
+}
+
+/** The sockets each relay saw on an exhausted run: the first, and five retries that never opened. */
+const exhaustedSockets = (relays: readonly Relay[], constructed: readonly string[]) =>
+  relays.map((relay) => ({
+    constructed: constructedFor(constructed, relay.url),
+    opened: relay.connections()
+  }));
 
 /** Wait, within a bound, for the request to have an answer that is not still coming. */
 async function answered(handle: () => ReqHandle | undefined, within = PROMPTLY_MS): Promise<void> {
@@ -274,34 +372,45 @@ async function answered(handle: () => ReqHandle | undefined, within = PROMPTLY_M
   );
 }
 
+/** The outcome every death in this file ends in, read once the request has stopped. */
+const endedWith = (events: string[], legEnded: 'ended' | undefined) => ({
+  status: 'incomplete',
+  causes: ['ended'],
+  events,
+  legEnded,
+  activity: 'idle'
+});
+
 describe('A5: the relays a request is asking are gone', () => {
   // @contracts A5-C9
-  it('GN1: a live request whose whole target set was terminal before it began ends its leg on its own check', async () => {
+  it('GN1: a live request whose whole target set had refused the connection before it began ends its leg on its own check', async () => {
     // **The leg ends because the request looked, not because something
     // happened.** Both relays refuse the first request's sockets, and only then
     // does the live request under test begin, under the same provider: no
     // transition is still to come, so a request that waited for one would
-    // wait for ever. It reads the leg end published naming both relays, the
-    // answer `incomplete` under `ended`, the invocation over, and nothing sent
-    // for it — no frame and no socket — inside two seconds of a 30s timeout.
+    // wait for ever. It reads the leg end published, the answer `incomplete`
+    // under `ended`, the invocation over, and nothing reaching either relay for
+    // it — no frame of any kind and no socket constructed — inside two seconds
+    // of a 30s timeout.
     //
-    // **And the control: one relay of the two refused**, so the whole set is
-    // not terminal. The second request is asked of the relay that is left,
-    // and at the same horizon it is still running with no leg end — the end
-    // above is the whole set being gone, not the arrangement.
+    // **Two controls, one on each edge of "refused".** One relay of the two
+    // refused: the second request is asked of the relay that is left, and at
+    // the same horizon it is still running with no leg end. And both relays in
+    // `error` instead — their retries spent, which is terminal too — and back
+    // up by the time the second request begins: the preflight re-opens them
+    // and asks them, rather than giving up, so that request is running as
+    // well. That run is on a fake clock, since the retries are thirty-odd
+    // seconds of the dependency's own timers.
     const run = async (refused: 'both' | 'one') => {
       const relays = [relayAt(nextUrl()), relayAt(nextUrl())];
-      const connected = () => relays.map((relay) => relay.connections());
-      let connectedBefore: number[] = [];
       return inTurn(
         relays,
         live(`gn1-${refused}`, [7]),
         async () => {
           for (const relay of refused === 'both' ? relays : relays.slice(0, 1)) relay.refuse();
           await delay(100);
-          connectedBefore = connected();
         },
-        async (second, framesBefore) => {
+        async (second, since) => {
           if (refused === 'both') {
             await vi.waitFor(
               () => expect(second?.diagnostics.legEnded, 'the leg end').toBeDefined(),
@@ -310,55 +419,113 @@ describe('A5: the relays a request is asking are gone', () => {
             await answered(() => second);
           } else {
             const remaining = relays[1] as Relay;
-            await remaining.asked((framesBefore[1] ?? 0) + 2);
+            await until(() => (since().frames[1] ?? 0) >= 2, 3000);
             await delay(PROMPTLY_MS);
+            return {
+              ...readingOf(second),
+              askedOfTheRemaining: remaining.reqs().length >= 3,
+              ...since()
+            };
           }
-          return {
-            ...readingOf(second),
-            relaysNamed: namedBy(second, relays).length,
-            framesSent: relays.map((relay, at) => relay.reqs().length - (framesBefore[at] ?? 0)),
-            socketsOpened: connected().map((count, at) => count - (connectedBefore[at] ?? 0))
-          };
+          return { ...readingOf(second), ...since() };
         }
       );
     };
+    const inError = async () => {
+      const urls = [nextUrl(), nextUrl()];
+      let relays = urls.map(relayAt);
+      const handles: Partial<Record<'first' | 'second', ReqHandle>> = {};
+      const first = backlog('gn1-error-opener', [30_001], 60_000);
+      const second = live('gn1-error', [7]);
+      const props = {
+        relays: urls,
+        first: () => first,
+        second: () => second,
+        later: false,
+        seen: (which: 'first' | 'second', request: ReqHandle) => {
+          handles[which] = request;
+        }
+      };
+      vi.useFakeTimers({ toFake: [...FAKED] });
+      const constructed = stubTheWire();
+      const view = render(RequestsInTurn, props);
+      try {
+        const asked = await advanceUntil(
+          () => relays.every((relay) => relay.reqs().length >= 1),
+          5000
+        );
+        for (const relay of relays) relay.shut(1006);
+        // The retries spent on both relays: six sockets each, and the opener
+        // over, with its own timer twice as far off as the retries.
+        const spent = await advanceUntil(
+          () =>
+            urls.every((url) => constructedFor(constructed, url) >= 6) &&
+            handles.first?.activity === 'idle',
+          45_000,
+          500
+        );
+        await vi.advanceTimersByTimeAsync(1000);
+        const opener = readingOf(handles.first);
+        // The relays come back; making their servers puts the plain mock back,
+        // so the recording one is installed again over the same list.
+        relays = urls.map(relayAt);
+        stubTheWire(constructed);
+        await view.rerender({ ...props, later: true });
+        const reopenedAndAsked = await advanceUntil(
+          () => relays.every((relay) => relay.connections() === 1 && relay.reqs().length >= 2),
+          5000
+        );
+        await vi.advanceTimersByTimeAsync(PROMPTLY_MS);
+        return { asked, spent, opener, reopenedAndAsked, ...readingOf(handles.second) };
+      } catch (error) {
+        return failed(error);
+      } finally {
+        view.unmount();
+        await vi.advanceTimersByTimeAsync(1000);
+        vi.useRealTimers();
+      }
+    };
     const wholeSet = await run('both');
     const oneOfTwo = await run('one');
+    const reopened = await inError();
     expect(
-      { wholeSet, oneOfTwo },
-      'the leg ends on the request’s own check when every relay was already gone, and not when one was'
+      { wholeSet, oneOfTwo, reopened },
+      'the leg ends on the request’s own check when every relay had refused, and not when one had or when they were in error'
     ).toEqual({
-      wholeSet: {
-        status: 'incomplete',
-        causes: ['ended'],
-        events: [],
-        legEnded: 'ended',
-        activity: 'idle',
-        relaysNamed: 2,
-        framesSent: [0, 0],
-        socketsOpened: [0, 0]
-      },
+      wholeSet: { ...endedWith([], 'ended'), frames: [0, 0], sockets: [0, 0] },
       oneOfTwo: {
         status: 'loading',
         causes: undefined,
         events: undefined,
         legEnded: undefined,
         activity: 'live',
-        relaysNamed: 0,
-        framesSent: [0, 2],
-        socketsOpened: [0, 0]
+        askedOfTheRemaining: true,
+        frames: [0, 2],
+        sockets: [0, 0]
+      },
+      reopened: {
+        asked: true,
+        spent: true,
+        opener: endedWith([], undefined),
+        reopenedAndAsked: true,
+        status: 'loading',
+        causes: undefined,
+        events: undefined,
+        legEnded: undefined,
+        activity: 'live'
       }
     });
-  }, 20_000);
+  }, 30_000);
 
   // @contracts A5-C11
   it('GN2: a backlog over a relay that refused the connection before it began ends on that relay, not on the timer', async () => {
     // **The answer comes from the relay's state, inside two seconds of a 30s
     // timeout.** The relay refuses the first request's socket, and only then
     // does the non-live request under test begin: `incomplete` under `ended`,
-    // the invocation over, nothing sent for it. **The control** is the same
-    // arrangement with the relay left connected and silent: the request is
-    // asked of it, and at the same horizon it is still waiting.
+    // the invocation over, and nothing reaching the relay for it — no frame
+    // and no socket. **The control** is the same arrangement with the relay
+    // left connected and silent: the request is asked of it, and at the same
+    // horizon it is still waiting.
     const run = async (refused: boolean) => {
       const relay = relayAt(nextUrl());
       return inTurn(
@@ -368,16 +535,13 @@ describe('A5: the relays a request is asking are gone', () => {
           if (refused) relay.refuse();
           await delay(100);
         },
-        async (second, framesBefore) => {
+        async (second, since) => {
           if (refused) await answered(() => second);
           else {
-            await relay.asked((framesBefore[0] ?? 0) + 1);
+            await until(() => (since().frames[0] ?? 0) >= 1, 3000);
             await delay(PROMPTLY_MS);
           }
-          return {
-            ...readingOf(second),
-            framesSent: relay.reqs().length - (framesBefore[0] ?? 0)
-          };
+          return { ...readingOf(second), ...since() };
         }
       );
     };
@@ -387,21 +551,15 @@ describe('A5: the relays a request is asking are gone', () => {
       { refused, silent },
       'a relay that refused before the request began ends its backlog, and a silent one does not'
     ).toEqual({
-      refused: {
-        status: 'incomplete',
-        causes: ['ended'],
-        events: [],
-        legEnded: undefined,
-        activity: 'idle',
-        framesSent: 0
-      },
+      refused: { ...endedWith([], undefined), frames: [0], sockets: [0] },
       silent: {
         status: 'loading',
         causes: undefined,
         events: undefined,
         legEnded: undefined,
         activity: 'refreshing',
-        framesSent: 1
+        frames: [1],
+        sockets: [0]
       }
     });
   }, 20_000);
@@ -412,150 +570,251 @@ describe('A5: the relays a request is asking are gone', () => {
     // open**, so the one packet that says so determines the backlog and ends
     // the forward leg together. The attempt reports an outcome — `incomplete`
     // under `ended` — beside the leg end, and does not stop carrying only the
-    // leg end. **Twice**: the relay dying, which ends in `rejected`; and the
-    // relay going for good, every retry failing before it opens until the
-    // dependency gives up with `error` — on a fake clock, under a 60s timeout
-    // the retries stay inside.
+    // leg end. **Twice**: the relay dying, read while it waits to retry and
+    // once it has, which ends in `rejected`; and the relay going for good, its
+    // retries spent until the dependency gives up with `error` — on a fake
+    // clock installed before the request is made, under a 60s timeout on that
+    // same clock that the retries stay inside.
     const died = await (async () => {
       const relay = relayAt(nextUrl());
       return published([relay], live('gn3-died', [1]), async (handle) => {
         await relay.asked(2);
-        let whileRecovering: unknown;
-        await dies(relay, () => {
-          whileRecovering = readingOf(handle());
+        const readings: Record<string, unknown> = {};
+        const wire = await dies(relay, (when) => {
+          readings[when] = readingOf(handle());
         });
         await answered(handle);
-        return { whileRecovering, after: readingOf(handle()) };
+        return { ...readings, ...wire, after: readingOf(handle()) };
       });
     })();
     const exhausted = await (async () => {
       const relay = relayAt(nextUrl());
-      return published([relay], live('gn3-exhausted', [1], 60_000), async (handle, constructed) => {
-        await relay.asked(2);
-        vi.useFakeTimers();
-        // Closed and removed: every reconnection fails before it opens, so the
-        // retry count is never reset by a socket that opened.
-        relay.server.close({ code: 1006, reason: 'gone', wasClean: false });
-        for (let step = 0; step < 90 && handle()?.state.status !== 'incomplete'; step += 1)
-          await vi.advanceTimersByTimeAsync(500);
-        await vi.advanceTimersByTimeAsync(500);
-        vi.useRealTimers();
-        // The first socket and the dependency's five retries, none of which opened.
-        return {
-          socketsConstructed: constructed.filter((url) => url.startsWith(relay.url)).length,
-          socketsOpened: relay.connections(),
-          after: readingOf(handle())
-        };
-      });
+      return published(
+        [relay],
+        live('gn3-exhausted', [1], 60_000),
+        async (handle, constructed) => {
+          const asked = await advanceUntil(() => relay.reqs().length >= 2, 5000);
+          await exhaust([relay], handle);
+          return {
+            asked,
+            sockets: exhaustedSockets([relay], constructed),
+            after: readingOf(handle())
+          };
+        },
+        { onAFakeClock: true }
+      );
     })();
-    const outcome = {
-      status: 'incomplete',
-      causes: ['ended'],
-      events: [],
-      legEnded: 'ended',
-      activity: 'idle'
+    const running = {
+      status: 'loading',
+      causes: undefined,
+      events: undefined,
+      legEnded: undefined,
+      activity: 'live'
     };
     expect(
       { died, exhausted },
       'the attempt reports its backlog’s outcome beside the leg end, however the relay went'
     ).toEqual({
       died: {
-        whileRecovering: {
-          status: 'loading',
-          causes: undefined,
-          events: undefined,
-          legEnded: undefined,
-          activity: 'live'
-        },
-        after: outcome
+        waiting: running,
+        recovering: running,
+        reconnected: true,
+        askedAgain: true,
+        after: endedWith([], 'ended')
       },
-      exhausted: { socketsConstructed: 6, socketsOpened: 1, after: outcome }
+      exhausted: {
+        asked: true,
+        sockets: [{ constructed: 6, opened: 1 }],
+        after: endedWith([], 'ended')
+      }
     });
   }, 30_000);
 
   // @contracts A5-C10
   it('GN4: a live request whose relays all die while its backlog is open is incomplete because the leg ended, keeping what arrived', async () => {
     // **Two relays, live, and an event from one of them on the forward leg
-    // before either answers the backlog.** Then each dies in turn. After the
-    // first, the request is still running — one relay is not the request.
-    // After the second, the answer is `incomplete` under `ended` alone — the
-    // leg ended, the request did not stop waiting — with the event still
-    // shown, and the leg end published.
-    const a = relayAt(nextUrl());
-    const b = relayAt(nextUrl());
-    const event = signed('an event the second relay sends live');
-    const reading = await published([a, b], live('gn4', [1]), async (handle) => {
-      await a.asked(2);
-      await b.asked(2);
-      const forward = b.reqs().find((subId) => subId.includes('-f:'));
-      b.server.send(['EVENT', forward, event]);
-      await vi.waitFor(() => expect(readingOf(handle()).events).toEqual([event.id]), {
-        timeout: 3000
+    // before either answers the backlog.** Then each dies in turn, read while
+    // it waits to retry and once it has. After the first, the request is still
+    // running — one relay is not the request. After the second, the answer is
+    // `incomplete` under `ended` alone — the leg ended, the request did not
+    // stop waiting — with the event still shown, and the leg end published.
+    //
+    // **Two more runs.** The relays going for good, together, their retries
+    // spent until the dependency reports `error` — the ordinary death — on a
+    // fake clock under a 60s timeout. And one relay whose last event arrives
+    // in the same turn as its socket's terminal close, so the event is still
+    // being verified when the leg ends: what arrived includes what was still
+    // in hand.
+    const died = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      const event = signed('an event the second relay sends live');
+      return published([a, b], live('gn4-died', [1]), async (handle) => {
+        await a.asked(2);
+        await b.asked(2);
+        b.server.send(['EVENT', b.reqs().find((subId) => subId.includes('-f:')), event]);
+        const delivered = await until(
+          () => readingOf(handle()).events?.includes(event.id) === true,
+          3000
+        );
+        const steps: Record<string, unknown> = { delivered };
+        steps['first'] = await dies(a, (when) => {
+          steps[`first ${when}`] = readingOf(handle());
+        });
+        await delay(200);
+        steps['after the first'] = readingOf(handle());
+        steps['second'] = await dies(b, (when) => {
+          steps[`second ${when}`] = readingOf(handle());
+        });
+        await answered(handle);
+        steps['after the second'] = readingOf(handle());
+        return { event: event.id, ...steps };
       });
-      const steps: Record<string, unknown> = {};
-      await dies(a, () => {
-        steps['whileTheFirstRecovers'] = readingOf(handle());
+    })();
+    const exhausted = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      const event = signed('an event the second relay sends before it goes for good');
+      return published(
+        [a, b],
+        live('gn4-exhausted', [1], 60_000),
+        async (handle, constructed) => {
+          const asked = await advanceUntil(
+            () => a.reqs().length >= 2 && b.reqs().length >= 2,
+            5000
+          );
+          b.server.send(['EVENT', b.reqs().find((subId) => subId.includes('-f:')), event]);
+          const delivered = await advanceUntil(
+            () => readingOf(handle()).events?.includes(event.id) === true,
+            3000
+          );
+          await exhaust([a, b], handle);
+          return {
+            event: event.id,
+            asked,
+            delivered,
+            sockets: exhaustedSockets([a, b], constructed),
+            after: readingOf(handle())
+          };
+        },
+        { onAFakeClock: true }
+      );
+    })();
+    const held = await (async () => {
+      const relay = relayAt(nextUrl());
+      const event = signed('an event still being verified when the relay goes');
+      return published([relay], live('gn4-held', [1]), async (handle) => {
+        await relay.asked(2);
+        const wire = await dies(
+          relay,
+          () => {},
+          () => {
+            relay.server.send([
+              'EVENT',
+              relay.reqs().find((subId) => subId.includes('-f:')),
+              event
+            ]);
+            relay.shut(4000);
+          }
+        );
+        await answered(handle);
+        return { event: event.id, ...wire, after: readingOf(handle()) };
       });
-      await delay(200);
-      steps['afterTheFirst'] = readingOf(handle());
-      await dies(b, () => {
-        steps['whileTheSecondRecovers'] = readingOf(handle());
-      });
-      await answered(handle);
-      steps['afterTheSecond'] = {
-        ...readingOf(handle()),
-        relaysNamed: namedBy(handle(), [a, b]).length
-      };
-      return steps;
-    });
-    const running = {
+    })();
+    const ids = (reading: unknown): string[] => [String((reading as { event?: string }).event)];
+    const running = (events: string[]) => ({
       status: 'streaming',
       causes: undefined,
-      events: [event.id],
+      events,
       legEnded: undefined,
       activity: 'live'
-    };
-    expect(reading, 'incomplete because the leg ended, with what arrived still shown').toEqual({
-      whileTheFirstRecovers: running,
-      afterTheFirst: running,
-      whileTheSecondRecovers: running,
-      afterTheSecond: {
-        status: 'incomplete',
-        causes: ['ended'],
-        events: [event.id],
-        legEnded: 'ended',
-        activity: 'idle',
-        relaysNamed: 2
+    });
+    const retried = { reconnected: true, askedAgain: true };
+    expect(
+      { died, exhausted, held },
+      'incomplete because the leg ended, with what arrived still shown'
+    ).toEqual({
+      died: {
+        event: ids(died)[0],
+        delivered: true,
+        'first waiting': running(ids(died)),
+        'first recovering': running(ids(died)),
+        first: retried,
+        'after the first': running(ids(died)),
+        'second waiting': running(ids(died)),
+        'second recovering': running(ids(died)),
+        second: retried,
+        'after the second': endedWith(ids(died), 'ended')
+      },
+      exhausted: {
+        event: ids(exhausted)[0],
+        asked: true,
+        delivered: true,
+        sockets: [
+          { constructed: 6, opened: 1 },
+          { constructed: 6, opened: 1 }
+        ],
+        after: endedWith(ids(exhausted), 'ended')
+      },
+      held: {
+        event: ids(held)[0],
+        ...retried,
+        after: endedWith(ids(held), 'ended')
       }
     });
-  }, 30_000);
+  }, 40_000);
 
   // @contracts A5-C15
   it('GN5: a request over two relays whose connections both die before either answers is incomplete because the leg ended', async () => {
     // **Not live, two relays, neither answers.** Each dies in turn, and each is
-    // read while it is recovering — the retried socket held open, the request
-    // sent again on it — so a recovering relay counted as gone is caught where
-    // it would answer early. After the first death the request is still
-    // waiting for the other relay; after the second it is `incomplete` under
-    // `ended`, the timer thirty seconds away.
-    const a = relayAt(nextUrl());
-    const b = relayAt(nextUrl());
-    const reading = await published([a, b], backlog('gn5', [1]), async (handle) => {
-      await a.asked(1);
-      await b.asked(1);
-      const steps: Record<string, unknown> = {};
-      await dies(a, () => {
-        steps['whileTheFirstRecovers'] = readingOf(handle());
+    // read while it waits to retry and once it has reconnected — so a
+    // recovering relay counted as gone is caught where it would answer early.
+    // After the first death the request is still waiting for the other relay;
+    // after the second it is `incomplete` under `ended`, the timer thirty
+    // seconds away. **And the ordinary death**: both relays going for good
+    // together, their retries spent into `error`, on a fake clock under a 60s
+    // timeout.
+    const died = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      return published([a, b], backlog('gn5-died', [1]), async (handle) => {
+        await a.asked(1);
+        await b.asked(1);
+        const steps: Record<string, unknown> = {};
+        steps['first'] = await dies(a, (when) => {
+          steps[`first ${when}`] = readingOf(handle());
+        });
+        await delay(200);
+        steps['after the first'] = readingOf(handle());
+        steps['second'] = await dies(b, (when) => {
+          steps[`second ${when}`] = readingOf(handle());
+        });
+        await answered(handle);
+        steps['after the second'] = readingOf(handle());
+        return steps;
       });
-      await delay(200);
-      steps['afterTheFirst'] = readingOf(handle());
-      await dies(b, () => {
-        steps['whileTheSecondRecovers'] = readingOf(handle());
-      });
-      await answered(handle);
-      steps['afterTheSecond'] = readingOf(handle());
-      return steps;
-    });
+    })();
+    const exhausted = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      return published(
+        [a, b],
+        backlog('gn5-exhausted', [1], 60_000),
+        async (handle, constructed) => {
+          const asked = await advanceUntil(
+            () => a.reqs().length >= 1 && b.reqs().length >= 1,
+            5000
+          );
+          await exhaust([a, b], handle);
+          return {
+            asked,
+            sockets: exhaustedSockets([a, b], constructed),
+            after: readingOf(handle())
+          };
+        },
+        { onAFakeClock: true }
+      );
+    })();
     const waiting = {
       status: 'loading',
       causes: undefined,
@@ -563,22 +822,31 @@ describe('A5: the relays a request is asking are gone', () => {
       legEnded: undefined,
       activity: 'refreshing'
     };
+    const retried = { reconnected: true, askedAgain: true };
     expect(
-      reading,
+      { died, exhausted },
       'incomplete because the leg ended, not because the request stopped waiting'
     ).toEqual({
-      whileTheFirstRecovers: waiting,
-      afterTheFirst: waiting,
-      whileTheSecondRecovers: waiting,
-      afterTheSecond: {
-        status: 'incomplete',
-        causes: ['ended'],
-        events: [],
-        legEnded: undefined,
-        activity: 'idle'
+      died: {
+        'first waiting': waiting,
+        'first recovering': waiting,
+        first: retried,
+        'after the first': waiting,
+        'second waiting': waiting,
+        'second recovering': waiting,
+        second: retried,
+        'after the second': endedWith([], undefined)
+      },
+      exhausted: {
+        asked: true,
+        sockets: [
+          { constructed: 6, opened: 1 },
+          { constructed: 6, opened: 1 }
+        ],
+        after: endedWith([], undefined)
       }
     });
-  }, 30_000);
+  }, 40_000);
 });
 
 describe('A5: the same death, on either accumulator', () => {

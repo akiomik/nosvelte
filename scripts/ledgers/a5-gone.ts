@@ -29,6 +29,8 @@ const PREFLIGHT_BACKWARD =
   "  for (const url of preflightTerminal) {\n    advanceBackward(url, 'ended');";
 /** A terminal connection state, read into the backward table. */
 const TERMINAL_STATE = "      if (phase === 'terminal') advanceBackward(packet.from, 'ended');\n";
+/** `error` — the dependency's retries used up — classified terminal. */
+const ERROR_TERMINAL = "    case 'error':\n    case 'rejected':";
 /** The cause a relay that went terminal adds to the backlog's outcome. */
 const GONE_CAUSE = "    if (gone.length > 0) present.add('ended');\n";
 
@@ -40,7 +42,7 @@ export default {
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { GN1: 7, GN2: 7, GN3: 5, GN4: 7, GN5: 7, GN6: 5 }
+    seconds: { GN1: 7, GN2: 7, GN3: 5, GN4: 8, GN5: 7, GN6: 5 }
   },
   entries: [
     {
@@ -49,6 +51,19 @@ export default {
       describe:
         'a relay that refused the connection before the request began is not recorded by the preflight, so the request waits for a transition that has already happened',
       edits: [{ file: MACHINE, from: GIVE_UP, to: '' }]
+    },
+    {
+      id: 'C9-a-relay-in-error-given-up',
+      arm: 'GN1',
+      describe:
+        'the preflight gives up on a relay in `error` as it does on one that refused, so relays that would answer once re-opened end the leg instead — the other edge of "refused"',
+      edits: [
+        {
+          file: REFUSAL,
+          from: "    case 'error':\n      return 'reconnect-then-ask';\n    case 'rejected':\n      return 'give-up';",
+          to: "    case 'error':\n    case 'rejected':\n      return 'give-up';"
+        }
+      ]
     },
     {
       id: 'C9-the-preflight-writes-the-phase-directly',
@@ -124,8 +139,39 @@ export default {
       edits: [
         {
           file: REFUSAL,
-          from: "    case 'error':\n    case 'rejected':",
+          from: ERROR_TERMINAL,
           to: "    case 'rejected':"
+        }
+      ]
+    },
+    {
+      id: 'C14-the-timer-shorter-than-the-retries',
+      arm: 'GN3',
+      describe:
+        "the request's timer is armed at a third of what was asked — 20 s against thirty-odd seconds of retries — so on the exhausted run it is the timer that answers; the arrangement's premise",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    timer = setTimeout(() => settle(true), timeoutMs);',
+          to: '    timer = setTimeout(() => settle(true), timeoutMs / 3);'
+        }
+      ]
+    },
+    {
+      id: 'C14-the-end-ahead-of-the-outcome',
+      arm: 'GN3',
+      describe:
+        "the stream's end is pushed at once rather than after the backlog is reported, and the drain stops at the end rather than handing over what is queued behind it — the two defences of the one-packet case, removed together",
+      edits: [
+        {
+          file: MACHINE,
+          from: "    queueMicrotask(() => {\n      closeAll();\n      whenBacklogReported(() => {\n        drawBoundary('forward', () => {\n          if (ended) return;\n          ended = true;\n          push({ type: 'end' });\n        });\n      });\n    });",
+          to: "    void whenBacklogReported;\n    closeAll();\n    ended = true;\n    push({ type: 'end' });"
+        },
+        {
+          file: MACHINE,
+          from: '          finished = true;\n          continue;',
+          to: '          finished = true;\n          break;'
         }
       ]
     },
@@ -161,6 +207,26 @@ export default {
       edits: [{ file: MACHINE, from: GONE_CAUSE, to: '' }]
     },
     {
+      id: 'C10-a-held-event-discarded-at-the-end',
+      arm: 'GN4',
+      describe:
+        'an event still being verified when the last relay goes is discarded as the stream ends, so what arrived is not all shown',
+      edits: [
+        {
+          file: MACHINE,
+          from: "      whenBacklogReported(() => {\n        drawBoundary('forward', () => {",
+          to: "      whenBacklogReported(() => {\n        for (const each of gates.forward.holding) each.discarded = true;\n        drawBoundary('forward', () => {"
+        }
+      ]
+    },
+    {
+      id: 'C10-an-exhausted-relay-is-not-terminal',
+      arm: 'GN4',
+      describe:
+        "`error` — the ordinary death, once the dependency's retries are spent — is not classified, so the relays that died for good are never terminal",
+      edits: [{ file: REFUSAL, from: ERROR_TERMINAL, to: "    case 'rejected':" }]
+    },
+    {
       id: 'C10-a-terminal-state-leaves-the-backlog-undetermined',
       arm: 'GN4',
       describe:
@@ -171,7 +237,7 @@ export default {
       id: 'C15-a-retrying-relay-counted-as-gone',
       arm: 'GN5',
       describe:
-        'a socket waiting to retry, or retrying, is classified terminal — a first connection still is not — so the backlog ends over a relay the dependency is still bringing back',
+        'a socket waiting to retry, or retrying, is classified terminal — a first connection still is not — so the backlog ends over a relay the dependency is still bringing back, which the reading taken while the second relay waits to retry sees',
       edits: [
         {
           file: REFUSAL,
@@ -179,6 +245,13 @@ export default {
           to: "    case 'connecting':\n      return 'recovering';\n    case 'waiting-for-retrying':\n    case 'retrying':\n      return 'terminal';"
         }
       ]
+    },
+    {
+      id: 'C15-an-exhausted-relay-is-not-terminal',
+      arm: 'GN5',
+      describe:
+        "`error` — the ordinary death, once the dependency's retries are spent — is not classified, so the relays that died for good are never terminal",
+      edits: [{ file: REFUSAL, from: ERROR_TERMINAL, to: "    case 'rejected':" }]
     },
     {
       id: 'C15-a-gone-relay-reported-as-a-timeout',
