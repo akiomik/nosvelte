@@ -123,6 +123,24 @@ export interface MachineParams {
    * representable; a test that wants no verification has to say so.
    */
   verifyEvent: (event: Nostr.Event) => Promise<boolean>;
+  /**
+   * For the machine's own witnesses, and nothing in the library sets it: handed
+   * the attempt's two relay tables as soon as both are made — the tables every
+   * writer below writes and the outcome is derived from, and no others.
+   *
+   * **The cell-by-cell reading of {@link phaseTable}'s write says nothing about
+   * a table the attempt built some other way**, and one that copied the rule
+   * but for a cell nobody can see — `refused` over `complete` — passed every
+   * arm (a reviewer's edit). So `A5-C26` asks for the attempt's own tables, and
+   * reads off them that {@link phaseTable} made both ({@link isPhaseTable}) and
+   * that they end in the states the answer says. Its source reading holds the
+   * two statements that make them, and the one call that hands them over, as
+   * written once among `referenceStream`'s own, and holds this parameter and
+   * `referenceStream` itself named nowhere they could be rebound, so what it is
+   * handed is what those statements made.
+   */
+  witnessTables?:
+    ((forward: PhaseTable<RelayPhase>, backward: PhaseTable<BackwardPhase>) => void) | undefined;
 }
 
 /**
@@ -219,13 +237,126 @@ type Signal =
  * `timeout` is not among them because it is not a relay's state: it is the
  * request's own timer firing while a relay is still `pending` or `active`.
  */
-type BackwardPhase = 'pending' | 'active' | 'complete' | 'refused' | 'ended';
+export type BackwardPhase = (typeof BACKWARD_PHASES)[number];
+
+/**
+ * The backward table's states, in the order above. {@link BackwardPhase} is
+ * read off it, so a state added here is one every reading over the list meets.
+ */
+export const BACKWARD_PHASES = ['pending', 'active', 'complete', 'refused', 'ended'] as const;
 
 const DETERMINED: ReadonlySet<BackwardPhase> = new Set<BackwardPhase>([
   'complete',
   'refused',
   'ended'
 ]);
+
+/**
+ * The states that end a relay's part of a leg, on either table: `terminal` on
+ * the forward one, and the three determined states on the backward one.
+ */
+const ABSORBING: ReadonlySet<RelayPhase | BackwardPhase> = new Set<RelayPhase | BackwardPhase>([
+  'terminal',
+  ...DETERMINED
+]);
+
+/**
+ * Where one relay's phase goes when `incoming` is written over `current`, on
+ * either table: **one rule over both tables rather than a habit each of them
+ * has** (0002), and the one place it is written.
+ *
+ * The first absorbing state a relay reaches is the one this attempt holds until
+ * the attempt ends, from whatever state it was reached. So an absorbing row
+ * answers itself whatever arrives — a death after an `EOSE`, an `EOSE` after a
+ * death, a `CLOSED` after either, a socket the dependency brings back after
+ * `terminal` — and any other row takes what arrives. A relay that reconnects
+ * afterwards belongs to whatever attempt `refresh()` opens next.
+ */
+function nextPhase<Phase extends RelayPhase | BackwardPhase>(
+  current: Phase,
+  incoming: Phase
+): Phase {
+  return ABSORBING.has(current) ? current : incoming;
+}
+
+/**
+ * One of an attempt's two relay tables, and **the one way either is written**:
+ * `write` hands every update to {@link nextPhase} and stores what it answers.
+ *
+ * There is no setter beside it, and that is the point. A rule the writers merely
+ * called left each of them free to keep a habit of its own — a special case
+ * before the call — and a reading of the rule could not see it: a writer that
+ * let `refused` through over `complete` passed every arm while the rule's cells
+ * stayed right, because two of the backward table's determined states derive
+ * nothing in the outcome — neither `complete` nor `refused` adds a cause to
+ * {@link BacklogEnd}, the refusal being on the record already — so a table that
+ * let one overwrite the other is the same table to every answer. **Out of the
+ * closure so that the write can be read cell by cell** (`A5-C26`), which is the
+ * only reading of a table that tells that table apart — and {@link isPhaseTable} is what
+ * says the attempt's own tables are tables of this write rather than copies of
+ * it, since a table built by hand that copied the rule but for that one cell
+ * passed every arm too.
+ */
+export interface PhaseTable<Phase extends RelayPhase | BackwardPhase> {
+  get(url: string): Phase | undefined;
+  has(url: string): boolean;
+  keys(): Iterable<string>;
+  values(): Iterable<Phase>;
+  entries(): Iterable<[string, Phase]>;
+  /**
+   * `incoming` written over the relay's phase through the rule: the phase it
+   * moved to, or `undefined` when it did not move — absorbed, already there, or
+   * a relay this table does not hold.
+   */
+  write(url: string, incoming: Phase): Phase | undefined;
+}
+
+/**
+ * Every table {@link phaseTable} has made, and nothing else. Membership is the
+ * object's identity, so a table built some other way is not in it however
+ * closely it copies the rule, and neither is a proxy or a copy of one that is.
+ */
+const MINTED = new WeakSet<object>();
+
+/** Whether `value` is a table {@link phaseTable} made, for the machine's own witnesses (`A5-C26`). */
+export function isPhaseTable(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && MINTED.has(value);
+}
+
+/**
+ * A table over `urls`, every relay starting at `initial`. **Frozen before it is
+ * recorded as made**, so a table {@link isPhaseTable} answers for cannot have
+ * its write replaced afterwards.
+ *
+ * This and the five declarations above it that the write's answer can depend
+ * on are held, token for token, to the copy `A5-C26`'s source reading keeps,
+ * since no reading of a table can show that its write keeps nothing but its
+ * cells: a change to any of them changes that copy too.
+ */
+export function phaseTable<Phase extends RelayPhase | BackwardPhase>(
+  urls: Iterable<string>,
+  initial: Phase
+): PhaseTable<Phase> {
+  const phases = new Map<string, Phase>([...urls].map((url) => [url, initial]));
+  const table = Object.freeze<PhaseTable<Phase>>({
+    get: (url) => phases.get(url),
+    has: (url) => phases.has(url),
+    keys: () => phases.keys(),
+    values: () => phases.values(),
+    entries: () => phases.entries(),
+    write: (url, incoming) => {
+      // Membership first: a relay outside the table is not this attempt's.
+      const current = phases.get(url);
+      if (current === undefined) return undefined;
+      const next = nextPhase(current, incoming);
+      if (next === current) return undefined;
+      phases.set(url, next);
+      return next;
+    }
+  });
+  MINTED.add(table);
+  return table;
+}
 
 /**
  * What one leg's signature gate is doing, and it is a state rather than a flag
@@ -301,7 +432,8 @@ export async function* referenceStream({
   timeoutMs,
   forwardLimitZero = false,
   passiveAbort = false,
-  verifyEvent
+  verifyEvent,
+  witnessTables
 }: MachineParams): AsyncGenerator<MachineChunk> {
   // Nothing is opened when the consumer is already gone. Without this the
   // subscriptions are created and torn down in the same tick, which puts CLOSE
@@ -964,9 +1096,7 @@ export async function* referenceStream({
   // answer is not idempotent; `SC10` is not evidence here and never was — it
   // builds its scope over a hand-rolled stub, so no dependency code runs in
   // it, and it measures this library's own transformation.
-  const targets = new Map<string, RelayPhase>(
-    targetUrls.map((url) => [url, 'pending' as RelayPhase])
-  );
+  const targets = phaseTable<RelayPhase>(targetUrls, 'pending');
 
   /**
    * The same table for the backward leg, over the same fixed target set.
@@ -979,19 +1109,14 @@ export async function* referenceStream({
    * whole. An `error` handler cannot see that path; only the connection-state
    * channel can, and only per relay.
    */
-  const backwardTargets = new Map<string, BackwardPhase>(
-    [...targets.keys()].map((url) => [url, 'pending' as BackwardPhase])
-  );
+  const backwardTargets = phaseTable<BackwardPhase>(targets.keys(), 'pending');
+  witnessTables?.(targets, backwardTargets);
 
   const advanceBackward = (url: string, phase: BackwardPhase) => {
-    const current = backwardTargets.get(url);
-    if (current === undefined) return;
-    // Determined is determined, for the reason `advance` says about `terminal`:
-    // the first answer is the one this attempt got, and a relay that reconnects
-    // afterwards belongs to whatever attempt `refresh()` opens next.
-    if (DETERMINED.has(current)) return;
-    backwardTargets.set(url, phase);
-    if (!DETERMINED.has(phase)) return;
+    // Through the table's one write, so a determined relay keeps its first
+    // answer.
+    const next = backwardTargets.write(url, phase);
+    if (next === undefined || !DETERMINED.has(next)) return;
     if ([...backwardTargets.values()].every((each) => DETERMINED.has(each))) settle(false);
   };
 
@@ -1019,7 +1144,7 @@ export async function* referenceStream({
     if (viaTimer) present.add('timeout');
     if (gates.backward.phase === 'cut') present.add('verification-timeout');
     const gone: string[] = [];
-    for (const [url, phase] of backwardTargets) {
+    for (const [url, phase] of backwardTargets.entries()) {
       if (phase === 'ended') gone.push(url);
       // Still undetermined at the moment the wait ended. Three ways to reach it,
       // and they are all the request giving up rather than a relay saying
@@ -1126,13 +1251,10 @@ export async function* referenceStream({
   }
 
   const advance = (url: string, phase: RelayPhase) => {
-    if (!targets.has(url)) return;
-    // Terminal is terminal. A relay that reconnects after being gone does not
-    // revive this attempt's leg — the leg is what this request holds open, and
-    // `refresh()` is what opens a new one.
-    if (targets.get(url) === 'terminal') return;
-    targets.set(url, phase);
-    if (phase !== 'terminal') return;
+    // Terminal is terminal, through the table's one write. A relay that
+    // reconnects after being gone does not revive this attempt's leg — the leg
+    // is what this request holds open, and `refresh()` is what opens a new one.
+    if (targets.write(url, phase) !== 'terminal') return;
     if ([...targets.values()].every((each) => each === 'terminal')) {
       endForward(
         relayFailure(
@@ -1228,9 +1350,9 @@ export async function* referenceStream({
       if (packet.type !== 'CLOSED') return;
       const leg = legOf(packet.subId);
       if (leg === undefined) return;
-      // **A relay that is not this request's does not refuse it.** Both table
-      // writers beside this one test membership (`advance`, `advanceBackward`)
-      // and the `NOTICE` channel one file over filters by scope for the same
+      // **A relay that is not this request's does not refuse it.** Both tables'
+      // one write tests membership before anything else (`phaseTable`), and
+      // the `NOTICE` channel one file over filters by scope for the same
       // reason; the refusal path was the one that did not, and `subId` is a
       // string the relay chose. Measured: a second relay, in the transport
       // because another request uses it, naming this request's backward subId

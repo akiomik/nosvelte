@@ -69,12 +69,12 @@ export default {
       id: 'C9-the-preflight-writes-the-phase-directly',
       arm: 'GN1',
       describe:
-        "the preflight sets a refused relay's live phase itself instead of going through `advance`, so the all-terminal check never runs",
+        "the preflight writes a refused relay's live phase into the table itself instead of going through `advance`, so the all-terminal check never runs",
       edits: [
         {
           file: MACHINE,
           from: "    if (live) advance(url, 'terminal');",
-          to: "    if (live) targets.set(url, 'terminal');"
+          to: "    if (live) targets.write(url, 'terminal');"
         }
       ]
     },

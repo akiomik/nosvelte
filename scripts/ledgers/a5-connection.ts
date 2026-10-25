@@ -10,7 +10,7 @@
  * - `A5-C6` on `CS4`;
  * - `A5-C25` on `CS5`;
  * - `A5-C7` on `CS6`;
- * - `A5-C8` on `CS7`, and on `CS9` for the order of the re-open and the ask;
+ * - `A5-C8` on `CS7`, the order of the re-open and the ask included;
  * - `A5-C20` on `CS8`.
  *
  * An id begins with the row it is read against, `C<n>-` for `A5-C<n>`. Two
@@ -29,10 +29,11 @@ const LEG_END_REASON =
   "          `every relay in scope stopped the live request: ${[...targets.keys()].join(', ')}`";
 /** The live leg ends when, and only when, every relay of the target set is terminal. */
 const ALL_TERMINAL = "    if ([...targets.values()].every((each) => each === 'terminal')) {";
-/** The forward table's absorbing rule: a relay already terminal is left alone. */
-const ABSORBING = "    if (targets.get(url) === 'terminal') return;\n";
-/** `advance`'s membership test: a relay outside the target set is not this request's. */
-const MEMBERSHIP = '    if (!targets.has(url)) return;\n';
+/** The tables' one write through the absorbing rule: a relay already terminal is left alone. */
+const ABSORBING = '      const next = nextPhase(current, incoming);\n';
+/** The tables' membership test, inside their one write: a relay outside the target set is not this request's. */
+const MEMBERSHIP =
+  '      const current = phases.get(url);\n      if (current === undefined) return undefined;\n';
 /** The connection-state channel's write of the live table. */
 const CONNECTION_WRITE = '      if (live) advance(packet.from, phase);';
 /** The outgoing-REQ channel's write of the live table. */
@@ -64,9 +65,28 @@ const ROUTE = '  const routeToTargets = { on: { relays: [...targetUrls] } };';
 const FORWARD_END_RECORD = '  return { ...set, forward: { ...forward, end: Object.freeze(end) } };';
 /** Each attempt's subscriptions named by the attempt. */
 const ATTEMPT_NAME = '      reqIdBase: `${reqIdBase}-${attemptId}`,';
-/** The live table's writer, from its membership test to its write. */
-const ADVANCE_HEAD =
-  "  const advance = (url: string, phase: RelayPhase) => {\n    if (!targets.has(url)) return;\n    // Terminal is terminal. A relay that reconnects after being gone does not\n    // revive this attempt's leg — the leg is what this request holds open, and\n    // `refresh()` is what opens a new one.\n    if (targets.get(url) === 'terminal') return;\n    targets.set(url, phase);";
+/** A table's store of its relays' phases, where each table is made. */
+const TABLE_STORE =
+  '  const phases = new Map<string, Phase>([...urls].map((url) => [url, initial]));\n';
+
+/**
+ * A setter put back beside the tables' one write, which stores what it is
+ * handed without asking the rule — the surface the tables were folded to
+ * remove, so that a channel's habit of writing past the rule can still be
+ * written down as a defect.
+ */
+const SETTER_BESIDE_THE_WRITE = [
+  {
+    file: MACHINE,
+    from: '  write(url: string, incoming: Phase): Phase | undefined;\n}\n',
+    to: '  write(url: string, incoming: Phase): Phase | undefined;\n  set(url: string, phase: Phase): void;\n}\n'
+  },
+  {
+    file: MACHINE,
+    from: '    write: (url, incoming) => {\n',
+    to: '    set: (url, phase) => {\n      phases.set(url, phase);\n    },\n    write: (url, incoming) => {\n'
+  }
+];
 
 /**
  * The connection-state channel's write, with the backlog asked again — under
@@ -84,21 +104,36 @@ const reaskOnRetry = (rxReqId: string): string =>
   '      }\n' +
   `${CONNECTION_WRITE}`;
 
-/** `ADVANCE_HEAD` with the absorbing rule held only for some relays, by how they reached `terminal`. */
-const absorbingOnlyWhen = (held: string): string =>
-  '  const reachedFromRecovery = new Set<string>();\n  const advance = (url: string, phase: RelayPhase) => {\n    if (!targets.has(url)) return;\n' +
-  `    if (targets.get(url) === 'terminal' && ${held}) return;\n` +
-  "    if (phase === 'terminal' && targets.get(url) === 'recovering') reachedFromRecovery.add(url);\n    targets.set(url, phase);";
+/**
+ * The tables' one write with the absorbing rule held only for some relays, by
+ * how they reached `terminal` — which only the forward table has, so the
+ * backward table's rule is untouched.
+ */
+const absorbingOnlyWhen = (held: string) => [
+  {
+    file: MACHINE,
+    from: TABLE_STORE,
+    to: `${TABLE_STORE}  const reachedFromRecovery = new Set<string>();\n`
+  },
+  {
+    file: MACHINE,
+    from: `${MEMBERSHIP}${ABSORBING}`,
+    to:
+      `${MEMBERSHIP}` +
+      "      if (incoming === 'terminal' && current === 'recovering') reachedFromRecovery.add(url);\n" +
+      `      const next =\n        current === 'terminal' && !(${held}) ? incoming : nextPhase(current, incoming);\n`
+  }
+];
 
 export default {
   name: 'a5-connection',
   subject:
-    '`A5-C2`, `A5-C4`, `A5-C5`, `A5-C6`, `A5-C7`, `A5-C8`, `A5-C20` and `A5-C25` (what a request does with the state of each relay’s connection): their landings, `CS1`–`CS8`, and `CS9`, which supports `A5-C8`',
+    '`A5-C2`, `A5-C4`, `A5-C5`, `A5-C6`, `A5-C7`, `A5-C8`, `A5-C20` and `A5-C25` (what a request does with the state of each relay’s connection): their landings, `CS1`–`CS8`',
   files: ['src/tests/contracts/engine/connection.test.ts'],
   calibration: {
     measured:
-      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { CS1: 5, CS2: 5, CS3: 5, CS4: 4, CS5: 4, CS6: 4, CS7: 8, CS8: 5, CS9: 4 }
+      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, `CS7`'s again at the commit that folded `CS9` into it, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
+    seconds: { CS1: 5, CS2: 5, CS3: 5, CS4: 4, CS5: 4, CS6: 4, CS7: 8, CS8: 5 }
   },
   entries: [
     {
@@ -290,8 +325,14 @@ export default {
       id: 'C5-a-relay-outside-the-target-set-joins-the-leg',
       arm: 'CS3',
       describe:
-        "`advance` has no membership test, so a relay added to the transport after the request began joins its live table when its socket opens — its `CLOSED` is then read as a refusal of the request, and the leg's end names it beside the relay the request was asking",
-      edits: [{ file: MACHINE, from: MEMBERSHIP, to: '' }]
+        "the tables' one write has no membership test, so a relay added to the transport after the request began joins both of the request's tables when it is first heard of — its `CLOSED` is then read as a refusal of the request, and the leg's end names it beside the relay the request was asking",
+      edits: [
+        {
+          file: MACHINE,
+          from: MEMBERSHIP,
+          to: '      const current = phases.get(url) ?? initial;\n'
+        }
+      ]
     },
     {
       id: 'C5-the-leg-judged-over-the-transports-relays',
@@ -316,10 +357,8 @@ export default {
           file: MACHINE,
           from: CONNECTION_WRITE,
           to:
-            "      if (live && targets.has(packet.from) && targets.get(packet.from) !== 'terminal') {\n" +
-            '        targets.set(packet.from, phase);\n' +
+            "      if (live && targets.write(packet.from, phase) === 'terminal') {\n" +
             '        if (\n' +
-            "          phase === 'terminal' &&\n" +
             "          Object.keys(transport.defaultRelays() ?? {}).every((each) => targets.get(each) === 'terminal')\n" +
             '        )\n' +
             '          endForward(\n' +
@@ -554,7 +593,7 @@ export default {
     },
     {
       id: 'C8-the-relay-reopened-after-it-is-asked',
-      arm: 'CS9',
+      arm: 'CS7',
       describe:
         'the preflight decides to re-open a relay whose retries ran out and does it only once both legs have been asked — which on the dependency still reaches the relay, since what was sent into `error` waits for the re-open',
       edits: [
@@ -577,7 +616,7 @@ export default {
     },
     {
       id: 'C8-the-ask-waits-for-the-reopen',
-      arm: 'CS9',
+      arm: 'CS7',
       describe:
         'the preflight starts the re-open of a relay whose retries ran out and then waits for the socket to open before either leg is asked — the same calls in the same order, made once the connection is `connected`',
       edits: [
@@ -737,15 +776,22 @@ export default {
       id: 'C20-the-absorbing-rule-deleted',
       arm: 'CS8',
       describe:
-        'the live table takes the last write, so a relay recorded terminal that comes back is alive again and the leg never sees every relay terminal',
-      edits: [{ file: MACHINE, from: ABSORBING, to: '' }]
+        "the tables' one write takes the last write, so a relay recorded terminal that comes back is alive again and the leg never sees every relay terminal",
+      edits: [
+        {
+          file: MACHINE,
+          from: ABSORBING,
+          to: '      const next = incoming;\n'
+        }
+      ]
     },
     {
       id: 'C20-the-connection-coming-back-revives-a-relay',
       arm: 'CS8',
       describe:
-        'the connection-state channel writes `active` past the absorbing rule, so a socket opening again takes a terminal relay back out',
+        'the connection-state channel writes `active` past the absorbing rule, through a setter put back beside the one write, so a socket opening again takes a terminal relay back out',
       edits: [
+        ...SETTER_BESIDE_THE_WRITE,
         {
           file: MACHINE,
           from: CONNECTION_WRITE,
@@ -757,8 +803,9 @@ export default {
       id: 'C20-a-re-sent-subscription-revives-a-relay',
       arm: 'CS8',
       describe:
-        'the outgoing-REQ channel writes `active` past the absorbing rule, so the dependency re-sending the live subscription after a retry takes a terminal relay back out',
+        'the outgoing-REQ channel writes `active` past the absorbing rule, through a setter put back beside the one write, so the dependency re-sending the live subscription after a retry takes a terminal relay back out',
       edits: [
+        ...SETTER_BESIDE_THE_WRITE,
         {
           file: MACHINE,
           from: OUTGOING_WRITE,
@@ -771,26 +818,14 @@ export default {
       arm: 'CS8',
       describe:
         'the absorbing rule holds only for a relay that reached `terminal` from `pending` or `active` — the reading 0002 records as wrong, which absorbs nothing on the ordinary death through recovery',
-      edits: [
-        {
-          file: MACHINE,
-          from: ADVANCE_HEAD,
-          to: absorbingOnlyWhen('!reachedFromRecovery.has(url)')
-        }
-      ]
+      edits: absorbingOnlyWhen('!reachedFromRecovery.has(url)')
     },
     {
       id: 'C20-absorbing-only-from-recovering',
       arm: 'CS8',
       describe:
         "the absorbing rule's mirror: held only for a relay that reached `terminal` through recovery, so one that went there directly is revived",
-      edits: [
-        {
-          file: MACHINE,
-          from: ADVANCE_HEAD,
-          to: absorbingOnlyWhen('reachedFromRecovery.has(url)')
-        }
-      ]
+      edits: absorbingOnlyWhen('reachedFromRecovery.has(url)')
     }
   ]
 } satisfies Ledger;

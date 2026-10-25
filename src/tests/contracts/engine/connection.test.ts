@@ -4,9 +4,9 @@
  *
  * What a request does with the state of each relay's connection: the landings
  * of `A5-C2` (`CS1`), `A5-C4` (`CS2`), `A5-C5` (`CS3`), `A5-C6` (`CS4`),
- * `A5-C25` (`CS5`), `A5-C7` (`CS6`), `A5-C8` (`CS7`) and `A5-C20` (`CS8`),
- * and `CS9`, which supports `A5-C8` with the order of the re-open and the ask,
- * which no public reading can see.
+ * `A5-C25` (`CS5`), `A5-C7` (`CS6`), `A5-C8` (`CS7`) and `A5-C20` (`CS8`).
+ * `CS7` also reads the order of the re-open and the ask, which no public
+ * reading can see.
  *
  * **Through the published entry**, for `CS1`, `CS2`, `CS4`, `CS6` and `CS8`:
  * `NostrApp` with `relays` only, so the dependency's retry policy is the one
@@ -1041,6 +1041,24 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
     //   a status — the client's status read overwritten for this relay. The
     //   attempt fails, naming the connection that is terminated.
     //
+    // **And the order on `error`**, moved to this row from `A5-C7` because
+    // `CS6`, that row's public arm, cannot read it. On the dependency a REQ sent
+    // to a socket in `error` waits in a queue a later re-open flushes, so an
+    // attempt that asked first and re-opened after would reach the relay all
+    // the same. So one more run records the order the attempt calls its
+    // transport in: a client of the arm's own with retries off, its socket
+    // dropped so the connection is left in `error`, the relay back at the url,
+    // and the machine driven directly on a capability that records each
+    // `reconnect` and `use` as it passes them on. **The re-open is started
+    // before either leg is asked — started, not awaited**: each `use` is
+    // recorded with the connection's state as it is called, and that state is
+    // `connecting`. An attempt that waited for the socket to open before asking
+    // would record `connected` there and the same order, so the order alone
+    // could not tell the two apart. Nothing between the preflight's `reconnect`
+    // and the two `use` calls yields, so the socket cannot have opened in
+    // between. It is a run of this arm rather than an arm of its own because
+    // the row's landing is what has to fail when the order breaks.
+    //
     // **And the decision in one table**, the classifier called directly over
     // the dependency's nine states: the four terminal ones as above, and every
     // other state asked as it is.
@@ -1136,10 +1154,89 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
         }
       }
     };
+    const reopenedFirst = async () => {
+      const url = nextUrl();
+      const { rxNostr, server } = createTestRelay(url);
+      const base = permanentTransport(rxNostr);
+      const calls: string[] = [];
+      const transport: TransportCapability = {
+        get revoked() {
+          return base.revoked;
+        },
+        relayStatus: () => base.relayStatus(),
+        defaultRelays: () => base.defaultRelays(),
+        reconnect: (relay) => {
+          calls.push('reconnect');
+          base.reconnect(relay);
+        },
+        use: (...args) => {
+          calls.push(`use ${args[0].rxReqId} while ${base.relayStatus()?.[url]?.connection}`);
+          return base.use(...args);
+        },
+        send: (...args) => base.send(...args),
+        onRevoke: (listener) => base.onRevoke(listener),
+        outgoingRequests: () => base.outgoingRequests(),
+        connectionState: () => base.connectionState(),
+        controlMessages: () => base.controlMessages()
+      };
+      const ac = new AbortController();
+      const chunks: string[] = [];
+      let opening: { unsubscribe(): void } | undefined;
+      let done: Promise<void> | undefined;
+      return (async () => {
+        try {
+          // The socket opened once, by the client and not the capability, then
+          // dropped: with retries off the connection is left in `error`.
+          opening = rxNostr
+            .use(createRxOneshotReq({ filters: [{ kinds: [1] }], rxReqId: 'cs7-order-opening' }))
+            .subscribe({});
+          await server.connected;
+          server.error({ code: 1006, reason: 'gone', wasClean: false });
+          await delay(200);
+          const inState = rxNostr.getAllRelayStatus()[url]?.connection;
+          const back = new WS(url, { jsonProtocol: true });
+          const asked = (): string[] =>
+            (back.messages as unknown[][])
+              .filter((frame) => frame[0] === 'REQ')
+              .map((frame) => String(frame[1]));
+          done = (async () => {
+            for await (const chunk of referenceStream({
+              transport,
+              targets: requestTargets(transport, undefined),
+              filters: [{ kinds: [1] }],
+              live: true,
+              reqIdBase: 'cs7-order',
+              signal: ac.signal,
+              timeoutMs: 5000,
+              verifyEvent: acceptAnyEvent
+            })) {
+              chunks.push(chunk.type);
+            }
+          })();
+          const reached = await until(
+            () =>
+              asked().some((name) => name.includes('-f:')) &&
+              asked().some((name) => name.includes('-b:')),
+            3000
+          );
+          back.send(['EOSE', asked().find((name) => name.includes('-b:'))]);
+          const answered = await until(() => chunks.includes('settled'), 2000);
+          return { inState, reached, answered, calls: [...calls] };
+        } catch (error) {
+          return failed(error);
+        } finally {
+          ac.abort();
+          await done;
+          opening?.unsubscribe();
+          rxNostr.dispose();
+        }
+      })();
+    };
     const error = await run('error');
     const rejected = await run('rejected');
     const dormant = await run('dormant');
     const terminated = await run('terminated');
+    const order = await reopenedFirst();
     const STATES: readonly ConnectionState[] = [
       'initialized',
       'connecting',
@@ -1153,7 +1250,7 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
     ];
     const table = Object.fromEntries(STATES.map((state) => [state, approachFor(state)]));
     expect(
-      { error, rejected, dormant, terminated, table },
+      { error, rejected, dormant, terminated, order, table },
       'each terminal state is decided before the relay is asked, and differently'
     ).toEqual({
       error: {
@@ -1192,6 +1289,12 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
         outcome: { kind: 'error' },
         namesTheTerminatedConnection: true
       },
+      order: {
+        inState: 'error',
+        reached: true,
+        answered: true,
+        calls: ['reconnect', 'use cs7-order-f while connecting', 'use cs7-order-b while connecting']
+      },
       table: {
         initialized: 'ask',
         connecting: 'ask',
@@ -1205,105 +1308,4 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
       }
     });
   }, 20_000);
-
-  it('CS9: an attempt starts re-opening a relay that ran out of retries before it asks it', async () => {
-    // **Internal, and a supporting arm of `A5-C8`**: the order its Then
-    // promises for `error`, moved there from `A5-C7` because `CS6`, that row's
-    // public arm, cannot read it. On the dependency a REQ sent to a
-    // socket in `error` waits in a queue a later re-open flushes, so an attempt
-    // that asked first and re-opened after would reach the relay all the same.
-    // So this records the order the attempt calls its transport in: a client of
-    // the arm's own with retries off, its socket dropped so the connection is
-    // left in `error`, the relay back at the url, and the machine driven
-    // directly on a capability that records each `reconnect` and `use` as it
-    // passes them on. **The re-open is started before either leg is asked —
-    // started, not awaited**: each `use` is recorded with the connection's
-    // state as it is called, and that state is `connecting`. An attempt that
-    // waited for the socket to open before asking would record `connected`
-    // there and the same order, so the order alone could not tell the two apart.
-    // Nothing between the preflight's `reconnect` and the two `use` calls
-    // yields, so the socket cannot have opened in between.
-    const url = nextUrl();
-    const { rxNostr, server } = createTestRelay(url);
-    const base = permanentTransport(rxNostr);
-    const calls: string[] = [];
-    const transport: TransportCapability = {
-      get revoked() {
-        return base.revoked;
-      },
-      relayStatus: () => base.relayStatus(),
-      defaultRelays: () => base.defaultRelays(),
-      reconnect: (relay) => {
-        calls.push('reconnect');
-        base.reconnect(relay);
-      },
-      use: (...args) => {
-        calls.push(`use ${args[0].rxReqId} while ${base.relayStatus()?.[url]?.connection}`);
-        return base.use(...args);
-      },
-      send: (...args) => base.send(...args),
-      onRevoke: (listener) => base.onRevoke(listener),
-      outgoingRequests: () => base.outgoingRequests(),
-      connectionState: () => base.connectionState(),
-      controlMessages: () => base.controlMessages()
-    };
-    const ac = new AbortController();
-    const chunks: string[] = [];
-    let opening: { unsubscribe(): void } | undefined;
-    let done: Promise<void> | undefined;
-    const result = await (async () => {
-      try {
-        // The socket opened once, by the client and not the capability, then
-        // dropped: with retries off the connection is left in `error`.
-        opening = rxNostr
-          .use(createRxOneshotReq({ filters: [{ kinds: [1] }], rxReqId: 'cs9-opening' }))
-          .subscribe({});
-        await server.connected;
-        server.error({ code: 1006, reason: 'gone', wasClean: false });
-        await delay(200);
-        const inState = rxNostr.getAllRelayStatus()[url]?.connection;
-        const back = new WS(url, { jsonProtocol: true });
-        const asked = (): string[] =>
-          (back.messages as unknown[][])
-            .filter((frame) => frame[0] === 'REQ')
-            .map((frame) => String(frame[1]));
-        done = (async () => {
-          for await (const chunk of referenceStream({
-            transport,
-            targets: requestTargets(transport, undefined),
-            filters: [{ kinds: [1] }],
-            live: true,
-            reqIdBase: 'cs9',
-            signal: ac.signal,
-            timeoutMs: 5000,
-            verifyEvent: acceptAnyEvent
-          })) {
-            chunks.push(chunk.type);
-          }
-        })();
-        const reached = await until(
-          () =>
-            asked().some((name) => name.includes('-f:')) &&
-            asked().some((name) => name.includes('-b:')),
-          3000
-        );
-        back.send(['EOSE', asked().find((name) => name.includes('-b:'))]);
-        const answered = await until(() => chunks.includes('settled'), 2000);
-        return { inState, reached, answered, calls: [...calls] };
-      } catch (error) {
-        return failed(error);
-      } finally {
-        ac.abort();
-        await done;
-        opening?.unsubscribe();
-        rxNostr.dispose();
-      }
-    })();
-    expect(result, 'the re-open is started, and then each leg is asked').toEqual({
-      inState: 'error',
-      reached: true,
-      answered: true,
-      calls: ['reconnect', 'use cs9-f while connecting', 'use cs9-b while connecting']
-    });
-  });
 });

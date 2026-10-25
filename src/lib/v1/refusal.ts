@@ -100,6 +100,12 @@ export function recoveryFor(reason: RefusalReason): Recovery {
 }
 
 /**
+ * The forward table's states, in its order. {@link RelayPhase} is read off it,
+ * so a state added here is one every reading over the list meets.
+ */
+export const RELAY_PHASES = ['pending', 'active', 'recovering', 'terminal'] as const;
+
+/**
  * What a relay's connection state means for the live leg it is carrying.
  *
  * A5's table, as data. It replaces `everyRelayRefused`, which could only see
@@ -169,7 +175,7 @@ export function recoveryFor(reason: RefusalReason): Recovery {
  * That was left unsaid, which made the two look inconsistent. They answer
  * different questions; see the fourth bullet there.
  */
-export type RelayPhase = 'pending' | 'active' | 'recovering' | 'terminal';
+export type RelayPhase = (typeof RELAY_PHASES)[number];
 
 export function phaseOfConnectionState(state: string): RelayPhase | undefined {
   switch (state) {
