@@ -1835,17 +1835,23 @@ per direction the rule blocks, and they are different failures rather than three
   outgoing messages, which carry a relay and a subscription id and no history. A table that accepted
   the write would move a determined relay back into the undetermined set, and the backlog — which is
   over when every relay is determined — would go back to waiting for an answer it is not going to
-  get. **This one arrives today, and by a shorter route than a re-send.** The preflight determines a
-  relay that was terminal before the request began, and the REQ this request then sends goes out to
-  that relay all the same, so the outgoing-message channel writes `active` over the `ended` the
-  preflight had just recorded. Measured with the guard removed: the only overwrite in that trace is
-  `ended → active` from the outgoing-REQ handler, and the answer loses `ended` — a relay this
-  request could never reach, dropped out of the report that says so. The **other** route into this
-  cell is a REQ re-sent after an answer, and it does not currently arrive: a reconnection re-sends
-  the live leg and not the backlog, because the backlog is no longer ongoing by then (`N2`, which
-  asserts a re-sent `-f:` and no re-sent `-b:`). That is a habit of the dependency rather than a
-  guarantee this record owns, which is why the rule is stated over the write: a version that starts
-  re-sending is one this table already answers rather than one that would need finding.
+  get. **One route into this cell is shorter than a re-send, and it is not a relay that really is
+  gone.** The preflight determines a relay whose status was terminal before the request began; where
+  the connection the REQ is then sent on is open all the same, the REQ goes out to that relay and
+  the outgoing-message channel writes `active` over the `ended` the preflight had just recorded.
+  Measured with the guard removed and the status forced to `rejected` behind an open socket: the
+  only overwrite in that trace is `ended → active` from the outgoing-REQ handler, and the answer
+  loses `ended` — a relay already recorded gone, dropped out of the report that says so. A relay
+  that really is `rejected` does not reach the cell: at rx-nostr 3.7.6 `send()` on a rejected
+  connection returns before the outgoing channel, so no REQ is observed and nothing writes `active`
+  (`GN1` reads no frame on such a relay). The cell is reached only where the status the preflight
+  reads and the connection the REQ is sent on disagree, which is what that measurement, and
+  `A5-C26`'s, forces. The **other** route into this cell is a REQ re-sent after an answer, and it
+  does not currently arrive: a reconnection re-sends the live leg and not the backlog, because the
+  backlog is no longer ongoing by then (`N2`, which asserts a re-sent `-f:` and no re-sent `-b:`).
+  Both are habits of the dependency rather than guarantees this record owns, which is why the rule
+  is stated over the write: a version that starts re-sending, or whose status and connection
+  disagree, is one this table already answers rather than one that would need finding.
 
 **What the rule costs is a report this record chooses not to make.** Nothing in the outcome
 distinguishes "the relay answered" from "the relay answered and then its socket died", because the
