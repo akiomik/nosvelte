@@ -209,10 +209,11 @@ bring back every step the trial removed.
 
 **Taken on 2026-10-27, before G1's plan:**
 
-- **#175.** `A-ε-C3` is re-accepted as `internal`. **The end decision is the delivery boundary**:
-  nothing routed after the decision is delivered, including a refusal in the same batch as the
-  frame that decided the end. The public arrangement that delivers such a refusal on this tree is
-  therefore a library defect, and G1 fixes it.
+- **#175.** `A-ε-C3` is re-accepted as `internal`. **The end decision is the delivery boundary,
+  read in wire order**: what a relay sent after the frame that decided the end is not delivered,
+  including a refusal in the same batch, and what it sent before that frame is delivered (`A-ε-C5`).
+  The public arrangement that delivers such a refusal on this tree is therefore a library defect,
+  and G1 fixes it.
 - **#181.** `A5-C12` and `A5-C13` are split. The cause clauses stay `public`, and the attribution
   clauses become `internal` rows on the machine seam, as `A5-C18` and `A5-C26` were in #190.
 
