@@ -20,7 +20,12 @@
  * unbounded, and, retaining one at a tie of three, read the winner and the
  * regular event under one name; each passed that.
  * `B6-C1-the-bound-keeps-the-first-to-arrive-at-a-tie` is the edit `B6-C1`'s
- * own text names.
+ * own text names. `C1-a-live-replacement-lost-while-the-leg-is-open` is an edit
+ * an outside reviewer wrote against its third form, which ended the live leg at
+ * once after the revision, so that the revision was folded on a leg already
+ * ended; it passed that. `C1-a-live-revision-replaces-what-it-meets` is its
+ * mirror: of `RP1`'s readings, only the one taken while the leg is open, after
+ * a delivery turn, fails under it (measured, with the turn removed).
  *
  * An id begins with the row it is read against: `C<n>-` for `B5-C<n>`, and
  * `B6-C1-` for `B6-C1`'s ordering at a tie, which `RP1` reads and does not
@@ -275,6 +280,53 @@ export default {
             '  if (a.event.pubkey !== b.event.pubkey) return a.event.pubkey < b.event.pubkey ? -1 : 1;\n' +
             '  return 0;',
           to: '  return 0;'
+        }
+      ]
+    },
+    {
+      id: 'C1-a-live-replacement-lost-while-the-leg-is-open',
+      arm: 'RP1',
+      describe:
+        'once the backlog has settled, a request retaining one keeps what it held whenever a fold replaces rather than adds while its forward leg is open, so a revision that arrives live is lost, and one folded after the leg ended is not',
+      edits: [
+        {
+          file: HOOK,
+          from: EVENT_FOLD,
+          to:
+            '  const folded = foldEvent(base, chunk.packet);\n' +
+            '  if (\n' +
+            '    base.backlog !== undefined &&\n' +
+            '    options.retain === 1 &&\n' +
+            '    base.forward?.end === undefined &&\n' +
+            '    folded.entries.size === base.entries.size\n' +
+            '  )\n' +
+            '    return base;\n' +
+            '  return retainNewest(folded, options);\n}'
+        }
+      ]
+    },
+    {
+      id: 'C1-a-live-revision-replaces-what-it-meets',
+      arm: 'RP1',
+      describe:
+        'once the backlog has settled and while its forward leg is open, the hook lets an arriving event replace whatever it holds under the same coordinate, so a live revision older than the one held, or losing its tie, replaces it',
+      edits: [
+        {
+          file: HOOK,
+          from: LAST_EVENTSET_IMPORT,
+          to: "  retainNewest,\n  replacementKey\n} from './eventset.js';"
+        },
+        {
+          file: HOOK,
+          from: EVENT_FOLD,
+          to:
+            '  const key = replacementKey(chunk.packet.event);\n' +
+            '  if (base.backlog !== undefined && base.forward?.end === undefined && base.entries.has(key)) {\n' +
+            '    const entries = new Map(base.entries);\n' +
+            '    entries.set(key, chunk.packet);\n' +
+            '    return retainNewest({ ...base, entries }, options);\n' +
+            '  }\n' +
+            `${EVENT_FOLD}`
         }
       ]
     }

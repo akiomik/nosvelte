@@ -223,16 +223,28 @@ const TIED: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) => {
 
 /**
  * **One revision on the backlog and the other on the live leg, in both orders**
- * (`B5-C1`, `B5-C2`): the second revision reaches an answer that has settled.
- * The relay then refuses the live subscription with `CLOSED`, after the
- * revision on the same subscription. With the backlog over, that ends the
- * request, and its end is queued only once every event its forward leg took in
- * before it has been decided (`finish` in `src/lib/v1/machine.ts`), so an
- * answer read once the request is idle has folded the revision. Neither the
- * leg's end on the diagnostics nor an event sent after the revision would do:
- * the first is published while the revision may still be being verified, and,
- * bounded to one, a newer event would leave nothing else to read and an older
- * one would never be held.
+ * (`B5-C1`, `B5-C2`): the second revision reaches an answer that has settled,
+ * on a leg that is still open. It is read twice.
+ *
+ * - **While the leg is open**, after a delivery turn, so that the revision is
+ *   taken in before the leg ends. That a turn is enough is measured rather
+ *   than guaranteed: `C1-a-live-revision-replaces-what-it-meets` in
+ *   `scripts/ledgers/b5-replacement.ts` fails this arm with the turn and passes
+ *   it without, so a run where the turn fell short would show as that entry
+ *   surviving. The reading waits for the owed answer, and a request that never
+ *   reaches it is read when the wait runs out.
+ * - **Once the request has ended.** The relay refuses the live subscription
+ *   with `CLOSED`, which, with the backlog over, ends the request, and its end
+ *   is queued only once every event its forward leg took in has been decided,
+ *   folded or discarded (`finish` in `src/lib/v1/machine.ts`). This reading is
+ *   the answer the request ends with.
+ *
+ * `CLOSED` sent at once after the revision would not do for the first: the
+ * leg's end does not wait for the revision's verification, so the revision
+ * would be folded after it, on a leg already ended, and a request that lost a
+ * replacement only while its leg was open would pass. Nor would an event sent
+ * after the revision as a marker: bounded to one, a newer event would leave
+ * nothing else to read, and an older one would never be held.
  */
 const LIVE: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) =>
   DATES.flatMap((dates) => {
@@ -319,11 +331,11 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
       // Each case is its own request on its own relay, all at once. The relay
       // sends the case's backlog in order, then `EOSE`, and the consumer's
       // answer is read once it is settled; for a live case, the forward leg's
-      // events are sent then, and `CLOSED` after them, and the answer is read
-      // again once the request has ended. A reading is which of the case's
-      // events the answer holds,
-      // by the names the case gives them, sorted, since the order a list is
-      // shown in is `B6`'s and not this arm's.
+      // events are sent then, and the answer is read again while the leg is
+      // open and once more after `CLOSED` has ended the request. A reading is
+      // which of the case's events the answer holds, by the names the case
+      // gives them, sorted, since the order a list is shown in is `B6`'s and
+      // not this arm's.
       const cases = [...PAIRS, ...BETWEEN, ...TIED, ...LIVE, ...DISTINCT];
       expect(cases, 'the cases this arm reads').toHaveLength(132);
       const readings = await Promise.all(
@@ -355,12 +367,17 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
               const forward = relay.asked('forward').at(-1);
               for (const { event } of each.live.forward)
                 relay.server.send(['EVENT', forward, event]);
+              await REAL.turn();
+              const owed = JSON.stringify([...each.held].sort());
+              await REAL.promptly(() => JSON.stringify(held()) === owed);
+              const whileLive = held();
               relay.refuseLive('blocked: the live subscription ends here');
               const ended = await REAL.promptly(() => consumer.handle()?.activity === 'idle');
               return {
                 asked,
                 status: consumer.handle()?.state.status,
                 afterTheBacklog,
+                whileLive,
                 ended,
                 held: held()
               };
@@ -380,7 +397,11 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
               status: 'settled',
               ...(each.live === undefined
                 ? {}
-                : { afterTheBacklog: [...each.live.afterTheBacklog].sort(), ended: true }),
+                : {
+                    afterTheBacklog: [...each.live.afterTheBacklog].sort(),
+                    whileLive: [...each.held].sort(),
+                    ended: true
+                  }),
               held: [...each.held].sort()
             }
           ])
