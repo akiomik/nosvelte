@@ -100,7 +100,9 @@ release changes, and the rehearsal is where they stop being a surprise.
   environment, and that the group's required witnesses accept.
 
 **Every other finding is fixed if it is cheap.** If it is not, it is written down as an accepted
-limitation in the PR. It goes into the row as well only where it bounds what the row claims.
+limitation in the PR's **Accepted limitations** section: one line each, naming the instrument or the
+promise it concerns, so that limitations can be counted like issues. It goes into the row as well
+only where it bounds what the row claims.
 
 **An instrument states the forms it supports and refuses the rest.** A further spelling it refuses
 is a limitation, not a reopening.
@@ -173,15 +175,24 @@ Each group records three measures in the trial record below. The baseline is mea
    - The legacy gaps covered.
    - The release checks, which include G3's package rehearsal.
 3. **Cost and recurrence.**
-   - Per group: reviewer invocations, repair rounds, ledger run time, and issues filed by kind.
-   - Whether one instrument family filed issues in two groups running.
+   - Per group: reviewer invocations, repair rounds and ledger run time.
+   - **The residue, counted together:** issues filed, by kind, **and** limitations accepted, each
+     named by the instrument or the promise it concerns. An issue closed under §3 or by a decision
+     is reported as disposed of, not as fixed.
+   - Whether one instrument family left residue — an issue or a limitation — in two groups running.
 
 **The trial has failed if any of these happens:**
 
 - a seeded defect survives every required witness in an operation called complete;
-- an instrument family files issues in two successive groups;
+- an instrument family leaves residue — an issue or an accepted limitation — in two successive
+  groups;
 - reviewer invocations and repair rounds per group are not below the baseline;
 - a group closes rows without covering the legacy gaps it took.
+
+**Detection is what judges the trial.** The trial lowers the issue count by itself: §4 files fewer
+issues, three close under §3, and a fourth closes on a decision. It lowers the number of reviews by
+itself too, since §2 prescribes fewer. So neither number falling is evidence that the trial worked.
+They are recorded to show what the trial spent and what it left, read beside what detection found.
 
 **What a failure changes.** The depth comes back at the boundary that escaped. A failure does not
 bring back every step the trial removed.
@@ -200,9 +211,9 @@ bring back every step the trial removed.
 
 **Baseline: the last two landings before the trial**, from their PR bodies.
 
-| PR   | Rows (net `TBD`) | Reviewer invocations                                         | Repair rounds | Ledger                                                            | Issues filed |
-| ---- | ---------------- | ------------------------------------------------------------ | ------------- | ----------------------------------------------------------------- | ------------ |
-| #192 | −3               | 8: plan 2 (rejected, then revised), full 2 readers, narrow 4 | 4             | 38 entries, 5.4 min                                               | 0            |
-| #194 | −3               | 5: plan 1, full 2 readers, repair plan 1, narrow 1           | 1             | 36 entries, 2.5 min, plus a neighbouring 38-entry ledger, 5.4 min | 1 (#193)     |
+| PR   | Rows (net `TBD`) | Reviewer invocations                                         | Repair rounds | Ledger                                                            | Issues filed | Limitations in the PR |
+| ---- | ---------------- | ------------------------------------------------------------ | ------------- | ----------------------------------------------------------------- | ------------ | --------------------- |
+| #192 | −3               | 8: plan 2 (rejected, then revised), full 2 readers, narrow 4 | 4             | 38 entries, 5.4 min                                               | 0            | 2 ("Known limits")    |
+| #194 | −3               | 5: plan 1, full 2 readers, repair plan 1, narrow 1           | 1             | 36 entries, 2.5 min, plus a neighbouring 38-entry ledger, 5.4 min | 1 (#193)     | 2 ("Known limits")    |
 
 The seeded-defect baseline, then G1, G2 and G3, are added here as each is done.
