@@ -201,11 +201,20 @@ bring back every step the trial removed.
 
 | Decision                                                                                | Needed before                            |
 | --------------------------------------------------------------------------------------- | ---------------------------------------- |
-| The routes of `A-ε-C3` (#175) and of `A5-C12`/`A5-C13` (#181)                           | G1's plan                                |
+| The routes of `A-ε-C3` (#175) and of `A5-C12`/`A5-C13` (#181)                           | G1's plan; **taken 2026-10-27**, below   |
 | `0002` A16's standalone arm, kept by the code (#167)                                    | G2                                       |
 | Refusal text bounds, a send's verifier failure, and `ots` (#156, #157, #164)            | G3                                       |
 | Whether evidence from the landings before the ledgers had a home stands as it is (#148) | any time                                 |
 | A narrow patch of the legacy surface for #163, ahead of v1                              | any time; worth more the sooner it comes |
+
+**Taken on 2026-10-27, before G1's plan:**
+
+- **#175.** `A-ε-C3` is re-accepted as `internal`. **The end decision is the delivery boundary**:
+  nothing routed after the decision is delivered, including a refusal in the same batch as the
+  frame that decided the end. The public arrangement that delivers such a refusal on this tree is
+  therefore a library defect, and G1 fixes it.
+- **#181.** `A5-C12` and `A5-C13` are split. The cause clauses stay `public`, and the attribution
+  clauses become `internal` rows on the machine seam, as `A5-C18` and `A5-C26` were in #190.
 
 ## Trial record
 
@@ -216,4 +225,42 @@ bring back every step the trial removed.
 | #192 | −3               | 8: plan 2 (rejected, then revised), full 2 readers, narrow 4 | 4             | 38 entries, 5.4 min                                               | 0            | 2 ("Known limits")    |
 | #194 | −3               | 5: plan 1, full 2 readers, repair plan 1, narrow 1           | 1             | 36 entries, 2.5 min, plus a neighbouring 38-entry ledger, 5.4 min | 1 (#193)     | 2 ("Known limits")    |
 
-The seeded-defect baseline, then G1, G2 and G3, are added here as each is done.
+**The seeded-defect baseline**, measured 2026-10-27 at `88692fc`.
+
+- **The defects.** The maintainer picked two promises: receiving and display, and how a request
+  ends. An outside reviewer who had not read the ledgers proposed five defects against them, two
+  more against a stratum it proposed itself (the admission boundary), and wrote the three known
+  ones. The list was frozen before any test was opened. Each defect compiles, and a probe of the
+  reviewer's own showed each giving a wrong consumer outcome through the published entry: the probe
+  passed without the defect and failed with it, at the consumer assertion it was written for. Its
+  blindness was partial: a search of local notes showed it historical arm names, which it reports
+  it did not use.
+- **How they were run.** Each defect alone, against the arm files of its operation, without the
+  probe. With no defect applied, each operation's arms passed. Only an assertion failure counts as
+  a catch. A catch is a consumer assertion when the arm's row is `public`, and an internal one when
+  it is `internal`. The two survivors were then run against the whole suite, without the probes.
+
+| Defect | Stratum              | What it breaks                                           | Caught by                                                                               |
+| ------ | -------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| S1     | receive              | the newer revision of a replaceable event wins           | **internal assertions only** (`B5-C1`, `B5-C2`, `B5-C4`, `B5-C5`)                       |
+| S2     | receive              | a live event is shown while the backlog is running       | a consumer assertion (`A5-C1`), and internal ones                                       |
+| S3     | receive              | the list is newest first                                 | consumer assertions (`A5-C1`, `A5-C16`), and internal ones                              |
+| S4     | ending               | only the backlog's `EOSE` completes the backlog          | consumer assertions (`B-α-C11`, `A5-C1`)                                                |
+| S5     | ending               | one relay's refusal does not discard another's answer    | consumer assertions (`A5-C6`, `A5-C9`, `A5-C10`, `A5-C15`, `A5-C18`), and internal ones |
+| S6     | admission (proposed) | an id inconsistent with the hashed fields is refused     | a consumer assertion (`A-ε-C18`)                                                        |
+| S7     | admission (proposed) | a published event's tags cannot be written               | **internal assertions only** (`B5-C6`, `B5-C8`, `A-ε-C15`)                              |
+| K1     | known: #193          | the hook keeps the older revision on a replacement       | **nothing**, in its operation's arms or in the whole suite                              |
+| K2     | known: #179          | the settle timer fires at 0.8 of the caller's timeout    | a consumer assertion of another row (`A5-C16`), whose wait reaches the deadline         |
+| K3     | known: #186          | a `CLOSED` naming a forward leg never opened is acted on | **nothing**, in its operation's arms or in the whole suite                              |
+
+- **Detection:** 5 of 5 fresh defects in the picked promises were caught, 4 of them by a consumer
+  assertion. 2 of 2 in the proposed stratum were caught, 1 by a consumer assertion. 1 of 3 known
+  defects was caught.
+- **For G1:** the replacement promise has no consumer witness. S1 is caught only below the hook,
+  and K1, in the hook, is not caught at all. K3 is the claim of #186, which no row holds. K2 is
+  caught, but not by `A-γ-C1`'s own landing, which #179 is about.
+- **Cost:** one reviewer invocation to propose the defects and probe them, and 9.1 minutes of runs:
+  15 runs, of which 3 were baselines and 2 were the whole suite. Three more runs of the one arm that
+  caught K2, 10 seconds in all, read what it was handed, to rule out a timing accident.
+
+G1, G2 and G3 are added here as each is done.
