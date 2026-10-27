@@ -47,24 +47,32 @@
  * clock is installed before the provider is rendered and put back after it
  * goes; the requests on the real clock run all at once.
  *
+ * The harness — the two clocks, the relay server and the published request —
+ * is `helpers/request.ts`, which `forward.test.ts`'s arms share.
+ *
  * Port band 9020–9099.
  */
-import { render } from '@testing-library/svelte';
-import { WebSocket as MockWebSocket } from 'mock-socket';
-import type Nostr from 'nostr-typedef';
 import type { RxNostr } from 'rx-nostr';
 import { createRxOneshotReq } from 'rx-nostr';
-import { getEventHash, getPublicKey, getSignature } from 'rx-nostr-crypto';
 import { Observable } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
-import type { NostrContext } from '$lib/v1/context.svelte.js';
-import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
-import { DEFAULT_SETTLE_TIMEOUT_MS } from '$lib/v1/normalize.js';
-
-import MountedRequest from './fixtures/MountedRequest.svelte';
 import { transportOf } from './helpers/relay.js';
+import {
+  ARM_TIMEOUT_MS,
+  delivered,
+  ENDINGS,
+  expectedOnEachClock,
+  kept,
+  nameOf,
+  onEachClock,
+  openAmong,
+  planned,
+  published,
+  relayAt,
+  urlsFrom
+} from './helpers/request.js';
 
 // The provider reads the framework's own context, not the setup's stand-in.
 vi.unmock('svelte');
@@ -75,120 +83,7 @@ afterEach(() => {
   WS.clean();
 });
 
-let port = 9020;
-const nextUrl = (): string => `ws://localhost:${String((port += 1))}`;
-
-const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
-
-/** Every clock the dependency, the socket mock and the machine read, for a request on a fake one. */
-const FAKED = [
-  'setTimeout',
-  'clearTimeout',
-  'setInterval',
-  'clearInterval',
-  'Date',
-  'performance'
-] as const;
-
-/** The deadline a request on the real clock is given: twice the arms' budget for what is prompt. */
-const REAL_DEADLINE_MS = 4000;
-
-/** A turn for what a callback put on the wire to reach the relay. */
-const DELIVERY_MS = 100;
-
-/** Real time an arm may take, with every wait in it run out. */
-const ARM_TIMEOUT_MS = 60_000;
-
-/**
- * Move the fake clock a step at a time until `done` holds or `ms` of it have
- * passed, and say whether it holds.
- */
-async function advanceUntil(done: () => boolean, ms: number, step = 50): Promise<boolean> {
-  for (let spent = 0; spent < ms && !done(); spent += step) await vi.advanceTimersByTimeAsync(step);
-  return done();
-}
-
-/** Whether `done` holds within `ms` of real time. */
-async function until(done: () => boolean, ms: number): Promise<boolean> {
-  try {
-    await vi.waitFor(() => expect(done()).toBe(true), { timeout: ms });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** A clock a request is run on: how an arm waits on it, and how it holds a request past its deadline. */
-interface Clock {
-  name: string;
-  fake: boolean;
-  /** The request's deadline, as its descriptor states it: absent for the library's default. */
-  settleTimeoutMs: number | undefined;
-  /**
-   * What is prompt on this clock: a fifth of the deadline on the fake clock,
-   * half of it on the real one. It bounds the real time a prompt reading may
-   * come after the arm last acted, as well as the wait on this clock's own
-   * time, so that nothing scheduled later than this, on any clock, has had
-   * the time to run by a prompt reading.
-   */
-  promptMs: number;
-  /** Whether `done` holds within `promptMs` of this clock's time. */
-  promptly: (done: () => boolean) => Promise<boolean>;
-  /** Let a second more than the whole deadline pass, and a delivery turn after. */
-  pastTheDeadline: () => Promise<void>;
-}
-
-const FAKE: Clock = {
-  name: 'fake clock',
-  fake: true,
-  settleTimeoutMs: undefined,
-  promptMs: DEFAULT_SETTLE_TIMEOUT_MS / 5,
-  promptly: (done) => advanceUntil(done, FAKE.promptMs),
-  pastTheDeadline: async () => {
-    await vi.advanceTimersByTimeAsync(DEFAULT_SETTLE_TIMEOUT_MS + 1000);
-  }
-};
-
-const REAL: Clock = {
-  name: 'real clock',
-  fake: false,
-  settleTimeoutMs: REAL_DEADLINE_MS,
-  promptMs: REAL_DEADLINE_MS / 2,
-  promptly: (done) => until(done, REAL.promptMs),
-  pastTheDeadline: async () => {
-    await delay(REAL_DEADLINE_MS + 1000);
-    await delay(DELIVERY_MS);
-  }
-};
-
-const SECKEY = '7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a';
-
-/** An event signed correctly over its own fields, as a relay would carry one. */
-const signed = (content: string): Nostr.Event => {
-  const unsigned = { kind: 1, created_at: 1000, tags: [], content, pubkey: getPublicKey(SECKEY) };
-  const id = getEventHash(unsigned);
-  return { ...unsigned, id, sig: getSignature(id, SECKEY) };
-};
-
-type Leg = 'backward' | 'forward';
-
-/** The leg a subscription name belongs to, as the machine names its two. */
-const legOf = (subId: string): Leg | undefined =>
-  subId.includes('-b:') ? 'backward' : subId.includes('-f:') ? 'forward' : undefined;
-
-/**
- * The subscriptions `frames` leave open, by leg — a name the arm does not
- * know is given as itself. Folded in the order the frames were sent, so a
- * subscription asked again after its `CLOSE` is open again.
- */
-function openAmong(frames: readonly unknown[][]): string[] {
-  const open = new Set<string>();
-  for (const [kind, subId] of frames) {
-    if (kind === 'REQ') open.add(String(subId));
-    if (kind === 'CLOSE') open.delete(String(subId));
-  }
-  return [...open].map((subId) => legOf(subId) ?? subId);
-}
+const nextUrl = urlsFrom(9020);
 
 /**
  * The reader's own control: a backlog closed and asked again, which is open,
@@ -201,187 +96,6 @@ const REOPENED: readonly unknown[][] = [
   ['CLOSE', 'x-f:0'],
   ['REQ', 'x-b:0']
 ];
-
-/** A relay server, and what it was sent on each leg. */
-function relayAt(url: string) {
-  const server = new WS(url, { jsonProtocol: true });
-  const frames = (): unknown[][] => server.messages as unknown[][];
-  /** The subscription names `kind` frames carried on `leg`, in order. */
-  const named = (kind: 'REQ' | 'CLOSE', leg: Leg): string[] =>
-    frames()
-      .filter((frame) => frame[0] === kind && legOf(String(frame[1])) === leg)
-      .map((frame) => String(frame[1]));
-  return {
-    url,
-    server,
-    /** The subscriptions asked on `leg`, a name asked again counted again. */
-    asked: (leg: Leg): string[] => named('REQ', leg),
-    /** The subscriptions closed on `leg`. */
-    closed: (leg: Leg): string[] => named('CLOSE', leg),
-    /** The subscriptions open now, by leg, sorted. */
-    open: (): string[] => openAmong(frames()).sort(),
-    /** `count` events on the backlog asked of this relay, each signed. */
-    sendBacklog: (count: number, content: string): void => {
-      for (let each = 0; each < count; each += 1) {
-        server.send([
-          'EVENT',
-          named('REQ', 'backward').at(-1),
-          signed(`${content}-${String(each)}`)
-        ]);
-      }
-    },
-    /** `EOSE` for the backlog asked of this relay. */
-    answerBacklog: (): void => {
-      server.send(['EOSE', named('REQ', 'backward').at(-1)]);
-    },
-    /** `EOSE` for the live subscription asked of this relay, as a relay sends one on every subscription. */
-    answerLive: (): void => {
-      server.send(['EOSE', named('REQ', 'forward').at(-1)]);
-    },
-    /** How many sockets to this relay are open now. */
-    sockets: (): number => server.server.clients().length
-  };
-}
-
-type Relay = ReturnType<typeof relayAt>;
-
-const failed = (error: unknown) => ({
-  failed: error instanceof Error ? error.message : String(error)
-});
-
-/** One way a backlog can end: how many events it carries, and what the request retains. */
-interface Ending {
-  events: 0 | 1 | 2;
-  retain: 'unbounded' | 1;
-}
-
-const ENDINGS: readonly Ending[] = ([0, 1, 2] as const).flatMap((events) =>
-  (['unbounded', 1] as const).map((retain) => ({ events, retain }))
-);
-
-const nameOf = ({ events, retain }: Ending): string =>
-  `${String(events)} event, retaining ${String(retain)}`;
-
-/** The events a request holds once its backlog has ended this way. */
-const kept = ({ events, retain }: Ending): number =>
-  retain === 'unbounded' ? events : Math.min(events, retain);
-
-/** The request, its deadline the clock's. */
-const planned = (
-  namespace: string,
-  live: boolean,
-  retain: Ending['retain'],
-  clock: Clock
-): ReqPlan => ({
-  kind: 'request',
-  descriptor: {
-    filters: [{ kinds: [1] }],
-    live,
-    retain,
-    namespace,
-    ...(clock.settleTimeoutMs === undefined ? {} : { settleTimeoutMs: clock.settleTimeoutMs })
-  }
-});
-
-/** The events the consumer's request holds. */
-const delivered = (handle: ReqHandle | undefined): number =>
-  handle === undefined || handle.state.status === 'loading' ? 0 : handle.state.events.length;
-
-interface Consumer {
-  /** The request the consumer holds, once it has one. */
-  handle: () => ReqHandle | undefined;
-  /** Mount the consumer under the provider. */
-  mount: () => Promise<void>;
-  /** Tear the consumer down, the provider staying mounted. */
-  tearDown: () => Promise<void>;
-  /**
-   * Whether less than the clock's `promptMs` of real time has passed since the
-   * request was made, or since the consumer was torn down once it has been.
-   */
-  inRealTime: () => boolean;
-}
-
-/**
- * One request through the published entry, on `relay` and `clock`, handed to
- * `run`; the provider is unmounted after. On the fake clock, the clock is
- * installed before the provider is rendered, and moved on after it goes so
- * that what it leaves behind runs out, then put back. The consumer is mounted
- * at once unless `ready` is given, in which case the arm is handed the
- * provider's context first and mounts the consumer itself.
- */
-async function published(
-  relay: Relay,
-  plan: ReqPlan,
-  clock: Clock,
-  run: (consumer: Consumer) => Promise<unknown>,
-  ready?: (context: NostrContext) => void
-): Promise<unknown> {
-  let handle: ReqHandle | undefined;
-  let actedAt = vi.getRealSystemTime();
-  if (clock.fake) vi.useFakeTimers({ toFake: [...FAKED] });
-  vi.stubGlobal('WebSocket', MockWebSocket);
-  vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
-  const view = render(MountedRequest, {
-    relays: [relay.url],
-    plan: () => plan,
-    mounted: ready === undefined,
-    seen: (request: ReqHandle) => {
-      handle = request;
-    },
-    ...(ready === undefined ? {} : { ready })
-  });
-  try {
-    return await run({
-      handle: () => handle,
-      mount: () => view.rerender({ mounted: true }),
-      tearDown: () => {
-        actedAt = vi.getRealSystemTime();
-        return view.rerender({ mounted: false });
-      },
-      inRealTime: () => vi.getRealSystemTime() - actedAt < clock.promptMs
-    });
-  } catch (error) {
-    return failed(error);
-  } finally {
-    view.unmount();
-    if (clock.fake) {
-      await vi.advanceTimersByTimeAsync(1000);
-      vi.useRealTimers();
-    }
-  }
-}
-
-const CLOCKS: readonly Clock[] = [FAKE, REAL];
-
-/**
- * Each case's reading on each clock, by the clock's name and the case's: on
- * the fake clock one request after another, since that clock is the whole
- * process's, then on the real clock all at once, since each is held there for
- * its whole deadline.
- */
-async function onEachClock<Case>(
-  cases: readonly Case[],
-  name: (each: Case) => string,
-  read: (clock: Clock, each: Case) => Promise<unknown>
-): Promise<Record<string, unknown>> {
-  const readings: Record<string, unknown> = {};
-  for (const each of cases) readings[`${FAKE.name}, ${name(each)}`] = await read(FAKE, each);
-  const real = await Promise.all(cases.map((each) => read(REAL, each)));
-  cases.forEach((each, index) => {
-    readings[`${REAL.name}, ${name(each)}`] = real[index];
-  });
-  return readings;
-}
-
-/** What each case must read on each clock, by the same names. */
-const expectedOnEachClock = <Case>(
-  cases: readonly Case[],
-  name: (each: Case) => string,
-  reading: (each: Case) => unknown
-): Record<string, unknown> =>
-  Object.fromEntries(
-    CLOCKS.flatMap((clock) => cases.map((each) => [`${clock.name}, ${name(each)}`, reading(each)]))
-  );
 
 /** One leg's subscriptions: every one taken, and every one torn down. */
 interface Held {

@@ -16,6 +16,8 @@ import type { Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
 const ARM = 'src/tests/contracts/engine/release.test.ts';
+/** The harness the arms share with `forward.test.ts`'s. */
+const HARNESS = 'src/tests/contracts/engine/helpers/request.ts';
 
 /** The library's release of the backlog's subscription, where its outcome is queued and at the end. */
 const RELEASE = '    backward?.unsubscribe();\n    backward = undefined;\n';
@@ -107,14 +109,13 @@ const DEADLINE = '    timer = setTimeout(() => settle(true), timeoutMs);';
 /** The deadline closing every subscription the request holds, a live leg included. */
 const DEADLINE_CLOSES_ALL =
   '    timer = scheduleDeadline(() => {\n      settle(true);\n      closeAll();\n    }, timeoutMs);';
-/** The arm's reader of the wire, folding the frames in the order they were sent. */
+/** The harness's reader of the wire, folding the frames in the order they were sent. */
 const FOLDED =
   "    if (kind === 'REQ') open.add(String(subId));\n" +
   "    if (kind === 'CLOSE') open.delete(String(subId));\n" +
   '  }\n';
-/** The arm's `delay`, after which the clock a run is held up on is taken. */
-const DELAY =
-  'const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));\n';
+/** The arm's own setup, after which the clock a run is held up on is taken. */
+const UNMOCKED = "vi.unmock('svelte');\n";
 /**
  * The run with no event, retained without bound, on the fake clock or on the
  * real one, held up in real time a little past that clock's budget for what is
@@ -128,8 +129,8 @@ const HELD_UP = (
 ): { file: string; from: string; to: string }[] => [
   {
     file: ARM,
-    from: DELAY,
-    to: `${DELAY}const pauseInRealTime = globalThis.setTimeout.bind(globalThis);\n`
+    from: UNMOCKED,
+    to: `${UNMOCKED}const pauseInRealTime = globalThis.setTimeout.bind(globalThis);\n`
   },
   {
     file: ARM,
@@ -504,7 +505,7 @@ export default {
         'the arms’ reader of the wire takes a name closed once as closed for good, so a backlog asked again after its `CLOSE` reads closed — its control, frames that close a backlog and ask it again, reads nothing open',
       edits: [
         {
-          file: ARM,
+          file: HARNESS,
           from: FOLDED,
           to:
             "    if (kind === 'REQ') open.add(String(subId));\n" +
