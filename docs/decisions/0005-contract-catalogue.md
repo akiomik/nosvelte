@@ -2005,12 +2005,13 @@ cannot find a row that was classified wrongly:
   `getContext`/`setContext` process-wide, so a row here whose witnesses all live in files that do
   not opt out of that stand-in **has no evidence for the half that matters**, and `CAT31` is the
   check that says so — **over the rows that declare `svelte-context` or `svelte-call-site`, which is
-  7 of the 39 in this domain, not over the domain**. The other 31 are witnessed under the stand-in
-  and the check is green on them by construction: what the stand-in takes away is those two
-  facilities, and a row that does not declare them is not claiming either. This sentence said "a row
-  here", which reads as the domain, and the row this round added is one of the 31. `CAT27` held the
-  same rule over the rows citing an `LC` arm and was deleted: every `LC` arm lives in the file that
-  opts out, so its rule was satisfied by where those arms happen to live and could not fail.
+  8 of the 47 in this domain, not over the domain**. The check is green on the other 39 by
+  construction: what the stand-in takes away is those two facilities, and a row that does not
+  declare them is not claiming either. This sentence said "a row here", which reads as the domain,
+  and the row the round that wrote it added was one of the 31 that did not declare them then.
+  `CAT27` held the same rule over the rows citing an `LC` arm and was deleted: every `LC` arm lives
+  in the file that opts out, so its rule was satisfied by where those arms happen to live and could
+  not fail.
 - `engine` — pure request engine; the stand-in changes nothing about it.
 - `transport` — needs the resolved dependency's own behaviour on a socket.
 - `surface` — static: exported names, emitted declarations, module graph.
@@ -2106,8 +2107,8 @@ is recorded in the row.
 `A5-C23`, `A5-C24`, `A5-C1` and `A5-C16` declare `svelte-context` too: their landings render a
 provider and the framework's own context (`AH1`, `AH2`, `WB1`, `DC7`, `OR1`, `OR2`, `ST1`,
 `GN1`–`GN5`, `CS1`–`CS4`, `CS6`, `CS8`, `DT1`, `RL1`–`RL3`, `FL1`, `FL2`). So do `B5-C1`, `B5-C2`
-and `B5-C4`, through their supporting arm `RP1`. A recurrence of that finding would re-open
-thirty-four rows, not seven.
+and `B5-C4`, through their supporting arm `RP1`, and `C7-C8`, through `CM9`. A recurrence of that
+finding would re-open thirty-five rows, not seven.
 
 `CAT31` holds the table's completeness both ways, the two vocabularies, `declared ⊇ computed`, the
 reverse rule for the three "nothing reached" words, both rosters against the prose above, the
@@ -2531,7 +2532,7 @@ stronger half.
 | C7-C5   | surface   | static                                                              |
 | C7-C6   | svelte    | svelte-render wire                                                  |
 | C7-C7   | svelte    | svelte-render wire                                                  |
-| C7-C8   | svelte    | svelte-render wire                                                  |
+| C7-C8   | svelte    | query-core svelte-context svelte-effects svelte-render wire         |
 | C8-C1   | surface   | query-core                                                          |
 | C8-C2   | surface   | static                                                              |
 | C8-C3   | surface   | static                                                              |

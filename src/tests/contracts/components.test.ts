@@ -70,6 +70,24 @@ const sign = async (kind: number, tags: string[][] = []): Promise<Nostr.Event> =
     created_at: Math.floor(Date.now() / 1000)
   })) as Nostr.Event;
 
+/** The fields an event's id and signature commit to. */
+const committedOf = ({ id, pubkey, created_at, kind, tags, content, sig }: Nostr.Event) => ({
+  id,
+  pubkey,
+  created_at,
+  kind,
+  tags,
+  content,
+  sig
+});
+
+/** The events a default outlet was handed, under either of its two shapes. */
+const eventsIn = (argument: Record<string, unknown>): Nostr.Event[] => {
+  if ('events' in argument) return argument['events'] as Nostr.Event[];
+  const event = argument['event'] as Nostr.Event | undefined;
+  return event === undefined ? [] : [event];
+};
+
 /** What one mounted component shows under a test id. */
 const shownIn =
   (container: HTMLElement) =>
@@ -726,7 +744,9 @@ describe('the request components', () => {
     // passes both. Here the relay holds a long-form article (kind 30023) and,
     // as the control, a text note, and answers each id with its event. Each
     // component that asks by id is mounted for each, and read once its request
-    // has settled: the outlet it renders and what that outlet was handed.
+    // has settled: the outlet it renders, and what that outlet was handed —
+    // each event's committed fields, not only its id, so an outlet handed the
+    // event's id over other content is read too.
     browserLike();
     const url = 'ws://localhost:9951';
     const relay = new WS(url, { jsonProtocol: true });
@@ -743,17 +763,27 @@ describe('the request components', () => {
       for (const event of [article, note]) {
         const label = `${row.name} for a kind-${String(event.kind)} event`;
         let handed: ReqHandle | undefined;
+        let argument: Record<string, unknown> = {};
         const view = render(Mounted, {
           relays: [url],
           which: row.component,
           given: row.props(event),
-          seen: (_outlet: string, request: ReqHandle) => (handed = request)
+          seen: (_outlet: string, request: ReqHandle) => (handed = request),
+          handed: (given: Record<string, unknown>) => (argument = given)
         });
         const read = shownIn(view.container);
         await waitFor(() => expect(handed?.state.status, label).toBe('settled'));
         await waitFor(() => expect(read('outlet'), label).not.toBe('loading'));
-        readings[label] = { outlet: read('outlet'), shown: read('shown') };
-        owed[label] = { outlet: 'default', shown: `${row.shape}:${event.id}` };
+        readings[label] = {
+          outlet: read('outlet'),
+          shown: read('shown'),
+          handed: eventsIn(argument).map(committedOf)
+        };
+        owed[label] = {
+          outlet: 'default',
+          shown: `${row.shape}:${event.id}`,
+          handed: [committedOf(event)]
+        };
         view.unmount();
       }
     expect(readings, 'what each component shows of the event it asked for').toEqual(owed);

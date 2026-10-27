@@ -9,7 +9,9 @@
  * suite, as the seeded-defect baseline in `docs/process/phase-2-trial.md`
  * records, and `C2-the-incumbent-kept-at-an-equal-created-at`, which an outside
  * reviewer wrote, passed `identity.test.ts`, `bounded.test.ts` and
- * `forward.test.ts`.
+ * `forward.test.ts`. The last three entries are edits an outside reviewer
+ * wrote against `RP1`'s first form, which read only the backlog, only which
+ * ids were held, and no tie of three; each passed it.
  *
  * An id begins with the row it is read against, `C<n>-` for `B5-C<n>`.
  */
@@ -130,7 +132,7 @@ export default {
       id: 'C4-the-bound-keeps-the-last-to-arrive',
       arm: 'RP1',
       describe:
-        'a bounded request keeps the events that arrived last rather than the newest, so the newer revision can be let go before the older arrives, and the older is then held',
+        'a bounded request keeps the entries last in the set’s insertion order rather than the newest, a replacement keeping the place of the revision it replaced, so the newer revision can be let go before the older arrives, and the older is then held',
       edits: [
         {
           file: HOOK,
@@ -141,6 +143,65 @@ export default {
             '    return { ...folded, entries: new Map([...folded.entries].slice(-options.retain)) };\n' +
             '  }\n' +
             '  return retainNewest(folded, options);\n}'
+        }
+      ]
+    },
+    {
+      id: 'C4-the-bound-breaks-a-tie-toward-the-higher-id',
+      arm: 'RP1',
+      describe:
+        'the hook bounds the set itself, and of two events at one `created_at` keeps the higher id where the fold keeps the lower, so the winner can be let go for a regular event of that instant and the superseded revision then kept over it',
+      edits: [
+        {
+          file: HOOK,
+          from: EVENT_FOLD,
+          to:
+            '  const folded = foldEvent(base, chunk.packet);\n' +
+            "  if (typeof options.retain === 'number') {\n" +
+            '    const ranked = [...folded.entries].sort(([, a], [, b]) =>\n' +
+            '      b.event.created_at - a.event.created_at || b.event.id.localeCompare(a.event.id)\n' +
+            '    );\n' +
+            '    return { ...folded, entries: new Map(ranked.slice(0, options.retain)) };\n' +
+            '  }\n' +
+            '  return folded;\n}'
+        }
+      ]
+    },
+    {
+      id: 'C1-a-live-replacement-keeps-the-older-revision',
+      arm: 'RP1',
+      describe:
+        'once the backlog has settled, the hook keeps what it held whenever a fold replaces rather than adds, so a revision that arrives on the live leg is lost',
+      edits: [
+        {
+          file: HOOK,
+          from: EVENT_FOLD,
+          to:
+            '  const folded = foldEvent(base, chunk.packet);\n' +
+            '  if (base.backlog !== undefined && folded.entries.size === base.entries.size) return base;\n' +
+            '  return retainNewest(folded, options);\n}'
+        }
+      ]
+    },
+    {
+      id: 'C1-a-replacement-keeps-the-older-content',
+      arm: 'RP1',
+      describe:
+        'where a fold replaces one revision with another, the hook keeps the replaced revision’s `content` under the winner’s id, so the consumer holds the winner’s id over the superseded content',
+      edits: [
+        {
+          file: HOOK,
+          from: EVENT_FOLD,
+          to:
+            '  const folded = foldEvent(base, chunk.packet);\n' +
+            '  const entries = new Map(folded.entries);\n' +
+            '  for (const [key, packet] of entries) {\n' +
+            '    const previous = base.entries.get(key);\n' +
+            '    if (previous !== undefined && previous.event.id !== packet.event.id) {\n' +
+            '      entries.set(key, { ...packet, event: { ...packet.event, content: previous.event.content } });\n' +
+            '    }\n' +
+            '  }\n' +
+            '  return retainNewest({ ...folded, entries }, options);\n}'
         }
       ]
     }

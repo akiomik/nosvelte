@@ -7,7 +7,9 @@
  * The legacy `EventList` asked for the ids and then dropped every event that
  * was not a text note (#68). The second and third entries are that shape in
  * v1, and `CM1`–`CM8` pass under both, since they read the request's key and
- * its outlets over text notes.
+ * its outlets over text notes. The fourth is an edit an outside reviewer wrote
+ * against `CM9`'s first form, which read only the id the outlet showed; it
+ * passed it.
  *
  * An id begins with the row it is read against, `C8-` for `C7-C8`.
  */
@@ -110,6 +112,24 @@ export default {
           file: `${COMPONENTS}/Event.svelte`,
           from: SINGLE,
           to: SINGLE.replace(' />', ' textOnly />')
+        }
+      ]
+    },
+    {
+      id: 'C8-a-by-id-component-hands-its-outlet-other-content',
+      arm: 'CM9',
+      describe:
+        'the outlets hand on each event the request holds with its `content` emptied, so a component shows the id it was answered with over other content',
+      edits: [
+        {
+          file: OUTLETS,
+          from: "  const shown = $derived(request.state.status === 'loading' ? [] : request.state.events);",
+          to:
+            '  const shown = $derived(\n' +
+            "    request.state.status === 'loading'\n" +
+            '      ? []\n' +
+            "      : request.state.events.map((one) => ({ ...one, content: '' }))\n" +
+            '  );'
         }
       ]
     }
