@@ -717,4 +717,45 @@ describe('the request components', () => {
       }
     }
   });
+
+  // @contracts C7-C8
+  it('CM9: a component asking by id shows the event its relay answers with, whatever its kind', async () => {
+    // **What the answer is, not what was asked.** `CM1` reads the key and `CM2`
+    // the outlets, both over a text note, so a component that asked for the id
+    // and then showed only text notes, as the legacy `EventList` did (#68),
+    // passes both. Here the relay holds a long-form article (kind 30023) and,
+    // as the control, a text note, and answers each id with its event. Each
+    // component that asks by id is mounted for each, and read once its request
+    // has settled: the outlet it renders and what that outlet was handed.
+    browserLike();
+    const url = 'ws://localhost:9951';
+    const relay = new WS(url, { jsonProtocol: true });
+    const article = await sign(30023, [['d', 'an-article']]);
+    const note = await sign(1);
+    serve(relay, () => [article, note]);
+    const asking = ROWS.filter((row) =>
+      ['Event', 'EventList', 'UniqueEventList'].includes(row.name)
+    );
+    expect(asking.map((row) => row.name)).toEqual(['Event', 'EventList', 'UniqueEventList']);
+    const readings: Record<string, unknown> = {};
+    const owed: Record<string, unknown> = {};
+    for (const row of asking)
+      for (const event of [article, note]) {
+        const label = `${row.name} for a kind-${String(event.kind)} event`;
+        let handed: ReqHandle | undefined;
+        const view = render(Mounted, {
+          relays: [url],
+          which: row.component,
+          given: row.props(event),
+          seen: (_outlet: string, request: ReqHandle) => (handed = request)
+        });
+        const read = shownIn(view.container);
+        await waitFor(() => expect(handed?.state.status, label).toBe('settled'));
+        await waitFor(() => expect(read('outlet'), label).not.toBe('loading'));
+        readings[label] = { outlet: read('outlet'), shown: read('shown') };
+        owed[label] = { outlet: 'default', shown: `${row.shape}:${event.id}` };
+        view.unmount();
+      }
+    expect(readings, 'what each component shows of the event it asked for').toEqual(owed);
+  });
 });
