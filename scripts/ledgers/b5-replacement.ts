@@ -9,11 +9,22 @@
  * suite, as the seeded-defect baseline in `docs/process/phase-2-trial.md`
  * records, and `C2-the-incumbent-kept-at-an-equal-created-at`, which an outside
  * reviewer wrote, passed `identity.test.ts`, `bounded.test.ts` and
- * `forward.test.ts`. The last three entries are edits an outside reviewer
+ * `forward.test.ts`. `C4-the-bound-breaks-a-tie-toward-the-higher-id`,
+ * `C1-a-live-replacement-keeps-the-older-revision` and
+ * `C1-a-replacement-keeps-the-older-content` are edits an outside reviewer
  * wrote against `RP1`'s first form, which read only the backlog, only which
  * ids were held, and no tie of three; each passed it.
+ * `C1-a-live-replacement-lost-retaining-one` and
+ * `B6-C1-the-bound-prefers-a-text-note-at-a-tie` are edits an outside reviewer
+ * wrote against its second form, which read the live leg only retaining two or
+ * unbounded, and, retaining one at a tie of three, read the winner and the
+ * regular event under one name; each passed that.
+ * `B6-C1-the-bound-keeps-the-first-to-arrive-at-a-tie` is the edit `B6-C1`'s
+ * own text names.
  *
- * An id begins with the row it is read against, `C<n>-` for `B5-C<n>`.
+ * An id begins with the row it is read against: `C<n>-` for `B5-C<n>`, and
+ * `B6-C1-` for `B6-C1`'s ordering at a tie, which `RP1` reads and does not
+ * land, since `B6-C1` has no landing yet.
  */
 import type { Ledger } from '../ledger.ts';
 
@@ -28,7 +39,7 @@ const LAST_EVENTSET_IMPORT = "  retainNewest\n} from './eventset.js';";
 export default {
   name: 'b5-replacement',
   subject:
-    '`B5-C1`, `B5-C2` and `B5-C4` (which revision of a coordinate a consumer holds) through the hook: their supporting arm `RP1`',
+    "`B5-C1`, `B5-C2` and `B5-C4` (which revision of a coordinate a consumer holds) through the hook, and `B6-C1`'s ordering at a tie: their supporting arm `RP1`",
   files: ['src/tests/contracts/engine/replacement.test.ts'],
   calibration: {
     measured:
@@ -202,6 +213,68 @@ export default {
             '    }\n' +
             '  }\n' +
             '  return retainNewest({ ...folded, entries }, options);\n}'
+        }
+      ]
+    },
+    {
+      id: 'C1-a-live-replacement-lost-retaining-one',
+      arm: 'RP1',
+      describe:
+        'once the backlog has settled, a request retaining one keeps what it held whenever a fold replaces rather than adds, so a revision that arrives on the live leg is lost',
+      edits: [
+        {
+          file: HOOK,
+          from: EVENT_FOLD,
+          to:
+            '  const folded = foldEvent(base, chunk.packet);\n' +
+            '  if (\n' +
+            '    base.backlog !== undefined &&\n' +
+            '    options.retain === 1 &&\n' +
+            '    folded.entries.size === base.entries.size\n' +
+            '  )\n' +
+            '    return base;\n' +
+            '  return retainNewest(folded, options);\n}'
+        }
+      ]
+    },
+    {
+      id: 'B6-C1-the-bound-prefers-a-text-note-at-a-tie',
+      arm: 'RP1',
+      describe:
+        'the hook bounds the set itself, and of two events at one `created_at` keeps a text note over an event of another kind before it compares ids, so retaining one at a tie keeps the regular event where the winner’s id is the lower',
+      edits: [
+        {
+          file: HOOK,
+          from: EVENT_FOLD,
+          to:
+            '  const folded = foldEvent(base, chunk.packet);\n' +
+            "  if (typeof options.retain === 'number') {\n" +
+            '    const ranked = [...folded.entries].sort(\n' +
+            '      ([, a], [, b]) =>\n' +
+            '        b.event.created_at - a.event.created_at ||\n' +
+            '        (a.event.kind === 1 ? -1 : 0) - (b.event.kind === 1 ? -1 : 0) ||\n' +
+            '        (a.event.id < b.event.id ? -1 : 1)\n' +
+            '    );\n' +
+            '    return { ...folded, entries: new Map(ranked.slice(0, options.retain)) };\n' +
+            '  }\n' +
+            '  return folded;\n}'
+        }
+      ]
+    },
+    {
+      id: 'B6-C1-the-bound-keeps-the-first-to-arrive-at-a-tie',
+      arm: 'RP1',
+      describe:
+        'the bound’s comparator answers `0` for two events at one `created_at`, so the stable sort keeps whichever arrived first, and retaining one at a tie keeps it rather than the lower id',
+      edits: [
+        {
+          file: EVENTSET,
+          from:
+            '  if (a.event.id !== b.event.id) return a.event.id < b.event.id ? -1 : 1;\n' +
+            '  if (a.event.kind !== b.event.kind) return a.event.kind - b.event.kind;\n' +
+            '  if (a.event.pubkey !== b.event.pubkey) return a.event.pubkey < b.event.pubkey ? -1 : 1;\n' +
+            '  return 0;',
+          to: '  return 0;'
         }
       ]
     }

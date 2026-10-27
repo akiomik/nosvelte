@@ -89,20 +89,17 @@ const permutations = <T>(items: readonly T[]): T[][] =>
         permutations([...items.slice(0, at), ...items.slice(at + 1)]).map((rest) => [item, ...rest])
       );
 
-/**
- * An event with the name a case's title calls it by, and the name a reading
- * gives it where the row does not say which of two the consumer holds.
- */
+/** An event with the name a case's title calls it by. */
 interface Named {
   name: string;
-  readAs?: string;
   event: Nostr.Event;
 }
 
 /**
  * One request: what the relay sends on the backlog and, for a live request,
- * on the forward leg once the backlog has settled, each in order; and which of
- * those the consumer must hold, after the backlog and at the end.
+ * on the forward leg once the backlog has settled, each in order, before it
+ * ends that leg; and which of those the consumer must hold, after the backlog
+ * and at the end.
  */
 interface Case {
   name: string;
@@ -192,9 +189,11 @@ const BETWEEN: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) => {
  * does could let the winner go for the regular event and then keep the
  * superseded revision over that. Which order shows it depends on where the
  * regular event's id falls, so it falls below both revisions' ids, between them
- * and above both. Bounded to one, the superseded revision is not held and one
- * of the other two is — `B5-C4` does not say which, so the reading does not
- * tell them apart; without a bound, both are held.
+ * and above both. Bounded to one, the superseded revision is not held, and of
+ * the other two the one with the lower id is: `B5-C4` says only the first, and
+ * the second is `B6-C1`'s ordering, the one the views use — newest first, and
+ * at one `created_at` the lower id first — which this arm reads but does not
+ * land. Without a bound, both are held.
  */
 const TIED: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) => {
   const winner = signedAs(kind, `${name}: tied winner`, 1000, tags, '45');
@@ -215,13 +214,8 @@ const TIED: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) => {
       RETAINS.map((retain) => ({
         name: `${name} and a regular event at one instant, its id ${where}, ${sentAs(backlog)}, retaining ${String(retain)}`,
         retain,
-        backlog:
-          retain === 1
-            ? backlog.map((each) =>
-                each.name === 'superseded' ? each : { ...each, readAs: 'winner or regular' }
-              )
-            : backlog,
-        held: retain === 1 ? ['winner or regular'] : ['regular', 'winner']
+        backlog,
+        held: retain === 1 ? [regular.id < winner.id ? 'regular' : 'winner'] : ['regular', 'winner']
       }))
     );
   });
@@ -230,27 +224,31 @@ const TIED: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) => {
 /**
  * **One revision on the backlog and the other on the live leg, in both orders**
  * (`B5-C1`, `B5-C2`): the second revision reaches an answer that has settled.
- * A note dated after both is sent after it on the forward leg, and holding the
- * note is what says the revision before it was folded, so the request retains
- * two or is unbounded: bounded to one, the note would leave nothing else to
- * read.
+ * The relay then refuses the live subscription with `CLOSED`, after the
+ * revision on the same subscription. With the backlog over, that ends the
+ * request, and its end is queued only once every event its forward leg took in
+ * before it has been decided (`finish` in `src/lib/v1/machine.ts`), so an
+ * answer read once the request is idle has folded the revision. Neither the
+ * leg's end on the diagnostics nor an event sent after the revision would do:
+ * the first is published while the revision may still be being verified, and,
+ * bounded to one, a newer event would leave nothing else to read and an older
+ * one would never be held.
  */
 const LIVE: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) =>
   DATES.flatMap((dates) => {
     const { winner, loser } = revisionsOf(name, kind, tags, dates);
-    const note = { name: 'later note', event: signedAs(1, `${name}: a later note`, 3000) };
     return (
       [
         [winner, loser],
         [loser, winner]
       ] as const
     ).flatMap(([first, second]) =>
-      ([2, 'unbounded'] as const).map((retain) => ({
+      RETAINS.map((retain) => ({
         name: `${name}, ${dates} created_at, ${first.name} on the backlog → ${second.name} live, retaining ${String(retain)}`,
         retain,
         backlog: [first],
-        live: { forward: [second, note], afterTheBacklog: [first.name] },
-        held: ['later note', 'winner']
+        live: { forward: [second], afterTheBacklog: [first.name] },
+        held: ['winner']
       }))
     );
   })
@@ -299,8 +297,7 @@ const nameIn =
       (one) => one.event.id === event.id
     );
     if (sent === undefined) return event.id;
-    const name = sent.readAs ?? sent.name;
-    return committed(event) === committed(sent.event) ? name : `${name}, altered`;
+    return committed(event) === committed(sent.event) ? sent.name : `${sent.name}, altered`;
   };
 
 /** The request, with a deadline of the clock's own. */
@@ -322,8 +319,9 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
       // Each case is its own request on its own relay, all at once. The relay
       // sends the case's backlog in order, then `EOSE`, and the consumer's
       // answer is read once it is settled; for a live case, the forward leg's
-      // events are sent then, and the answer is read again once it holds the
-      // last of them. A reading is which of the case's events the answer holds,
+      // events are sent then, and `CLOSED` after them, and the answer is read
+      // again once the request has ended. A reading is which of the case's
+      // events the answer holds,
       // by the names the case gives them, sorted, since the order a list is
       // shown in is `B6`'s and not this arm's.
       const cases = [...PAIRS, ...BETWEEN, ...TIED, ...LIVE, ...DISTINCT];
@@ -336,11 +334,12 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
             planOf(each.retain, each.live !== undefined, `rp1-${String(at)}`),
             REAL,
             async (consumer) => {
-              const holding = (): readonly ReqEvent[] => {
+              const held = (): string[] => {
                 const state = consumer.handle()?.state;
-                return state === undefined || state.status === 'loading' ? [] : state.events;
+                return state === undefined || state.status === 'loading'
+                  ? []
+                  : state.events.map(nameIn(each)).sort();
               };
-              const held = (): string[] => holding().map(nameIn(each)).sort();
               const asked = await REAL.promptly(
                 () =>
                   relay.asked('backward').length === 1 &&
@@ -356,12 +355,13 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
               const forward = relay.asked('forward').at(-1);
               for (const { event } of each.live.forward)
                 relay.server.send(['EVENT', forward, event]);
-              const last = each.live.forward.at(-1)?.event.id;
-              await REAL.promptly(() => holding().some((event) => event.id === last));
+              relay.refuseLive('blocked: the live subscription ends here');
+              const ended = await REAL.promptly(() => consumer.handle()?.activity === 'idle');
               return {
                 asked,
                 status: consumer.handle()?.state.status,
                 afterTheBacklog,
+                ended,
                 held: held()
               };
             }
@@ -380,7 +380,7 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
               status: 'settled',
               ...(each.live === undefined
                 ? {}
-                : { afterTheBacklog: [...each.live.afterTheBacklog].sort() }),
+                : { afterTheBacklog: [...each.live.afterTheBacklog].sort(), ended: true }),
               held: [...each.held].sort()
             }
           ])
