@@ -234,10 +234,11 @@ const TIED: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) => {
  *   surviving. The reading waits for the owed answer, and a request that never
  *   reaches it is read when the wait runs out.
  * - **Once the request has ended.** The relay refuses the live subscription
- *   with `CLOSED`, which, with the backlog over, ends the request, and its end
- *   is queued only once every event its forward leg took in has been decided,
- *   folded or discarded (`finish` in `src/lib/v1/machine.ts`). This reading is
- *   the answer the request ends with.
+ *   with `CLOSED`, which, with the backlog over, ends the request. Its end is
+ *   queued only once the admission gate has decided every event the forward
+ *   leg took in, queued or discarded (`finish` in `src/lib/v1/machine.ts`), and
+ *   the request folds what is queued in order, so this reading is the answer
+ *   the request ends with.
  *
  * `CLOSED` sent at once after the revision would not do for the first: the
  * leg's end does not wait for the revision's verification, so the revision

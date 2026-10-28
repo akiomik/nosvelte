@@ -24,8 +24,8 @@
  * an outside reviewer wrote against its third form, which ended the live leg at
  * once after the revision, so that the revision was folded on a leg already
  * ended; it passed that. `C1-a-live-revision-replaces-what-it-meets` is its
- * mirror: of `RP1`'s readings, only the one taken while the leg is open, after
- * a delivery turn, fails under it (measured, with the turn removed).
+ * mirror. It fails `RP1` at both of its live readings, and passes a copy of the
+ * arm without the delivery turn before `CLOSED` (measured).
  *
  * An id begins with the row it is read against: `C<n>-` for `B5-C<n>`, and
  * `B6-C1-` for `B6-C1`'s ordering at a tie, which `RP1` reads and does not
