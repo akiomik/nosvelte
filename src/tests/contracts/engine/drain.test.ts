@@ -44,6 +44,7 @@ import {
   respondWithEose,
   respondWithEvent
 } from './helpers/relay.js';
+import { advanceUntil, fakeTheClock } from './helpers/request.js';
 
 // `DC7`'s provider reads the framework's own context, not the setup's stand-in.
 vi.unmock('svelte');
@@ -257,23 +258,26 @@ function held() {
     );
   };
   const admitted = (content: string): boolean => answers.has(content);
+  /** Answer an event already handed over, now: no clock is waited on, real or fake. */
+  const answer = (content: string, how: 'true' | 'false' | 'reject' = 'true') => {
+    const held = answers.get(content);
+    if (held === undefined) throw new Error(`${content} was not handed over`);
+    answered.add(content);
+    if (how === 'reject') held.reject(new Error(`rejected: ${content}`));
+    else held.resolve(how === 'true');
+  };
   const release = async (content: string, how: 'true' | 'false' | 'reject' = 'true') => {
     await vi.waitFor(() => expect(answers.has(content), `${content} was handed over`).toBe(true), {
       timeout: 2000
     });
-    const answer = answers.get(content) as {
-      resolve: (ok: boolean) => void;
-      reject: (e: unknown) => void;
-    };
-    answered.add(content);
-    if (how === 'reject') answer.reject(new Error(`rejected: ${content}`));
-    else answer.resolve(how === 'true');
+    answer(content, how);
     await delay(40);
   };
   return {
     verify,
     admitted,
     handed: (): string[] => [...handed],
+    answer,
     release,
     answered: (content: string) => answered.has(content)
   };
@@ -1202,21 +1206,23 @@ describe('the wait over what the gate holds, and its end', () => {
     // enters the gate and where it leaves, so that is the clock moved: forward
     // by a minute across the first verification, and back. Time here is
     // measured on the clock as it was before the move. The next wait is four
-    // times the floor at most and the floor at least — more than two seconds,
-    // and less than 4.9 — which an unclamped sample and one pinned to the floor
-    // each miss. The upper edge is under five floors because a wait of five is
-    // armed after the release and cannot end before five seconds have passed,
-    // while the right one has 900ms to run late in. The row's own window ends
-    // at six; read at that, a sample believed at five times the floor passes,
-    // and its Then bounds the wait by four.
+    // times the floor at most and more than two floors — so a wait pinned to
+    // the floor is cut by two seconds, and an unclamped one, or one of five
+    // floors, is not cut by four.
     //
-    // **Twice: as the row has it, and live with a third candidate answered
-    // after the cut**, because one never answered cannot show what the cut did
-    // to it: a candidate is marked discarded where the cut falls and read
-    // where its verification returns. The live request is still running when
-    // that candidate passes, over a stated half-second horizon.
+    // **Read on two clocks.** On a fake clock, installed before the request is
+    // made, the wait is read exactly at those two instants after the release,
+    // which no load moves. On the real clock it is read as the row has it,
+    // more than two seconds and less than six, which leaves a loaded machine
+    // two seconds to run late in and separates only the bounds far from it.
+    //
+    // **Twice on each: as the row has it, and live with a third candidate
+    // answered after the cut**, because one never answered cannot show what
+    // the cut did to it: a candidate is marked discarded where the cut falls
+    // and read where its verification returns. The live request is still
+    // running when that candidate passes, over a stated half-second horizon.
     const realNow = Date.now;
-    const run = async (reqIdBase: string, live: boolean): Promise<unknown> => {
+    const onTheRealClock = async (reqIdBase: string, live: boolean): Promise<unknown> => {
       const gate = held();
       const one = request(gate.verify, { live, reqIdBase, timeoutMs: 60_000 });
       let skewMs = 0;
@@ -1253,7 +1259,7 @@ describe('the wait over what the gate holds, and its end', () => {
         }
         return {
           cutAfterMoreThan2s: cutAfterMs !== undefined && cutAfterMs > 2000,
-          cutAfterLessThan4900ms: cutAfterMs !== undefined && cutAfterMs < 4900,
+          cutAfterLessThan6s: cutAfterMs !== undefined && cutAfterMs < 6000,
           atTheCut,
           ends: endsOf(one.chunks),
           runningAtRelease,
@@ -1266,28 +1272,104 @@ describe('the wait over what the gate holds, and its end', () => {
         await one.stop();
       }
     };
-    const asTheRowHasIt = await run('dc9', false);
-    const answeredAfterTheCut = await run('dc9-live', true);
+    const onTheFakeClock = async (reqIdBase: string, live: boolean): Promise<unknown> => {
+      fakeTheClock();
+      const fakeNow = Date.now;
+      const gate = held();
+      const one = request(gate.verify, { live, reqIdBase, timeoutMs: 60_000 });
+      let skewMs = 0;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow() + skewMs);
+      const to = (time: number) => vi.advanceTimersByTimeAsync(Math.max(0, time - fakeNow()));
+      try {
+        const backward = await one.subId('b');
+        if (live) await one.subId('f');
+        const candidates = live ? ['jumper', 'stuck', 'late'] : ['jumper', 'stuck'];
+        for (const content of candidates)
+          respondWithEvent(one.server, backward, fakeEvent({ content }));
+        expect(await advanceUntil(() => candidates.every(gate.admitted), 2000)).toBe(true);
+        respondWithEose(one.server, backward);
+        await vi.advanceTimersByTimeAsync(50);
+        // Answered with the clock a minute on, and no time passing on the clock
+        // the timers run by until the verification has returned.
+        skewMs = 60_000;
+        const releasedAt = fakeNow();
+        gate.answer('jumper');
+        await vi.advanceTimersByTimeAsync(0);
+        skewMs = 0;
+        await to(releasedAt + 2000);
+        const atTwoFloors = shape(one.chunks);
+        await to(releasedAt + 4000);
+        const atFourFloors = shape(one.chunks);
+        let afterTheRelease: string[] | undefined;
+        let runningAtRelease: boolean | undefined;
+        if (live) {
+          gate.answer('late');
+          await vi.advanceTimersByTimeAsync(0);
+          runningAtRelease = !one.returned();
+          await vi.advanceTimersByTimeAsync(500);
+          afterTheRelease = shape(one.chunks);
+        }
+        return {
+          atTwoFloors,
+          atFourFloors,
+          ends: endsOf(one.chunks),
+          runningAtRelease,
+          afterTheRelease
+        };
+      } catch (error) {
+        return { failed: error instanceof Error ? error.message : String(error) };
+      } finally {
+        clock.mockRestore();
+        await vi.advanceTimersByTimeAsync(1000);
+        vi.useRealTimers();
+        await one.stop();
+      }
+    };
+    const runs = {
+      fake: {
+        asTheRowHasIt: await onTheFakeClock('dc9-fake', false),
+        answeredAfterTheCut: await onTheFakeClock('dc9-fake-live', true)
+      },
+      real: {
+        asTheRowHasIt: await onTheRealClock('dc9', false),
+        answeredAfterTheCut: await onTheRealClock('dc9-live', true)
+      }
+    };
     const cut = [{ kind: 'incomplete', causes: ['verification-timeout'], error: undefined }];
+    const exactly = {
+      atTwoFloors: ['event:jumper'],
+      atFourFloors: ['event:jumper', 'settled'],
+      ends: cut
+    };
+    const asTheRowHasIt = {
+      cutAfterMoreThan2s: true,
+      cutAfterLessThan6s: true,
+      atTheCut: ['event:jumper', 'settled'],
+      ends: cut
+    };
     expect(
-      { asTheRowHasIt, answeredAfterTheCut },
+      runs,
       'cut between two and four floors after the jump, the released one ahead of the outcome, nothing behind it'
     ).toEqual({
-      asTheRowHasIt: {
-        cutAfterMoreThan2s: true,
-        cutAfterLessThan4900ms: true,
-        atTheCut: ['event:jumper', 'settled'],
-        ends: cut,
-        runningAtRelease: undefined,
-        afterTheRelease: undefined
+      fake: {
+        asTheRowHasIt: { ...exactly, runningAtRelease: undefined, afterTheRelease: undefined },
+        answeredAfterTheCut: {
+          ...exactly,
+          runningAtRelease: true,
+          afterTheRelease: ['event:jumper', 'settled']
+        }
       },
-      answeredAfterTheCut: {
-        cutAfterMoreThan2s: true,
-        cutAfterLessThan4900ms: true,
-        atTheCut: ['event:jumper', 'settled'],
-        ends: cut,
-        runningAtRelease: true,
-        afterTheRelease: ['event:jumper', 'settled']
+      real: {
+        asTheRowHasIt: {
+          ...asTheRowHasIt,
+          runningAtRelease: undefined,
+          afterTheRelease: undefined
+        },
+        answeredAfterTheCut: {
+          ...asTheRowHasIt,
+          runningAtRelease: true,
+          afterTheRelease: ['event:jumper', 'settled']
+        }
       }
     });
   }, 30_000);

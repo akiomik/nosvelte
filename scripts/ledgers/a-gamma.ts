@@ -10,14 +10,21 @@
  * - `A-γ-C4` on `TC1`;
  * - `A-γ-C5` on `WI29`;
  * - `A-γ-C6` on `TC2`;
+ * - `A-γ-C7` on `ST2`;
  * - `A-ζ-C1` on `DC9`.
+ *
+ * `ST1`, `ST2` and `DC9` each read their deadline twice, on a fake clock and
+ * on the real one. The entries that move a deadline by less than the real
+ * clock's margin — the timer a fifth early or late, the drain's multiplier at
+ * four and a half — are killed by the fake clock's reading alone, and that is
+ * the reading they are here for.
  *
  * An id beginning `C<n>-` edits the library for `A-γ-C<n>`, and one beginning
  * `Z1-` edits it for `A-ζ-C1`. One beginning `D<n>-` edits the dependency for
  * `A-γ-C<n>`, inside the ledger's own copy of `node_modules`, which the runner
  * clones per copy and restores after each entry as it restores the library.
  */
-import type { Ledger } from '../ledger.ts';
+import type { Edit, Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
 const ENGINE = 'src/lib/v1/engine.ts';
@@ -33,6 +40,55 @@ const SETTLE_TIMER = '    timer = setTimeout(() => settle(true), timeoutMs);';
 /** The multiplier on what a verification is believed to cost. */
 const DRAIN_SAFETY = 'const VERIFY_DRAIN_SAFETY = 4;';
 
+/** The settle timer's outcome says the answer is complete. */
+const REPORTS_COMPLETE: readonly Edit[] = [
+  {
+    file: MACHINE,
+    from: '    const present = new Set<IncompleteCause>();\n',
+    to: '    const present = new Set<IncompleteCause>();\n    if (viaTimer) return backlogEndOf(present, undefined);\n'
+  }
+];
+/** An incomplete answer under `ended` rather than `timeout`. */
+const WRONG_CAUSE: readonly Edit[] = [
+  {
+    file: MACHINE,
+    from: "    if (viaTimer) present.add('timeout');\n",
+    to: "    if (viaTimer) present.add('ended');\n"
+  },
+  {
+    file: MACHINE,
+    from: "      else if (!DETERMINED.has(phase)) present.add('timeout');",
+    to: "      else if (!DETERMINED.has(phase)) present.add('ended');"
+  }
+];
+/** A live request arms no settle timer. */
+const LIVE_TIMER_NEVER_ARMED: readonly Edit[] = [
+  {
+    file: MACHINE,
+    from: '  if (timeoutMs !== undefined) {\n    timer = setTimeout(() => settle(true), timeoutMs);',
+    to: '  if (timeoutMs !== undefined && !live) {\n    timer = setTimeout(() => settle(true), timeoutMs);'
+  }
+];
+/** The settle timer fires at `factor` times what the caller asked for. */
+const TIMER_TIMES = (factor: number): readonly Edit[] => [
+  {
+    file: MACHINE,
+    from: SETTLE_TIMER,
+    to: `    timer = setTimeout(() => settle(true), timeoutMs * ${factor});`
+  }
+];
+/**
+ * The provider's requests are run on a second client of its own, built from
+ * the harness alone, and not on the one it handed the library's timer to.
+ */
+const SECOND_CLIENT: readonly Edit[] = [
+  {
+    file: CONTEXT,
+    from: "runtime.environment === 'browser' ? ownTransport(runtime.transport) : undefined;",
+    to: "runtime.environment === 'browser' ? ownTransport(createRxNostr({ ...(options.harness ?? {}), skipVerify: true, skipExpirationCheck: true, skipValidateFilterMatching: true })) : undefined;"
+  }
+];
+
 /** The engine's import of the normalizer's constants. */
 const ENGINE_IMPORT =
   "import { cloneFilter, DEFAULT_SETTLE_TIMEOUT_MS, InvalidDescriptorError } from './normalize.js';";
@@ -45,7 +101,7 @@ const LIBRARY_TIMER = 'export const LIBRARY_EOSE_TIMEOUT_MS = 600_000;';
 export default {
   name: 'a-gamma',
   subject:
-    "`A-γ-C1`–`A-γ-C6` and `A-ζ-C1` (the request's own settle timeout, the upstream timer the provider sets, and the bound on a draining gate's wait): their landings, `ST1`, `NM5`, `NM11`, `TC1`, `WI29`, `TC2` and `DC9`",
+    "`A-γ-C1`–`A-γ-C7` and `A-ζ-C1` (the request's own settle timeout, a live request's included, the upstream timer the provider sets, and the bound on a draining gate's wait): their landings, `ST1`, `NM5`, `NM11`, `TC1`, `WI29`, `TC2`, `ST2` and `DC9`",
   files: [
     'src/tests/contracts/engine/settle.test.ts',
     'src/tests/contracts/engine/normalize.test.ts',
@@ -55,39 +111,22 @@ export default {
   ],
   calibration: {
     measured:
-      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 6, TC2: 4, DC9: 13 }
+      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, and `ST2`'s, with `ST1`, `TC1`, `TC2` and `DC9` read again, at the commit that added `ST2`; plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
+    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 6, TC2: 4, ST2: 4, DC9: 13 }
   },
   entries: [
     {
       id: 'C1-the-timer-reports-complete',
       arm: 'ST1',
       describe: "the settle timer's outcome says the answer is complete",
-      edits: [
-        {
-          file: MACHINE,
-          from: '    const present = new Set<IncompleteCause>();\n',
-          to: '    const present = new Set<IncompleteCause>();\n    if (viaTimer) return backlogEndOf(present, undefined);\n'
-        }
-      ]
+      edits: REPORTS_COMPLETE
     },
     {
       id: 'C1-the-wrong-cause',
       arm: 'ST1',
       describe:
         'the answer is incomplete, but under `ended` rather than `timeout` — from the timer and from the relay left undetermined alike',
-      edits: [
-        {
-          file: MACHINE,
-          from: "    if (viaTimer) present.add('timeout');\n",
-          to: "    if (viaTimer) present.add('ended');\n"
-        },
-        {
-          file: MACHINE,
-          from: "      else if (!DETERMINED.has(phase)) present.add('timeout');",
-          to: "      else if (!DETERMINED.has(phase)) present.add('ended');"
-        }
-      ]
+      edits: WRONG_CAUSE
     },
     {
       id: 'C1-the-events-dropped',
@@ -350,13 +389,7 @@ export default {
       id: 'C1-the-live-timer-never-armed',
       arm: 'ST1',
       describe: 'a live request arms no settle timer, so a silent relay holds its backlog open',
-      edits: [
-        {
-          file: MACHINE,
-          from: '  if (timeoutMs !== undefined) {\n    timer = setTimeout(() => settle(true), timeoutMs);',
-          to: '  if (timeoutMs !== undefined && !live) {\n    timer = setTimeout(() => settle(true), timeoutMs);'
-        }
-      ]
+      edits: LIVE_TIMER_NEVER_ARMED
     },
     {
       id: 'C1-the-timer-fires-early',
@@ -630,6 +663,99 @@ export default {
           to: "      if (deliver && !admission.discarded && gate.phase !== 'draining')\n        push({ type: 'event', packet });"
         }
       ]
+    },
+    {
+      id: 'C1-the-timer-fires-a-fifth-early',
+      arm: 'ST1',
+      describe:
+        "the request's timer fires at four fifths of what the caller asked for — inside the real clock's margin, outside the fake clock's instant",
+      edits: TIMER_TIMES(0.8)
+    },
+    {
+      id: 'C1-the-timer-fires-a-fifth-late',
+      arm: 'ST1',
+      describe:
+        "the request's timer fires at six fifths of what the caller asked for — inside the real clock's margin, outside the fake clock's instant",
+      edits: TIMER_TIMES(1.2)
+    },
+    {
+      id: 'C4-requests-leased-a-second-client',
+      arm: 'TC1',
+      describe:
+        "the provider's requests run on a second client built from the harness alone, so the client handed the library's timer is never the one a request subscribes through",
+      edits: SECOND_CLIENT
+    },
+    {
+      id: 'C6-requests-leased-a-second-client',
+      arm: 'TC2',
+      describe:
+        "the provider's requests run on a second client built from the harness alone, which runs on the dependency's own timer",
+      edits: SECOND_CLIENT
+    },
+    {
+      id: 'C7-the-live-timer-never-armed',
+      arm: 'ST2',
+      describe:
+        'a live request arms no settle timer, so a relay that sends nothing holds it `loading`',
+      edits: LIVE_TIMER_NEVER_ARMED
+    },
+    {
+      id: 'C7-the-timer-reports-complete',
+      arm: 'ST2',
+      describe: "a live request's settle timer says its empty answer is complete",
+      edits: REPORTS_COMPLETE
+    },
+    {
+      id: 'C7-the-wrong-cause',
+      arm: 'ST2',
+      describe:
+        "a live request's timed-out answer is incomplete under `ended` rather than `timeout`",
+      edits: WRONG_CAUSE
+    },
+    {
+      id: 'C7-the-timer-ends-the-live-leg',
+      arm: 'ST2',
+      describe:
+        "a live request's settle timer ends the request, closing the forward leg with the backward",
+      edits: [
+        {
+          file: MACHINE,
+          from: '        if (!live || forwardEnded) finish();',
+          to: '        if (!live || forwardEnded || viaTimer) finish();'
+        }
+      ]
+    },
+    {
+      id: 'C7-the-backward-leg-left-open',
+      arm: 'ST2',
+      describe:
+        "a live request's settle timer reports the backlog's end and leaves its backward subscription open beside the forward",
+      edits: [
+        {
+          file: MACHINE,
+          from: '        closeBackward();\n        // Released before',
+          to: '        // Released before'
+        }
+      ]
+    },
+    {
+      id: 'C7-the-timer-fires-a-fifth-early',
+      arm: 'ST2',
+      describe: "a live request's timer fires at four fifths of what the caller asked for",
+      edits: TIMER_TIMES(0.8)
+    },
+    {
+      id: 'C7-the-timer-fires-a-fifth-late',
+      arm: 'ST2',
+      describe: "a live request's timer fires at six fifths of what the caller asked for",
+      edits: TIMER_TIMES(1.2)
+    },
+    {
+      id: 'Z1-safety-four-and-a-half',
+      arm: 'DC9',
+      describe:
+        "the wait is four and a half times what a verification is believed to cost — inside the real clock's margin past four floors, outside the fake clock's instant",
+      edits: [{ file: MACHINE, from: DRAIN_SAFETY, to: 'const VERIFY_DRAIN_SAFETY = 4.5;' }]
     }
   ]
 } satisfies Ledger;

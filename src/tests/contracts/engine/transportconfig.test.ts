@@ -8,28 +8,48 @@
  * **The value is read where it crosses into the dependency.** `rx-nostr`'s
  * factory is wrapped for this file alone: it delegates to the real one and
  * records the configuration it was handed together with the client it built,
- * so an arm reads the call the provider actually made — selected by the
- * provider's own client, because the relay-scope probe calls the factory too.
+ * and counts each subscription made through that client. So an arm reads the
+ * call whose client a request the provider runs is subscribed through — not
+ * the client the provider's context names, which a provider could keep while
+ * running its requests on another, and not the relay-scope probe's, which
+ * calls the factory too and runs no request (#177).
+ *
+ * Port band 10400-10419.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { render } from '@testing-library/svelte';
+import { WebSocket as MockWebSocket } from 'mock-socket';
 import type { FilledRxNostrConfig, RxNostr, RxNostrConfig } from 'rx-nostr';
 import { createRxNostr } from 'rx-nostr';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import WS from 'vitest-websocket-mock';
 
-import type { HarnessOverrides, NostrContext } from '$lib/v1/context.svelte.js';
-import { createNostrContext } from '$lib/v1/context.svelte.js';
+import type { HarnessOverrides } from '$lib/v1/context.svelte.js';
 import { LIBRARY_EOSE_TIMEOUT_MS, MAX_SETTLE_TIMEOUT_MS } from '$lib/v1/normalize.js';
 
+import HarnessedRequest from './fixtures/HarnessedRequest.svelte';
 import { propsTypeOf } from './helpers/components.js';
 import { consumerDiagnostics } from './helpers/declarations.js';
-import { HARNESS_DIVERGENCES, transportOf } from './helpers/relay.js';
-import { mount } from './helpers/runes.svelte.js';
+import { HARNESS_DIVERGENCES } from './helpers/relay.js';
+import { urlsFrom } from './helpers/request.js';
+
+// The provider reads the framework's own context, not the setup's stand-in.
+vi.unmock('svelte');
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  WS.clean();
+});
+
+const nextUrl = urlsFrom(10400);
 
 interface Built {
   readonly config: Partial<RxNostrConfig>;
   readonly client: RxNostr;
+  /** The subscriptions made through the client. */
+  used: number;
 }
 
 /** Every call the wrapped factory saw, in order. */
@@ -41,14 +61,41 @@ function handed(): Built[] {
 }
 
 /**
- * The configuration the provider's own client was built from. Exactly one:
- * none would mean the seam had stopped seeing the call, which is how a wrapped
- * factory fails, and it shows here rather than as an `undefined` below.
+ * The configuration of the client a request is run on, under a provider built
+ * with `harness`, or with none: one request is made under it, on a relay that
+ * is listening, and once the relay has been asked, exactly one client built
+ * through the factory has been subscribed through. None would mean the seam
+ * had stopped seeing the call, which is how a wrapped factory fails, and it
+ * shows here rather than as an `undefined` below.
  */
-function configOf(context: NostrContext): Partial<RxNostrConfig> {
-  const built = handed().filter((call) => call.client === transportOf(context));
-  expect(built, 'the provider built its client through the factory, once').toHaveLength(1);
-  return (built[0] as Built).config;
+async function configRunOn(harness: HarnessOverrides | undefined): Promise<Partial<RxNostrConfig>> {
+  vi.stubGlobal('WebSocket', MockWebSocket);
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
+  const url = nextUrl();
+  const relay = new WS(url, { jsonProtocol: true });
+  const view = render(HarnessedRequest, {
+    relays: [url],
+    harness,
+    plan: () => ({ kind: 'request', descriptor: { filters: [{ kinds: [1] }] } }),
+    ready: () => {},
+    seen: () => {}
+  });
+  try {
+    await vi.waitFor(
+      () =>
+        expect(
+          (relay.messages as unknown[][]).some((frame) => frame[0] === 'REQ'),
+          'the request was asked of its relay'
+        ).toBe(true),
+      { timeout: 3000 }
+    );
+    const subscribed = handed().filter((call) => call.used > 0);
+    expect(subscribed, 'one client built through the factory runs the request').toHaveLength(1);
+    return (subscribed[0] as Built).config;
+  } finally {
+    view.unmount();
+    vi.unstubAllGlobals();
+  }
 }
 
 vi.mock('rx-nostr', async (importOriginal) => {
@@ -57,7 +104,13 @@ vi.mock('rx-nostr', async (importOriginal) => {
     ...actual,
     createRxNostr: (config?: RxNostrConfig) => {
       const client = actual.createRxNostr(config);
-      handed().push({ config: config ?? {}, client });
+      const built: Built = { config: config ?? {}, client, used: 0 };
+      const use = client.use.bind(client);
+      client.use = ((...args: Parameters<RxNostr['use']>) => {
+        built.used += 1;
+        return use(...args);
+      }) as RxNostr['use'];
+      handed().push(built);
       return client;
     }
   };
@@ -100,9 +153,9 @@ describe('A-γ: the provider owns the upstream EOSE timer', () => {
   });
 
   // @contracts A-γ-C4
-  it('TC1: the transport is handed the library’s EOSE timer, above the settle cap, and no input moves it', () => {
-    // **Four readings.** The provider's own call is handed the library's
-    // timer, and it is above the largest settle timeout a request may ask for,
+  it('TC1: the transport is handed the library’s EOSE timer, above the settle cap, and no input moves it', async () => {
+    // **Four readings.** The call whose client a request runs on is handed the
+    // library's timer, and it is above the largest settle timeout a request may ask for,
     // so the request's timer always ends the backlog first — **with no harness
     // at all**, as the published `NostrApp` builds its provider, and with one.
     // A harness that names a timer anyway — past the type, as a JavaScript
@@ -115,34 +168,22 @@ describe('A-γ: the provider owns the upstream EOSE timer', () => {
     // the control, because a `@ts-expect-error` in this file is read by
     // `npm run check` and not by this arm.
     const observed: Record<string, unknown> = {};
+    observed['handedWithoutAHarness'] = (await configRunOn(undefined)).eoseTimeout;
+    handed().length = 0;
     {
-      const { value: context, destroy } = mount(() =>
-        createNostrContext({ relays: ['wss://a.example'] })
-      );
-      observed['handedWithoutAHarness'] = configOf(context).eoseTimeout;
-      destroy();
-    }
-    {
-      const { value: context, destroy } = mount(() =>
-        createNostrContext({ relays: ['wss://a.example'], harness: HARNESS_DIVERGENCES })
-      );
-      const config = configOf(context);
+      const config = await configRunOn(HARNESS_DIVERGENCES);
       observed['handed'] = config.eoseTimeout;
       observed['aboveTheCap'] = (config.eoseTimeout as number) > MAX_SETTLE_TIMEOUT_MS;
-      destroy();
     }
+    handed().length = 0;
     {
-      const { value: context, destroy } = mount(() =>
-        createNostrContext({
-          relays: ['wss://a.example'],
-          harness: { ...HARNESS_DIVERGENCES, eoseTimeout: 20 } as unknown as HarnessOverrides
-        })
-      );
-      const config = configOf(context);
+      const config = await configRunOn({
+        ...HARNESS_DIVERGENCES,
+        eoseTimeout: 20
+      } as unknown as HarnessOverrides);
       observed['smuggledPastTheType'] = config.eoseTimeout;
       // The rest of that harness did arrive, so what lost was the timer alone.
       observed['theRestOfThatHarness'] = config.retry;
-      destroy();
     }
     const harness = ['$lib/v1/context.svelte.js', 'HarnessOverrides'] as const;
     const props = ['$lib/v1/components/outlets.js', 'Partial<NostrAppProps>'] as const;
@@ -178,25 +219,22 @@ describe('A-γ: the provider owns the upstream EOSE timer', () => {
   });
 
   // @contracts A-γ-C6
-  it('TC2: the library’s timer is above the one the dependency would have used', () => {
+  it('TC2: the library’s timer is above the one the dependency would have used', async () => {
     // **The dependency's default is produced, not restated.** A second client
     // is built from a copy of the provider's own configuration with the timer
     // deleted, so the dependency fills in its own, and that is read off the
     // instance. What this catches that `TC1` cannot is the dependency raising
     // its default, which no edit to this library can stage; the ledger stages
     // it in its copy of the dependency instead.
-    // The provider as the published `NostrApp` builds it, with no harness.
-    const { value: context, destroy } = mount(() =>
-      createNostrContext({ relays: ['wss://a.example'] })
-    );
-    const config = configOf(context);
+    // The provider as the published `NostrApp` builds it, with no harness, and
+    // the client a request it runs is run on.
+    const config = await configRunOn(undefined);
     const withoutTheTimer: Partial<RxNostrConfig> = { ...config };
     delete withoutTheTimer.eoseTimeout;
     const counterfactual = createRxNostr(withoutTheTimer);
     const dependencyDefault = (counterfactual as unknown as { config: FilledRxNostrConfig }).config
       .eoseTimeout;
     counterfactual.dispose();
-    destroy();
     expect(
       {
         aNumber: typeof dependencyDefault === 'number' && dependencyDefault > 0,
