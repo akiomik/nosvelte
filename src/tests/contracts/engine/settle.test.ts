@@ -219,19 +219,23 @@ describe('a request that runs out of patience', () => {
     // within 1.5s and 7.5s of the asking: a timer of the library's own
     // choosing, of two seconds or of fifty milliseconds, misses one of those.
     //
-    // **The relay's one event arrives a sixth of the way into the wait**, not
-    // as the request is asked. The deadline is counted from the asking, and
-    // the events that arrive before it do not move it: a deadline re-armed by
-    // each event, or armed by the first, is A-ζ's no-progress shape rather than
-    // A-γ's, and under it a relay that keeps sending holds the request open for
-    // as long as it does. Either fires after the reading at the deadline.
+    // **The relay sends an event a sixth of the way into the wait**, and to a
+    // consumer's request one more as soon as it is asked. The deadline is
+    // counted from the asking, and the events that arrive before it do not
+    // move it: a deadline re-armed by each event, or armed by the first, is
+    // A-ζ's no-progress shape rather than A-γ's, and under it a relay that
+    // keeps sending holds the request open for as long as it does. Either
+    // fires after the reading at the deadline. And an event that arrives at
+    // once is kept as surely as a later one: with only the later event sent, a
+    // request that let the first moments of its wait go unread would pass.
     //
     // **Its timeout is the sum of its windows**, not its usual run. A library
     // that never answers `incomplete` waits out every `by` on the real clock —
     // about 3 s for each consumer's run and 12 s for each component's, 30.5 s
     // measured with the fake clock's runs beside them — and the arm has to
     // reach its assertion rather than Vitest's timeout to say which run it was.
-    const event = signed('the only event the relay sends');
+    const early = signed('an event the relay sends as it is asked');
+    const event = signed('an event the relay sends while the request waits');
     const runs: Record<string, unknown> = {};
 
     for (const clock of CLOCKS)
@@ -251,6 +255,7 @@ describe('a request that runs out of patience', () => {
         );
         try {
           const { backward, askedAt } = await asked(live ? 2 : 1);
+          relay.send(['EVENT', backward, early]);
           const side = sides(
             clock,
             { madeAt, askedAt, timeoutMs: TIMEOUT_MS },
@@ -268,7 +273,8 @@ describe('a request that runs out of patience', () => {
             byTheDeadline,
             status: state.status,
             causes: state.status === 'incomplete' ? [...state.causes] : undefined,
-            events: state.status === 'loading' ? undefined : state.events.map((each) => each.id),
+            events:
+              state.status === 'loading' ? undefined : state.events.map((each) => each.id).sort(),
             lastError: diagnostics.lastError?.name,
             anIncompleteResultError: diagnostics.lastError instanceof IncompleteResultError
           };
@@ -350,7 +356,7 @@ describe('a request that runs out of patience', () => {
       byTheDeadline: true,
       status: 'incomplete',
       causes: ['timeout'],
-      events: [event.id],
+      events: [early.id, event.id].sort(),
       lastError: 'IncompleteResultError',
       anIncompleteResultError: true
     };
@@ -388,9 +394,13 @@ describe('a request that runs out of patience', () => {
     // deadline, on each clock, as `ST1` reads its own.
     //
     // **And the live subscription still delivers**: an event the relay sends on
-    // it once the timeout has passed reaches the consumer. A subscription left
-    // open on the wire by a request that has stopped admitting what arrives on
-    // it would read as open and deliver nothing.
+    // it as the timeout passes, and another 50ms later, each reach the
+    // consumer. A subscription left open on the wire by a request that has
+    // stopped admitting what arrives on it would read as open and deliver
+    // nothing — and one that stopped for a moment as its timer fired would
+    // deliver the later event and lose the first. So the answer at the
+    // timeout is read at once, before the first event is sent.
+    const atOnce = signed('an event on the live subscription, as the timeout passes');
     const later = signed('an event on the live subscription, after the timeout');
     const runs: Record<string, unknown> = {};
     for (const clock of CLOCKS) {
@@ -411,7 +421,6 @@ describe('a request that runs out of patience', () => {
         await side.before();
         const beforeTheDeadline = handle()?.state.status;
         const byTheDeadline = await side.by(() => handle()?.state.status === 'incomplete');
-        await side.after();
         const { state } = handle() as ReqHandle;
         runs[clock] = {
           ...side.soonEnough,
@@ -419,22 +428,31 @@ describe('a request that runs out of patience', () => {
           byTheDeadline,
           status: state.status,
           causes: state.status === 'incomplete' ? [...state.causes] : undefined,
-          events: state.status === 'loading' ? undefined : state.events.map((each) => each.id),
-          open: open()
+          events: state.status === 'loading' ? undefined : state.events.map((each) => each.id)
         };
-        relay.send(['EVENT', forward, later]);
-        const shows = () => {
+        const shows = (event: Nostr.Event) => () => {
           const now = handle()?.state;
-          return now !== undefined && now.status !== 'loading' && now.events.length > 0;
+          return (
+            now !== undefined &&
+            now.status !== 'loading' &&
+            now.events.some((each) => each.id === event.id)
+          );
         };
-        const deliveredLater = await within(clock, shows);
+        relay.send(['EVENT', forward, atOnce]);
+        await side.after();
+        const deliveredAtOnce = await within(clock, shows(atOnce));
+        relay.send(['EVENT', forward, later]);
+        const deliveredLater = await within(clock, shows(later));
         const after = (handle() as ReqHandle).state;
         runs[clock] = {
           ...(runs[clock] as object),
+          open: open(),
+          deliveredAtOnce,
           deliveredLater,
           afterwards: {
             status: after.status,
-            events: after.status === 'loading' ? undefined : after.events.map((each) => each.id)
+            events:
+              after.status === 'loading' ? undefined : after.events.map((each) => each.id).sort()
           }
         };
       } catch (error) {
@@ -450,8 +468,9 @@ describe('a request that runs out of patience', () => {
       causes: ['timeout'],
       events: [] as Nostr.Event[],
       open: ['forward'],
+      deliveredAtOnce: true,
       deliveredLater: true,
-      afterwards: { status: 'incomplete', events: [later.id] }
+      afterwards: { status: 'incomplete', events: [atOnce.id, later.id].sort() }
     };
     expect(
       runs,

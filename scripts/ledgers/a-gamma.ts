@@ -796,6 +796,38 @@ export default {
           to: "    if (settled) return;\n    settled = true;\n    if (viaTimer) gates.forward.phase = 'drained';\n"
         }
       ]
+    },
+    {
+      id: 'C1-early-backlog-events-dropped',
+      arm: 'ST1',
+      describe:
+        "the backlog's events in the first 40 ms after the request's timer is armed are dropped, so what a relay sends as soon as it is asked is lost",
+      edits: [
+        {
+          file: MACHINE,
+          from: '  let timer: ReturnType<typeof setTimeout> | undefined;',
+          to: '  let timer: ReturnType<typeof setTimeout> | undefined;\n  let armedAt = 0;'
+        },
+        {
+          file: MACHINE,
+          from: "    if (gate.phase !== 'open') return;\n",
+          to: "    if (gate.phase !== 'open') return;\n    if (leg === 'backward' && Date.now() - armedAt < 40) return;\n"
+        },
+        { file: MACHINE, from: SETTLE_TIMER, to: `    armedAt = Date.now();\n${SETTLE_TIMER}` }
+      ]
+    },
+    {
+      id: 'C7-the-live-gate-shut-for-a-moment',
+      arm: 'ST2',
+      describe:
+        "a live request's settle timer shuts the forward gate for 25 ms and opens it again, so an event the relay sends as the timeout passes is lost while the subscription stays open and later ones arrive",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    if (settled) return;\n    settled = true;\n',
+          to: "    if (settled) return;\n    settled = true;\n    if (viaTimer) {\n      gates.forward.phase = 'drained';\n      setTimeout(() => {\n        gates.forward.phase = 'open';\n      }, 25);\n    }\n"
+        }
+      ]
     }
   ]
 } satisfies Ledger;
