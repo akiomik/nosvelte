@@ -225,6 +225,12 @@ describe('a request that runs out of patience', () => {
     // each event, or armed by the first, is A-ζ's no-progress shape rather than
     // A-γ's, and under it a relay that keeps sending holds the request open for
     // as long as it does. Either fires after the reading at the deadline.
+    //
+    // **Its timeout is the sum of its windows**, not its usual run. A library
+    // that never answers `incomplete` waits out every `by` on the real clock —
+    // about 3 s for each consumer's run and 12 s for each component's, 30.5 s
+    // measured with the fake clock's runs beside them — and the arm has to
+    // reach its assertion rather than Vitest's timeout to say which run it was.
     const event = signed('the only event the relay sends');
     const runs: Record<string, unknown> = {};
 
@@ -370,7 +376,7 @@ describe('a request that runs out of patience', () => {
         ])
       )
     );
-  }, 30_000);
+  }, 60_000);
 
   // @contracts A-γ-C7
   it('ST2: a live request answered by nothing leaves loading at its timeout, its live subscription still open and delivering', async () => {
