@@ -107,6 +107,12 @@ leaves the other saying the opposite, and updating both contradicts the rule tha
 field. **`Production evidence` is the only status**; this column is immutable port instruction, and
 the four openings below describe what the instruction is, not how far the port has got.
 
+**A row landed during the phase-2 trial also carries its evidence here**, after `TBD —`: what its
+landing reads, where and when, the ledger entries that matter and its limitations
+(`docs/process/phase-2-trial.md` §5). That text is not a status — the roster's token is still the
+only thing that completes a row — and it carries no history, which goes in the PR. A port
+instruction the row already has stays beside it.
+
 **Four things that column may say, and no fifth.** The column used to have an escape hatch — a row
 whose Given the port could not construct was allowed to "carry the reason instead of the row" — and
 an escape hatch with no shape is a permanent one. Every row resolves to exactly one of these:
