@@ -27,9 +27,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import type { HarnessOverrides } from '$lib/v1/context.svelte.js';
+import type { ReqPlan } from '$lib/v1/index.js';
 import { LIBRARY_EOSE_TIMEOUT_MS, MAX_SETTLE_TIMEOUT_MS } from '$lib/v1/normalize.js';
 
 import HarnessedRequest from './fixtures/HarnessedRequest.svelte';
+import PublishedRequest from './fixtures/PublishedRequest.svelte';
 import { propsTypeOf } from './helpers/components.js';
 import { consumerDiagnostics } from './helpers/declarations.js';
 import { HARNESS_DIVERGENCES } from './helpers/relay.js';
@@ -62,24 +64,24 @@ function handed(): Built[] {
 
 /**
  * The configuration of the client a request is run on, under a provider built
- * with `harness`, or with none: one request is made under it, on a relay that
- * is listening, and once the relay has been asked, exactly one client built
- * through the factory has been subscribed through. None would mean the seam
- * had stopped seeing the call, which is how a wrapped factory fails, and it
- * shows here rather than as an `undefined` below.
+ * with `harness`, or with none — and with none, the provider is the published
+ * `NostrApp` itself (`PublishedRequest`), so the reading is of the factory call
+ * it makes, whatever it does around it. One request is made under it, on a
+ * relay that is listening, and once the relay has been asked, exactly one
+ * client built through the factory has been subscribed through. None would
+ * mean the seam had stopped seeing the call, which is how a wrapped factory
+ * fails, and it shows here rather than as an `undefined` below.
  */
 async function configRunOn(harness: HarnessOverrides | undefined): Promise<Partial<RxNostrConfig>> {
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
   const url = nextUrl();
   const relay = new WS(url, { jsonProtocol: true });
-  const view = render(HarnessedRequest, {
-    relays: [url],
-    harness,
-    plan: () => ({ kind: 'request', descriptor: { filters: [{ kinds: [1] }] } }),
-    ready: () => {},
-    seen: () => {}
-  });
+  const plan = (): ReqPlan => ({ kind: 'request', descriptor: { filters: [{ kinds: [1] }] } });
+  const view =
+    harness === undefined
+      ? render(PublishedRequest, { relays: [url], plan, seen: () => {}, published: () => {} })
+      : render(HarnessedRequest, { relays: [url], harness, plan, ready: () => {}, seen: () => {} });
   try {
     await vi.waitFor(
       () =>

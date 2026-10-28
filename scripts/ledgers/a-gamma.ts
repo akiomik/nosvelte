@@ -34,6 +34,7 @@ const STREAM = 'src/lib/v1/stream.ts';
 const RX_NOSTR = 'node_modules/rx-nostr/dist/rx-nostr.js';
 const OUTLETS = 'src/lib/v1/components/outlets.ts';
 const EVENT_LIST = 'src/lib/v1/components/EventList.svelte';
+const REQUEST_OUTLETS = 'src/lib/v1/components/RequestOutlets.svelte';
 
 /** The request's own settle timer, armed when the backlog begins. */
 const SETTLE_TIMER = '    timer = setTimeout(() => settle(true), timeoutMs);';
@@ -111,8 +112,8 @@ export default {
   ],
   calibration: {
     measured:
-      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, and `ST2`'s, with `ST1`, `TC1`, `TC2` and `DC9` read again, at the commit that added `ST2`; plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { ST1: 10, NM5: 4, NM11: 4, TC1: 6, WI29: 6, TC2: 4, ST2: 4, DC9: 13 }
+      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, and `ST2`'s, with `ST1`, `TC1`, `TC2` and `DC9` read again, at the commit that added `ST2`, and `ST1`'s once more at the commit that gave it a single-event run; plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
+    seconds: { ST1: 11, NM5: 4, NM11: 4, TC1: 6, WI29: 6, TC2: 4, ST2: 4, DC9: 13 }
   },
   entries: [
     {
@@ -756,6 +757,45 @@ export default {
       describe:
         "the wait is four and a half times what a verification is believed to cost — inside the real clock's margin past four floors, outside the fake clock's instant",
       edits: [{ file: MACHINE, from: DRAIN_SAFETY, to: 'const VERIFY_DRAIN_SAFETY = 4.5;' }]
+    },
+    {
+      id: 'C1-the-timer-re-armed-by-each-event',
+      arm: 'ST1',
+      describe:
+        "each event on the backlog restarts the request's timer, so the deadline counts from the last event rather than from the request's start",
+      edits: [
+        {
+          file: MACHINE,
+          from: "    if (gate.phase !== 'open') return;\n",
+          to: "    if (gate.phase !== 'open') return;\n    if (leg === 'backward' && timer !== undefined && timeoutMs !== undefined) {\n      clearTimeout(timer);\n      timer = setTimeout(() => settle(true), timeoutMs);\n    }\n"
+        }
+      ]
+    },
+    {
+      id: 'C1-a-single-event-outlet-errs-on-incomplete',
+      arm: 'ST1',
+      describe:
+        'a single-event component renders the error slot for an incomplete answer that holds its event, and a list keeps the default',
+      edits: [
+        {
+          file: REQUEST_OUTLETS,
+          from: '  const outlet = $derived(deriveOutlet(request.state));',
+          to: "  const outlet = $derived(\n    event !== undefined && request.state.status === 'incomplete'\n      ? { slot: 'error' as const, error: request.state.error }\n      : deriveOutlet(request.state)\n  );"
+        }
+      ]
+    },
+    {
+      id: 'C7-the-timer-closes-the-live-gate',
+      arm: 'ST2',
+      describe:
+        "a live request's settle timer stops admitting what arrives on the forward subscription, which stays open on the wire and delivers nothing",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    if (settled) return;\n    settled = true;\n',
+          to: "    if (settled) return;\n    settled = true;\n    if (viaTimer) gates.forward.phase = 'drained';\n"
+        }
+      ]
     }
   ]
 } satisfies Ledger;

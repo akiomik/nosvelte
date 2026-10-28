@@ -7,18 +7,24 @@
  * reports `incomplete` when its deadline passes, and goes out when the first
  * finishes.
  *
- * An id begins with the row it is read against, `C3-` for `A5-C3`. Holding the
- * second request back is the dependency's doing, once the provider lets it
- * read the relay's NIP-11 document; the first entry is the provider that does
- * not. Removing the backlog's close at its end leaves `CP1` passing: its first
- * request is not live, so its end closes every leg anyway. A live request's
- * timer leaving its backlog open is `A-γ-C7`'s, `C7-the-backward-leg-left-open`
- * in `a-gamma`.
+ * An id begins with the row it is read against, `C3-` for `A5-C3`, and one
+ * beginning `D3-` edits the dependency for it, inside the ledger's own copy of
+ * `node_modules`. Holding the second request back is the dependency's doing,
+ * once the provider lets it read the relay's NIP-11 document; the first entry
+ * is the provider that does not. **Letting it go is the dependency's doing
+ * too**, for a first request that is not live: a library whose request ends
+ * closing nothing at all leaves `CP1` passing (measured), because the
+ * dependency closes a backward subscription at its `EOSE` and frees the slot
+ * itself. So the clause "goes out when the first finishes" is staged in the
+ * dependency, as the queue that never moves on. A live request's timer leaving
+ * its backlog open is `A-γ-C7`'s, `C7-the-backward-leg-left-open` in
+ * `a-gamma`.
  */
 import type { Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
 const CONTEXT = 'src/lib/v1/context.svelte.ts';
+const RX_NOSTR = 'node_modules/rx-nostr/dist/rx-nostr.js';
 
 export default {
   name: 'a5-cap',
@@ -54,6 +60,19 @@ export default {
           file: MACHINE,
           from: '    const present = new Set<IncompleteCause>();\n',
           to: '    const present = new Set<IncompleteCause>();\n    if (viaTimer) return backlogEndOf(present, undefined);\n'
+        }
+      ]
+    },
+    {
+      id: 'D3-the-queue-never-moves-on',
+      arm: 'CP1',
+      describe:
+        "the dependency's queue for a capped relay does not move on when a subscription is dropped, so a request held back stays held after the first finishes — staged in the ledger's copy of rx-nostr 3.7.6's ESM build",
+      edits: [
+        {
+          file: RX_NOSTR,
+          from: '    this.count$.next((v) => v - (droppedX + droppedY));\n    this.shift();\n',
+          to: '    this.count$.next((v) => v - (droppedX + droppedY));\n'
         }
       ]
     }
