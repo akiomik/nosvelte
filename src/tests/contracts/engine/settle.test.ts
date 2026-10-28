@@ -116,14 +116,16 @@ function relayFor(url: string, clock: Clock) {
 /**
  * Either side of a deadline, on `clock`. On the fake clock, `midway` is a sixth
  * of `timeoutMs` after `askedAt`, `before` is a millisecond short of
- * `timeoutMs` after `madeAt`, and `by` says whether `done` holds by `timeoutMs`
- * after `askedAt`, stepping a millisecond at a time and stopping in the
- * millisecond it first holds, so that what the arm does next happens in that
- * millisecond; `soonEnough` says whether the relay was asked within
- * `ASKED_WITHIN_MS` of `madeAt`. On the real clock, `midway` is a sixth of
- * `timeoutMs` after the arm acted, `before` is `beforeMs` after `midway`, and
- * `by` polls for `done` every millisecond and says whether it came within
- * `withinMs` of the act.
+ * `timeoutMs` after `madeAt`, and `by` is `timeoutMs` after `askedAt`, read once
+ * there. `first` gives the same verdict as `by`, but steps a millisecond at a
+ * time and stops in the millisecond `done` first holds, so that what the arm
+ * does next happens in that millisecond — at the price of reading `done` there
+ * rather than at the deadline, which is why an arm that reads the answer
+ * itself at the deadline uses `by`. `soonEnough` says whether the relay was
+ * asked within `ASKED_WITHIN_MS` of `madeAt`. On the real clock, `midway` is a
+ * sixth of `timeoutMs` after the arm acted, `before` is `beforeMs` after
+ * `midway`, and `by` and `first` alike poll for `done` every millisecond and
+ * say whether it came within `withinMs` of the act.
  */
 function sides(
   clock: Clock,
@@ -132,12 +134,24 @@ function sides(
 ) {
   const actedAt = Date.now();
   const to = (time: number) => vi.advanceTimersByTimeAsync(Math.max(0, time - Date.now()));
+  const polled = async (done: () => boolean): Promise<boolean> => {
+    try {
+      await vi.waitFor(() => expect(done()).toBe(true), { timeout: withinMs + 1500, interval: 1 });
+    } catch {
+      return false;
+    }
+    return Date.now() - actedAt < withinMs;
+  };
   return clock === 'fake clock'
     ? {
         soonEnough: { askedWithin: askedAt - madeAt < ASKED_WITHIN_MS },
         midway: () => to(askedAt + timeoutMs / 6),
         before: () => to(madeAt + timeoutMs - 1),
         by: async (done: () => boolean): Promise<boolean> => {
+          await to(askedAt + timeoutMs);
+          return done();
+        },
+        first: async (done: () => boolean): Promise<boolean> => {
           await advanceUntil(done, askedAt + timeoutMs - Date.now(), 1);
           return done();
         },
@@ -147,17 +161,8 @@ function sides(
         soonEnough: {},
         midway: () => delay(timeoutMs / 6),
         before: () => delay(beforeMs),
-        by: async (done: () => boolean): Promise<boolean> => {
-          try {
-            await vi.waitFor(() => expect(done()).toBe(true), {
-              timeout: withinMs + 1500,
-              interval: 1
-            });
-          } catch {
-            return false;
-          }
-          return Date.now() - actedAt < withinMs;
-        },
+        by: polled,
+        first: polled,
         after: () => delay(50)
       };
 }
@@ -407,7 +412,9 @@ describe('a request that runs out of patience', () => {
     // nothing — and one that stopped for a moment as its timer fired, even
     // for a millisecond, would deliver the later event and lose the first. So
     // the answer at the timeout is read at once, before the first event is
-    // sent.
+    // sent: in the millisecond it is first `incomplete` (`first`), where
+    // `ST1` reads at the deadline itself, and the status is read again once
+    // both events are in.
     const atOnce = signed('an event on the live subscription, as the timeout passes');
     const later = signed('an event on the live subscription, after the timeout');
     const runs: Record<string, unknown> = {};
@@ -428,7 +435,7 @@ describe('a request that runs out of patience', () => {
         );
         await side.before();
         const beforeTheDeadline = handle()?.state.status;
-        const byTheDeadline = await side.by(() => handle()?.state.status === 'incomplete');
+        const byTheDeadline = await side.first(() => handle()?.state.status === 'incomplete');
         const { state } = handle() as ReqHandle;
         runs[clock] = {
           ...side.soonEnough,
