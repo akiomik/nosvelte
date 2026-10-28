@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
    * One request component under a provider, with every outlet written out:
-   * each outlet records the request it was handed and shows what it was given.
+   * each outlet records the request it was handed and shows what it was given,
+   * and the default outlet hands what it was given to `handed`.
    */
   import { NostrApp, type ReqHandle } from '$lib/v1/index.js';
 
@@ -13,10 +14,18 @@
     which: RequestComponent;
     given: Record<string, unknown>;
     seen?: (outlet: string, request: ReqHandle) => void;
+    handed?: (argument: Record<string, unknown>) => void;
     expose?: (keys: () => string[]) => void;
   }
 
-  let { relays, which: Request, given, seen = () => {}, expose = () => {} }: Props = $props();
+  let {
+    relays,
+    which: Request,
+    given,
+    seen = () => {},
+    handed = () => {},
+    expose = () => {}
+  }: Props = $props();
 </script>
 
 <NostrApp {relays}>
@@ -24,6 +33,7 @@
   <Request {...given}>
     {#snippet children(argument: Record<string, unknown> & { request: ReqHandle })}
       {seen('default', argument.request)}
+      {handed(argument)}
       <p data-testid="outlet">default</p>
       <p data-testid="argument">{Object.keys(argument).sort().join(',')}</p>
       <p data-testid="shown">
