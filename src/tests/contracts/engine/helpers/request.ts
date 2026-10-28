@@ -60,11 +60,16 @@ const DELIVERY_MS = 100;
 /** Real time an arm may take, with every wait in it run out. */
 export const ARM_TIMEOUT_MS = 60_000;
 
+/** Fake every clock the dependency, the socket mock and the machine read. */
+export const fakeTheClock = (): void => {
+  vi.useFakeTimers({ toFake: [...FAKED] });
+};
+
 /**
  * Move the fake clock a step at a time until `done` holds or `ms` of it have
  * passed, and say whether it holds.
  */
-async function advanceUntil(done: () => boolean, ms: number, step = 50): Promise<boolean> {
+export async function advanceUntil(done: () => boolean, ms: number, step = 50): Promise<boolean> {
   for (let spent = 0; spent < ms && !done(); spent += step) await vi.advanceTimersByTimeAsync(step);
   return done();
 }
@@ -346,7 +351,7 @@ export async function published(
 ): Promise<unknown> {
   let handle: ReqHandle | undefined;
   let actedAt = vi.getRealSystemTime();
-  if (clock.fake) vi.useFakeTimers({ toFake: [...FAKED] });
+  if (clock.fake) fakeTheClock();
   const madeAt = Date.now();
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
