@@ -828,6 +828,19 @@ export default {
           to: "    if (settled) return;\n    settled = true;\n    if (viaTimer) {\n      gates.forward.phase = 'drained';\n      setTimeout(() => {\n        gates.forward.phase = 'open';\n      }, 25);\n    }\n"
         }
       ]
+    },
+    {
+      id: 'C7-the-live-gate-shut-for-a-millisecond',
+      arm: 'ST2',
+      describe:
+        "a live request's settle timer shuts the forward gate for a millisecond and opens it again, so an event the relay sends in the millisecond the timer fires is lost",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    if (settled) return;\n    settled = true;\n',
+          to: "    if (settled) return;\n    settled = true;\n    if (viaTimer) {\n      gates.forward.phase = 'drained';\n      setTimeout(() => {\n        gates.forward.phase = 'open';\n      }, 1);\n    }\n"
+        }
+      ]
     }
   ]
 } satisfies Ledger;

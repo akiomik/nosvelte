@@ -116,11 +116,14 @@ function relayFor(url: string, clock: Clock) {
 /**
  * Either side of a deadline, on `clock`. On the fake clock, `midway` is a sixth
  * of `timeoutMs` after `askedAt`, `before` is a millisecond short of
- * `timeoutMs` after `madeAt`, and `by` is `timeoutMs` after `askedAt`, read once
- * there; `soonEnough` says whether the relay was asked within
+ * `timeoutMs` after `madeAt`, and `by` says whether `done` holds by `timeoutMs`
+ * after `askedAt`, stepping a millisecond at a time and stopping in the
+ * millisecond it first holds, so that what the arm does next happens in that
+ * millisecond; `soonEnough` says whether the relay was asked within
  * `ASKED_WITHIN_MS` of `madeAt`. On the real clock, `midway` is a sixth of
  * `timeoutMs` after the arm acted, `before` is `beforeMs` after `midway`, and
- * `by` waits for `done` and says whether it came within `withinMs` of the act.
+ * `by` polls for `done` every millisecond and says whether it came within
+ * `withinMs` of the act.
  */
 function sides(
   clock: Clock,
@@ -135,7 +138,7 @@ function sides(
         midway: () => to(askedAt + timeoutMs / 6),
         before: () => to(madeAt + timeoutMs - 1),
         by: async (done: () => boolean): Promise<boolean> => {
-          await to(askedAt + timeoutMs);
+          await advanceUntil(done, askedAt + timeoutMs - Date.now(), 1);
           return done();
         },
         after: () => vi.advanceTimersByTimeAsync(50)
@@ -146,7 +149,10 @@ function sides(
         before: () => delay(beforeMs),
         by: async (done: () => boolean): Promise<boolean> => {
           try {
-            await vi.waitFor(() => expect(done()).toBe(true), { timeout: withinMs + 1500 });
+            await vi.waitFor(() => expect(done()).toBe(true), {
+              timeout: withinMs + 1500,
+              interval: 1
+            });
           } catch {
             return false;
           }
@@ -394,12 +400,14 @@ describe('a request that runs out of patience', () => {
     // deadline, on each clock, as `ST1` reads its own.
     //
     // **And the live subscription still delivers**: an event the relay sends on
-    // it as the timeout passes, and another 50ms later, each reach the
-    // consumer. A subscription left open on the wire by a request that has
+    // it as the timeout passes — on the fake clock, in the millisecond the
+    // request is first read `incomplete` — and another 50ms later, each reach
+    // the consumer. A subscription left open on the wire by a request that has
     // stopped admitting what arrives on it would read as open and deliver
-    // nothing — and one that stopped for a moment as its timer fired would
-    // deliver the later event and lose the first. So the answer at the
-    // timeout is read at once, before the first event is sent.
+    // nothing — and one that stopped for a moment as its timer fired, even
+    // for a millisecond, would deliver the later event and lose the first. So
+    // the answer at the timeout is read at once, before the first event is
+    // sent.
     const atOnce = signed('an event on the live subscription, as the timeout passes');
     const later = signed('an event on the live subscription, after the timeout');
     const runs: Record<string, unknown> = {};
