@@ -3,8 +3,8 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * The mutation ledger of the ordering rows of A-ε and their landings:
- * `A-ε-C1` on `OR1`, `A-ε-C2` on `OR2` and `A-ε-C5` on `OR3`. An id beginning
- * `C<n>-` edits the library; one beginning `I-` edits one of the arms' own
+ * `A-ε-C1` on `OR1`, `A-ε-C2` on `OR2`, `A-ε-C5` on `OR3`, `A-ε-C3` on `OR4` and
+ * `A-ε-C19` on `OR5`. An id beginning `C<n>-` edits the library; one beginning `I-` edits one of the arms' own
  * instruments. Kill sets are measured here, not copied from the spike.
  */
 import type { Ledger } from '../ledger.ts';
@@ -17,16 +17,18 @@ const ARMS = 'src/tests/contracts/engine/order.test.ts';
 const SETTLE_QUEUED = '    // After the turn the count is a fact.\n    queueMicrotask(() => {\n';
 /** And its closing. */
 const SETTLE_QUEUED_END = '        if (!live || forwardEnded) finish();\n      });\n    });\n  };';
+/** The line that ends a refusal's route at the stream's end, with the comment that closes above it. */
+const REFUSAL_GUARD = '      // and it is owed delivery (`A-ε-C5`).\n      if (ending) return;\n';
 
 export default {
   name: 'a-epsilon-order',
   subject:
-    '`A-ε-C1`, `A-ε-C2` and `A-ε-C5` (what reaches a consumer around the end of a stream): their landings, `OR1`–`OR3`',
+    '`A-ε-C1`, `A-ε-C2`, `A-ε-C3`, `A-ε-C5` and `A-ε-C19` (what reaches a consumer around the end of a stream): their landings, `OR1`–`OR5`',
   files: [ARMS],
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that last changed the arms, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { OR1: 5, OR2: 5, OR3: 4 }
+    seconds: { OR1: 5, OR2: 5, OR3: 4, OR4: 4, OR5: 5 }
   },
   entries: [
     {
@@ -286,6 +288,54 @@ export default {
           file: MACHINE,
           from: '    ending = true;\n',
           to: '    ending = true;\n    for (const each of gates.forward.holding) each.discarded = true;\n'
+        }
+      ]
+    },
+    {
+      id: 'C3-the-release-waits-for-the-consumer',
+      arm: 'OR4',
+      describe:
+        "the end is decided and the machine's subscriptions to the client are left open until the generator returns, which is when the consumer next asks",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    queueMicrotask(() => {\n      closeAll();\n      whenBacklogReported(() => {\n',
+          to: '    queueMicrotask(() => {\n      whenBacklogReported(() => {\n'
+        }
+      ]
+    },
+    {
+      id: 'C19-a-refusal-after-the-decision-is-delivered',
+      arm: 'OR5',
+      describe:
+        'nothing ends the refusal route at the decision, so a backward `CLOSED` behind the forward one in a batch is published',
+      edits: [
+        { file: MACHINE, from: REFUSAL_GUARD, to: '      // and it is owed delivery (`A-ε-C5`).\n' }
+      ]
+    },
+    {
+      id: 'C19-late-refusals-are-not-published',
+      arm: 'OR5',
+      describe:
+        'a backward refusal is dropped once the backlog has settled, whichever side of the decision it fell on: what the order the other way round separates from the rule',
+      edits: [
+        {
+          file: MACHINE,
+          from: REFUSAL_GUARD,
+          to: "      // and it is owed delivery (`A-ε-C5`).\n      if (ending || (leg === 'backward' && settled)) return;\n"
+        }
+      ]
+    },
+    {
+      id: 'C19-an-event-behind-the-decision-is-cut',
+      arm: 'OR5',
+      describe:
+        'the refusal guard copied to event admission, so an `EVENT` the relay sent before the deciding frame is lost',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  const admitEvent = (leg: LegName, incoming: EventPacket) => {\n',
+          to: '  const admitEvent = (leg: LegName, incoming: EventPacket) => {\n    if (ending) return;\n'
         }
       ]
     }

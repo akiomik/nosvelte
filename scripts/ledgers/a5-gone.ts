@@ -9,7 +9,9 @@
  * - `A5-C14` on `GN3`;
  * - `A5-C10` on `GN4`;
  * - `A5-C15` on `GN5`;
- * - `A5-C22` on `GN6`.
+ * - `A5-C22` on `GN6`;
+ * - `A5-C12` on `GN7`;
+ * - `A5-C13` on `GN8`.
  *
  * An id begins with the row it is read against, `C<n>-` for `A5-C<n>`. Two
  * entries may carry the same edit when two rows each owe a failure under it;
@@ -37,12 +39,12 @@ const GONE_CAUSE = "    if (gone.length > 0) present.add('ended');\n";
 export default {
   name: 'a5-gone',
   subject:
-    '`A5-C9`, `A5-C10`, `A5-C11`, `A5-C14`, `A5-C15` and `A5-C22` (what a request answers when the relays it is asking are gone): their landings, `GN1`–`GN6`',
+    '`A5-C9`, `A5-C10`, `A5-C11`, `A5-C12`, `A5-C13`, `A5-C14`, `A5-C15` and `A5-C22` (what a request answers when the relays it is asking are gone): their landings, `GN1`–`GN8`',
   files: ['src/tests/contracts/engine/gone.test.ts'],
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { GN1: 7, GN2: 7, GN3: 5, GN4: 8, GN5: 7, GN6: 5 }
+    seconds: { GN1: 7, GN2: 7, GN3: 5, GN4: 8, GN5: 7, GN6: 5, GN7: 5, GN8: 4 }
   },
   entries: [
     {
@@ -293,6 +295,51 @@ export default {
           file: ACCUMULATE,
           from: '    initialValue,\n    reducer,\n    streamFn\n',
           to: "    initialValue,\n    reducer: (value, chunk) =>\n      reducer(value, chunk.type === 'settled' ? { ...chunk, end: { kind: 'complete' } } : chunk),\n    streamFn\n"
+        }
+      ]
+    },
+    {
+      id: 'C12-a-gone-relay-adds-no-cause',
+      arm: 'GN7',
+      describe: "the relay that was gone adds nothing, so the answer's causes are `timeout` alone",
+      edits: [{ file: MACHINE, from: GONE_CAUSE, to: '' }]
+    },
+    {
+      id: 'C12-the-end-of-the-wait-adds-no-cause',
+      arm: 'GN7',
+      describe:
+        'neither the timer nor the relay left undetermined adds `timeout`, so the answer says `ended` alone and a silent relay reads as nothing',
+      edits: [
+        { file: MACHINE, from: "    if (viaTimer) present.add('timeout');\n", to: '' },
+        {
+          file: MACHINE,
+          from: "      else if (!DETERMINED.has(phase)) present.add('timeout');\n",
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'C13-the-answered-relay-left-undetermined',
+      arm: 'GN8',
+      describe: "a relay's `EOSE` determines nothing, so the relay that answered adds `timeout`",
+      edits: [
+        {
+          file: MACHINE,
+          from: "        if (legOf(packet.subId) === 'backward') advanceBackward(packet.from, 'complete');\n",
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'C13-a-death-taken-for-an-answer',
+      arm: 'GN8',
+      describe:
+        'a terminal connection is recorded as the relay having answered, so the answer is whole',
+      edits: [
+        {
+          file: MACHINE,
+          from: TERMINAL_STATE,
+          to: "      if (phase === 'terminal') advanceBackward(packet.from, 'complete');\n"
         }
       ]
     }

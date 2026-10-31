@@ -964,9 +964,7 @@ describe('A5: the relays a request is asking are gone', () => {
           await asked(() => a.reqs().length >= 1 && b.reqs().length >= 1, 3000);
           a.server.send(['EVENT', a.reqs()[0], event]);
           a.server.send(['EOSE', a.reqs()[0]]);
-          await (options.onAFakeClock === true
-            ? vi.advanceTimersByTimeAsync(100)
-            : delay(100));
+          await (options.onAFakeClock === true ? vi.advanceTimersByTimeAsync(100) : delay(100));
           go(b);
           await settle(handle);
           return readingOf(handle());

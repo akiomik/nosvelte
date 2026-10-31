@@ -3,8 +3,8 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * What a relay's refusal is called, and what it does to a request: the
- * landings of `A-α-C1` (`RD1`), `A-α-C2` (`RD2`), `A-α-C3` (`RD3`), `A-α-C4`
- * (`RD4`), `A-α-C5` (`RD5`), `A5-S4` (`RD6`) and `A-α-C6` (`RD7`).
+ * landings of `A-α-C1` (`RJ1`), `A-α-C2` (`RJ2`), `A-α-C3` (`RJ3`), `A-α-C4`
+ * (`RJ4`), `A-α-C5` (`RJ5`), `A5-S4` (`RJ6`) and `A-α-C6` (`RJ7`).
  *
  * **Through the published entry**, because the rows but `A-α-C6` are `public`: `NostrApp`
  * with `relays` only and consumers' own `useReq` under it
@@ -142,7 +142,7 @@ const inBothLegs = (reason: string, text: string) => [
 
 describe('A-α: what a relay’s refusal is called, and what it does', () => {
   // @contracts A-α-C1
-  it('RD1: each of the nine standardized prefixes lands in its own class, on either leg', async () => {
+  it('RJ1: each of the nine standardized prefixes lands in its own class, on either leg', async () => {
     // **The published class, off the frame the relay sends**: `reason` on
     // `diagnostics.refusals`, for a refusal of each leg of a live request. The
     // nine names are written here, not read from the library, and they are nine
@@ -174,7 +174,7 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
   }, 30_000);
 
   // @contracts A-α-C2
-  it('RD2: a notice with no prefix, or an unknown one, is `unknown`, not another name', async () => {
+  it('RJ2: a notice with no prefix, or an unknown one, is `unknown`, not another name', async () => {
     // **Each is a string a relay may send**: NIP-01 does not require a prefix.
     // A word of the vocabulary with no colon after it, one with something
     // joined to it, one in another case, a word an object inherits, and no
@@ -201,7 +201,7 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
   }, 30_000);
 
   // @contracts A-α-C3
-  it('RD3: a live request refused by every relay ends its leg with nothing else happening, and refresh() puts a REQ back', async () => {
+  it('RJ3: a live request refused by every relay ends its leg with nothing else happening, and refresh() puts a REQ back', async () => {
     // **Nothing else happens**: no event, no timer of the request's own near
     // the readings, no socket going away. **Four runs**, because each has a way
     // of passing that another does not. One relay and two: with two, the first
@@ -316,7 +316,7 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
   }, 30_000);
 
   // @contracts A-α-C4
-  it('RD4: a live request refused by one of two relays still receives what the other sends', async () => {
+  it('RJ4: a live request refused by one of two relays still receives what the other sends', async () => {
     // **"The leg has not ended" is true of a request nothing reaches**, so the
     // event is read beside it. The relay that was not refused sends on the
     // forward subscription after the other's refusal has been published, and
@@ -355,7 +355,7 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
   }, 20_000);
 
   // @contracts A-α-C5
-  it('RD5: a `CLOSED` naming a forward leg a request never opened ends nothing and is not a refusal', async () => {
+  it('RJ5: a `CLOSED` naming a forward leg a request never opened ends nothing and is not a refusal', async () => {
     // **The relay chooses the subId it closes**, so the frame is built on the
     // wire: the request's own backward subId with `-f:` in it, on a request
     // that opened no forward leg, read off the frames first. Nothing is
@@ -426,7 +426,7 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
   }, 20_000);
 
   // @contracts A5-S4
-  it('RD6: two requests on one relay, one refused: the refusal is that request’s, whichever it is', async () => {
+  it('RJ6: two requests on one relay, one refused: the refusal is that request’s, whichever it is', async () => {
     // **One relay**, read off the frames: both are subscribed there before
     // either is answered, so a refusal arriving from it is one either could
     // claim. **Both ways round**, since an attribution that took the first
@@ -483,7 +483,7 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
   }, 20_000);
 
   // @contracts A-α-C6
-  it('RD7: `rate-limited` is the one class recorded as clearing on its own, and every class stops', () => {
+  it('RJ7: `rate-limited` is the one class recorded as clearing on its own, and every class stops', () => {
     // **Internal, and an annotation**: nothing reads this answer, so it says
     // what a retry policy would be written against and promises no recovery.
     // Every class, `unknown` among them, is held both ways against the type, so

@@ -1742,7 +1742,11 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
         go(b);
         await Promise.race([done, delay(3000)]);
         const labels = { a: aUrl, b: bUrl };
-        return { askedBoth, ...recordOf(chunks, labels), backward: heldBy(tables, labels)?.backward };
+        return {
+          askedBoth,
+          ...recordOf(chunks, labels),
+          backward: heldBy(tables, labels)?.backward
+        };
       } finally {
         ac.abort();
         await done;
