@@ -1377,6 +1377,13 @@ export async function* referenceStream({
       // live request` on a one-shot request, which is P51 reached through the
       // other writer.
       if (leg === 'forward' && !live) return;
+      // **The stream's end is the delivery boundary for a refusal.** `finish()`
+      // queues the release of this channel a turn after it sets `ending`, so a
+      // relay's next frame in the same batch can still land here, and it is
+      // not delivered (`A-ε-C19`). Events are not cut at this line: one that
+      // arrived before the deciding frame reaches `admitEvent` a turn later,
+      // and it is owed delivery (`A-ε-C5`).
+      if (ending) return;
       // **Bounded before it is classified and before it is kept**, so the
       // classification reads the same text a consumer will: the prefix NIP-01
       // puts before the colon is at the front, so a cut cannot move it, and a
