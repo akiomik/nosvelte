@@ -937,7 +937,7 @@ async function attemptOn(connection: ConnectionState | undefined) {
     }),
     end: async (): Promise<void> => {
       ac.abort();
-      await done;
+      await Promise.race([done, delay(500)]);
     }
   };
 }
