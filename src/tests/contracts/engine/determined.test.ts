@@ -1606,6 +1606,8 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
       beside: {
         oneTask: await beside(backlog('dt4-beside-one'), oneTask),
         aTaskApart: await beside(backlog('dt4-beside-apart'), aTaskApart),
+        live: await beside(live('dt4-beside-live'), oneTask),
+        liveATaskApart: await beside(live('dt4-beside-live-apart'), aTaskApart),
         theOtherWayRound: await beside(backlog('dt4-beside-reversed'), theOtherWayRound)
       }
     };
@@ -1625,6 +1627,7 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
       refusals: told
     };
     const meanwhile = { ...read, status: 'streaming', activity: 'refreshing', refusals: told };
+    const liveMeanwhile = { ...meanwhile, activity: 'live' };
     expect(
       observed,
       'a relay that answered first has answered, whatever follows; one that refused first has refused'
@@ -1641,6 +1644,8 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
       beside: {
         oneTask: { meanwhile, afterwards: answered('idle', told) },
         aTaskApart: { meanwhile, afterwards: answered('idle', told) },
+        live: { meanwhile: liveMeanwhile, afterwards: answered('live', told) },
+        liveATaskApart: { meanwhile: liveMeanwhile, afterwards: answered('live', told) },
         theOtherWayRound: { meanwhile, afterwards: refused }
       }
     });

@@ -843,6 +843,19 @@ export default {
       ]
     },
     {
+      id: 'C25-the-handler-writes-initialized-as-pending',
+      arm: 'CS5',
+      describe:
+        'the machine classifies at its own call and `initialized` writes `pending`: at a relay that never moved that reads as deciding nothing',
+      edits: [
+        {
+          file: MACHINE,
+          from: CONNECTION_READ,
+          to: "      const phase =\n        packet.state === 'initialized' ? 'pending' : phaseOfConnectionState(packet.state);\n"
+        }
+      ]
+    },
+    {
       id: 'C25-the-handler-reads-connecting-as-active',
       arm: 'CS5',
       describe:
@@ -852,6 +865,19 @@ export default {
           file: MACHINE,
           from: CONNECTION_READ,
           to: "      const phase =\n        packet.state === 'connecting' ? 'active' : phaseOfConnectionState(packet.state);\n"
+        }
+      ]
+    },
+    {
+      id: 'C8-a-relay-with-no-status-re-opened',
+      arm: 'CS7',
+      describe:
+        'a relay the status has no entry for is taken for one whose retries ran out, so a first request calls `reconnect` on a relay no socket has been opened to',
+      edits: [
+        {
+          file: MACHINE,
+          from: PREFLIGHT_SWITCH,
+          to: "    switch (approachFor(status[url]?.connection ?? 'error')) {"
         }
       ]
     },

@@ -474,8 +474,10 @@ describe('what reaches a consumer around the end of a stream', () => {
   // @contracts A-ε-C3
   it('OR4: a consumer that has not asked since the end was decided finds the producer gone, and no refusal after it', async () => {
     // **A consumer that stops asking**, which the published entry does not
-    // have: it pulls until the outcome, then pauses with the end still in the
-    // queue. **Two reads, each independent of the other.** While it is paused,
+    // have: it takes one chunk and asks for nothing more, so the end is decided
+    // with no `next()` outstanding. One outstanding there is the consumer
+    // asking, and a release that waited to be asked would read as prompt.
+    // **Two reads, each independent of the other.** While it is paused,
     // the subscriptions the machine took from the transport: none is held, read
     // off a capability that counts each one taken and torn down, with the count
     // before the end as the control. That is the release: the frames on the
@@ -486,9 +488,11 @@ describe('what reaches a consumer around the end of a stream', () => {
     // delivers once the consumer asks again: nothing of it, beside a listener
     // of the arm's own on the client's message channel, which saw the frame
     // arrive. **Three ways to the decision**: a timer, and the last `EOSE`, on
-    // a request that is not live, and a forward `CLOSED` on a live one.
+    // a request that is not live, paused on an event, and a forward `CLOSED` on
+    // a live one, paused on the outcome.
     const run = async (reqIdBase: string, decision: 'timer' | 'eose' | 'forward') => {
       const live = decision === 'forward';
+      const timeoutMs = decision === 'timer' ? 300 : 2000;
       const url = nextUrl();
       const { rxNostr, server } = createTestRelay(url);
       const base = permanentTransport(rxNostr);
@@ -515,8 +519,18 @@ describe('what reaches a consumer around the end of a stream', () => {
           const stream = base.use(...args);
           return stream === undefined ? undefined : counted(stream);
         },
-        send: (...args) => base.send(...args),
-        onRevoke: (listener) => base.onRevoke(listener),
+        send: (...args) => {
+          const stream = base.send(...args);
+          return stream === undefined ? undefined : counted(stream);
+        },
+        onRevoke: (listener) => {
+          held += 1;
+          const release = base.onRevoke(listener);
+          return () => {
+            held -= 1;
+            release();
+          };
+        },
         outgoingRequests: () => {
           const stream = base.outgoingRequests();
           return stream === undefined ? undefined : counted(stream);
@@ -543,7 +557,7 @@ describe('what reaches a consumer around the end of a stream', () => {
         live,
         reqIdBase,
         signal: ac.signal,
-        timeoutMs: decision === 'timer' ? 300 : 2000,
+        timeoutMs,
         verifyEvent: acceptAnyEvent
       });
       const named = (leg: string) =>
@@ -555,14 +569,17 @@ describe('what reaches a consumer around the end of a stream', () => {
         await vi.waitFor(() => expect(named('-b:')).toBeDefined(), { timeout: 3000 });
         if (live) await vi.waitFor(() => expect(named('-f:')).toBeDefined(), { timeout: 3000 });
         const backward = named('-b:') as string;
-        const beforeTheEnd = held > 0;
-        if (decision !== 'timer') respondWithEose(server, backward);
+        const beforeTheEnd = held;
+        if (live) respondWithEose(server, backward);
+        else server.send(['EVENT', backward, fakeEvent({ content: 'the pause' })]);
         const handed = ((await outcome).value as MachineChunk).type;
+        if (decision === 'eose') respondWithEose(server, backward);
+        if (decision === 'timer') await delay(timeoutMs);
         if (live) {
           server.send(['CLOSED', named('-f:'), 'blocked: the end']);
           await vi.waitFor(() => expect(closedFrames).toHaveLength(1), { timeout: 3000 });
         }
-        // The consumer has asked for nothing since the decision, and the
+        // The consumer has asked for nothing since before the decision, and the
         // release is a turn after it.
         await delay(20);
         const whilePaused = held;
@@ -582,7 +599,7 @@ describe('what reaches a consumer around the end of a stream', () => {
         rxNostr.dispose();
       }
     };
-    const paused = { beforeTheEnd: true, handed: 'settled', whilePaused: 0 };
+    const paused = { whilePaused: 0 };
     expect(
       {
         timer: await run('or4-timer', 'timer'),
@@ -591,9 +608,14 @@ describe('what reaches a consumer around the end of a stream', () => {
       },
       'nothing held once the end is decided, and nothing delivered after it'
     ).toEqual({
-      timer: { ...paused, rest: [] },
-      eose: { ...paused, rest: [] },
-      forward: { ...paused, rest: ['refused:forward', 'legEnded'] }
+      timer: { ...paused, beforeTheEnd: 4, handed: 'event', rest: ['settled'] },
+      eose: { ...paused, beforeTheEnd: 4, handed: 'event', rest: ['settled'] },
+      forward: {
+        ...paused,
+        beforeTheEnd: 5,
+        handed: 'settled',
+        rest: ['refused:forward', 'legEnded']
+      }
     });
   });
 

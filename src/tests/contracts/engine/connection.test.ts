@@ -868,13 +868,14 @@ describe('A5: what a request does with each relay’s connection', () => {
 /**
  * A live attempt over two relays on a transport the arm answers for, with no
  * wire under it: a status read that reports `connection` for one relay when the
- * attempt begins, and a connection channel the arm reports on. So the machine's
+ * attempt begins, or has no entry for it, as for a relay no socket has been
+ * opened to, and a connection channel the arm reports on. So the machine's
  * two classifying statements are read by what each does where it stands:
  * `taken` is what the preflight did about `connection`, and `report` then
  * `phases` are a state handed to the handler and what it wrote. Nothing goes
  * out, so no other writer moves a table.
  */
-async function attemptOn(connection: ConnectionState) {
+async function attemptOn(connection: ConnectionState | undefined) {
   const a = 'ws://a.example/';
   const b = 'ws://b.example/';
   const states = new Subject<ConnectionStatePacket>();
@@ -882,9 +883,10 @@ async function attemptOn(connection: ConnectionState) {
   const transport: TransportCapability = {
     revoked: false,
     relayStatus: () =>
-      ({ [a]: { connection }, [b]: { connection: 'connected' } }) as ReturnType<
-        TransportCapability['relayStatus']
-      >,
+      ({
+        ...(connection === undefined ? {} : { [a]: { connection } }),
+        [b]: { connection: 'connected' }
+      }) as ReturnType<TransportCapability['relayStatus']>,
     defaultRelays: () => undefined,
     reconnect: (relay) => {
       reconnected.push(relay);
@@ -1072,7 +1074,9 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
     // classifier inlined there passes the reading above, and a state no wire
     // produces could differ in it unseen. Each is pushed at a relay still
     // `pending`, so every answer moves it somewhere of its own or leaves it,
-    // and the phase is read off the table the attempt holds.
+    // and the phase is read off the table the attempt holds. **`initialized` a
+    // second time, at a relay that has moved**, because at `pending` a state
+    // that leaves the relay and one that writes `pending` read alike.
     const NINE = [
       'initialized',
       'connecting',
@@ -1113,6 +1117,11 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
       handled[state] = attempt.phases();
       await attempt.end();
     }
+    const moving = await attemptOn('connected');
+    moving.report('connected');
+    moving.report('initialized');
+    const initializedOnceConnected = moving.phases();
+    await moving.end();
     const moved = (forward: RelayPhase) => ({ forward, backward: 'pending' });
     const gone = { forward: 'terminal', backward: 'ended' };
     expect(handled, 'the phase the machine put the relay in').toEqual({
@@ -1126,6 +1135,9 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
       rejected: gone,
       terminated: gone
     });
+    expect(initializedOnceConnected, 'a relay that has moved stays where it is').toEqual(
+      moved('active')
+    );
   });
 
   // @contracts A5-C8
@@ -1365,9 +1377,9 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
     // and `rejected`, so `dormant` above cannot tell them apart. The call to
     // `reconnect` can.
     const taken: Record<string, unknown> = {};
-    for (const state of STATES) {
+    for (const state of [...STATES, undefined]) {
       const attempt = await attemptOn(state);
-      taken[state] = attempt.taken();
+      taken[state ?? 'no entry'] = attempt.taken();
       await attempt.end();
     }
     const asked = { reconnected: [], forward: 'pending', failed: undefined };
@@ -1437,7 +1449,8 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
         dormant: asked,
         error: { ...asked, reconnected: ['ws://a.example/'] },
         rejected: { ...asked, forward: 'terminal' },
-        terminated: { ...asked, failed: expect.stringContaining('is terminated') }
+        terminated: { ...asked, failed: expect.stringContaining('is terminated') },
+        'no entry': asked
       }
     });
   }, 20_000);

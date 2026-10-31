@@ -305,6 +305,37 @@ export default {
       ]
     },
     {
+      id: 'C3-the-release-waits-for-the-outcome-to-be-taken',
+      arm: 'OR4',
+      describe:
+        "a request that is not live releases its subscriptions when the consumer is handed the outcome rather than at the decision, so a `next()` outstanding at the decision reads as prompt: the live path's release is unchanged",
+      edits: [
+        {
+          file: MACHINE,
+          from: '    queueMicrotask(() => {\n      closeAll();\n      whenBacklogReported(() => {\n',
+          to: '    queueMicrotask(() => {\n      if (live) closeAll();\n      whenBacklogReported(() => {\n'
+        },
+        {
+          file: MACHINE,
+          from: "        if (next.type === 'settled') yield { type: 'settled', end: backwardEnd(next.viaTimer) };\n",
+          to: "        if (next.type === 'settled') {\n          if (!live) closeAll();\n          yield { type: 'settled', end: backwardEnd(next.viaTimer) };\n        }\n"
+        }
+      ]
+    },
+    {
+      id: 'C3-a-listener-outlives-the-decision',
+      arm: 'OR4',
+      describe:
+        'the machine takes a revocation listener it never lets go of, which a count of the observables alone would not see',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    ending = true;\n',
+          to: '    ending = true;\n    transport.onRevoke(() => {});\n'
+        }
+      ]
+    },
+    {
       id: 'C19-a-refusal-after-the-decision-is-delivered',
       arm: 'OR5',
       describe:
