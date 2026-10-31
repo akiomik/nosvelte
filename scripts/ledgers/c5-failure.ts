@@ -9,7 +9,7 @@
  * - `C5-C5` on `TH2`, with `TH4` for the one value a rejection is published as;
  * - `C5-C6` on `RA1`, with the supporting arms read after each;
  * - `C5-C7` on `TH3`;
- * - `C5-C8` on `CW1`.
+ * - `C5-C8` on `CW1`, with `CW2` for the edge of what it excludes.
  *
  * An id begins with the row it is read against, `C<n>-` for `C5-C<n>`, and one
  * beginning `I-` edits an arm's own instrument.
@@ -88,7 +88,7 @@ export default {
   ],
   calibration: {
     measured: "one run of each arm's duration in a single Vitest run, plus 1.5 s for the process.",
-    seconds: { TH1: 1.8, TH2: 2.1, TH3: 1.9, TH4: 1.9, RA1: 9.3, RX6: 1.6, CW1: 6.2 }
+    seconds: { TH1: 1.8, TH2: 2.1, TH3: 1.9, TH4: 1.9, RA1: 9.3, RX6: 1.6, CW1: 6.8, CW2: 2.0 }
   },
   entries: [
     {
@@ -668,6 +668,19 @@ export default {
           file: REQERROR,
           from: "  'transport-incompatible'\n] as const satisfies readonly ReqErrorCode[];",
           to: "  'transport-incompatible',\n  'a new code'\n] as unknown as readonly ReqErrorCode[];"
+        }
+      ]
+    },
+    {
+      id: 'I-C8-the-dead-derived-is-never-read',
+      arm: 'CW2',
+      describe:
+        'the effect stops reading the `$derived`, so nothing is written and no line says which build ran',
+      edits: [
+        {
+          file: 'src/tests/contracts/engine/fixtures/KeptEffect.svelte',
+          from: '        void asked;\n',
+          to: ''
         }
       ]
     },

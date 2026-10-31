@@ -9,6 +9,10 @@
  * that is missing, duplicated, misplaced, skipped, pending or expecting
  * failure all fail the command. Arguments are passed through to Vitest, so a
  * filter that leaves a landing out fails it too — which is the point.
+ *
+ * Then the arms that say nothing is written run again with `NODE_ENV=production`,
+ * judged the same way. Svelte's console is not the same in a build: `CW2` reads
+ * the line only that build writes, so a run that is not one fails there.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -42,10 +46,19 @@ const { expected: support, faults: supportFaults } = expectedSupport(
 );
 const expected = [...landings, ...support];
 
+const UNDER_PRODUCTION = ['TH3', 'CW1', 'CW2'];
+const underProduction = expected.filter(({ id }) => UNDER_PRODUCTION.includes(id));
+
 const directory = mkdtempSync(join(tmpdir(), 'nosvelte-run-'));
-const reportPath = join(directory, 'report.json');
-let faults: string[];
-try {
+
+/** One run of Vitest, judged against `arms`. */
+const judged = (
+  name: string,
+  args: readonly string[],
+  env: Record<string, string>,
+  arms: typeof expected
+): string[] => {
+  const reportPath = join(directory, `${name}.json`);
   const startedAt = Date.now();
   const run = spawnSync(
     process.execPath,
@@ -55,21 +68,47 @@ try {
       '--reporter=default',
       `--reporter=${join(ROOT, 'scripts/landing-reporter.ts')}`,
       '--includeTaskLocation',
-      ...process.argv.slice(2)
+      ...args
     ],
-    { cwd: ROOT, stdio: 'inherit', env: { ...process.env, NOSVELTE_RUN_REPORT: reportPath } }
+    {
+      cwd: ROOT,
+      stdio: 'inherit',
+      env: { ...process.env, ...env, NOSVELTE_RUN_REPORT: reportPath }
+    }
   );
+  return checkRun({
+    status: run.status,
+    report: existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : undefined,
+    startedAt,
+    expected: arms
+  });
+};
+
+let faults: string[];
+try {
   faults = [
     ...rosterFaults,
     ...landingFaults,
     ...supportFaults,
-    ...checkRun({
-      status: run.status,
-      report: existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : undefined,
-      startedAt,
-      expected
-    })
+    ...judged('all', process.argv.slice(2), {}, expected)
   ];
+  if (faults.length === 0) {
+    faults = UNDER_PRODUCTION.filter((arm) => !underProduction.some(({ id }) => id === arm)).map(
+      (arm) => `${arm} is to run under production, and is no landing or supporting arm`
+    );
+    faults.push(
+      ...judged(
+        'production',
+        [
+          ...new Set(underProduction.map(({ file }) => file)),
+          '-t',
+          UNDER_PRODUCTION.map((arm) => `${arm}:`).join('|')
+        ],
+        { NODE_ENV: 'production' },
+        underProduction
+      )
+    );
+  }
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }
@@ -79,5 +118,6 @@ if (faults.length > 0) {
   process.exit(1);
 }
 console.log(
-  `\n${landings.length} contract landings and ${support.length} supporting arms ran and passed.`
+  `\n${landings.length} contract landings and ${support.length} supporting arms ran and passed, ` +
+    `and ${underProduction.length} of them again under production.`
 );

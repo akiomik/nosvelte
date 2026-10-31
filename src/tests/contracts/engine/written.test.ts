@@ -3,11 +3,14 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * What a consumer's console sees of a failure and of a handle it kept: the
- * landing of `C5-C8` (`CW1`).
+ * landing of `C5-C8` (`CW1`), and the edge of what that row excludes (`CW2`).
  *
  * **Public, which is why this is not `C5-C6`.** That row's population is the
  * reach arm's, and it goes through seams no consumer has. Everything here is
  * built from `NostrApp`, `useReq` and the relay's wire.
+ *
+ * **`npm test` runs both again with `NODE_ENV=production`**, since a build's
+ * console is not a development one's. `CW2` is what says that run is that build.
  *
  * Port band 10580-10599.
  */
@@ -20,6 +23,7 @@ import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
 import { REQ_ERROR_CODES, type ReqErrorCode } from '$lib/v1/reqerror.js';
 
 import DerivedRequest from './fixtures/DerivedRequest.svelte';
+import KeptEffect from './fixtures/KeptEffect.svelte';
 import KeptRequest from './fixtures/KeptRequest.svelte';
 import { NOTHING_WRITTEN } from './helpers/console.js';
 import { respondWithEose } from './helpers/relay.js';
@@ -309,19 +313,20 @@ describe('C5: what a consumer’s console sees', () => {
       return { reading, left: readingOf(held), answer, asked: asked(server) };
     };
 
-    // **A kept handle goes on saying what a read would have said as it went**,
-    // which is `A12-C5`'s last value observed, and the handle's rather than the
-    // consumer's. So the plan changes with the consumer going in the tick
-    // `activity` read the change; and the change is built before it goes, with
-    // `activity` last read before that; and `activity` is never read at all.
-    const changed = async (built: boolean) => {
+    // **A kept handle says the last `live` it actually observed**, which is
+    // `A12-C5`'s last value observed, and the handle's rather than the
+    // consumer's. So the plan changes as the consumer goes, and three ways: read
+    // by `activity`, built by the options with `activity` last read before that,
+    // and neither, which leaves it out. The first and the last differ only by a
+    // read, and that is the row's to say. Then `activity` is never read at all.
+    const changed = async (way: 'read' | 'built' | 'neither') => {
       const plan = box(request({ settleTimeoutMs: 30_000 }));
       const { server, consumer, held } = mounted(() => plan.current);
       await subscription(server, '-b:', 1);
       const before = held.activity;
       plan.current = live(30_000);
-      if (built) flushSync();
-      const read = built ? 'not read' : held.activity;
+      if (way === 'built') flushSync();
+      const read = way === 'read' ? held.activity : 'not read';
       await unmount(consumer);
       return { before, read, left: held.activity };
     };
@@ -371,8 +376,9 @@ describe('C5: what a consumer’s console sees', () => {
     const readings: Record<string, unknown> = {};
     for (const path of PATHS) readings[path.name] = await run(path);
     const leftEarly = await early();
-    const leftChanged = await changed(false);
-    const leftBuilt = await changed(true);
+    const leftChanged = await changed('read');
+    const leftBuilt = await changed('built');
+    const leftPending = await changed('neither');
     const leftUnread = await unread();
     const leftOutlived = await outlived();
     const placed = new Set<string>([
@@ -395,6 +401,7 @@ describe('C5: what a consumer’s console sees', () => {
         leftEarly,
         leftChanged,
         leftBuilt,
+        leftPending,
         leftUnread,
         leftOutlived
       },
@@ -423,6 +430,7 @@ describe('C5: what a consumer’s console sees', () => {
       },
       leftChanged: { before: 'refreshing', read: 'live', left: 'live' },
       leftBuilt: { before: 'refreshing', read: 'not read', left: 'live' },
+      leftPending: { before: 'refreshing', read: 'not read', left: 'refreshing' },
       leftUnread: 'live',
       leftOutlived: {
         reading: settled('idle').reads,
@@ -432,4 +440,74 @@ describe('C5: what a consumer’s console sees', () => {
       }
     });
   }, 30_000);
+
+  it('CW2: a `$derived` read after its component went is Svelte’s write, with a request there or none, in the form the build gives it', async () => {
+    // **The other edge of `C5-C8`'s exclusion, and what shows a production run
+    // is one.** One root of the consumer's own holds a request, and one holds
+    // only an `$effect`, each past the component whose `$derived` it reads. The
+    // source changes, and the flush that follows writes one line either way, so
+    // the line is not the request's. Which line is read too: only Svelte's
+    // production branch writes the bare URL, and a run that says it is production
+    // and is not fails here rather than passing `CW1` under the wrong build.
+    const after = (change: () => void): readonly string[] => {
+      const from = watch.reading().written.length;
+      change();
+      flushSync();
+      return watch.reading().written.slice(from);
+    };
+
+    const withRequest = async () => {
+      const url = nextUrl();
+      const server = new WS(url, { jsonProtocol: true });
+      const plan = box(request({ settleTimeoutMs: 300 }));
+      let stop = (): void => undefined;
+      const view = render(KeptRequest, {
+        relays: [url],
+        plan: () => plan.current,
+        mounted: true,
+        seen: (): void => undefined,
+        rooted: (ending: () => void): void => {
+          stop = ending;
+        }
+      });
+      respondWithEose(server, await subscription(server, '-b:', 1));
+      await settle();
+      view.unmount();
+      await settle(40);
+      const unchanged = after(() => undefined);
+      const lines = after(() => {
+        plan.current = request({ settleTimeoutMs: 400 });
+      });
+      stop();
+      return { unchanged, lines };
+    };
+
+    const withNone = () => {
+      const source = box(1);
+      let stop = (): void => undefined;
+      const view = render(KeptEffect, {
+        read: () => source.current,
+        rooted: (ending: () => void): void => {
+          stop = ending;
+        }
+      });
+      flushSync();
+      view.unmount();
+      flushSync();
+      const lines = after(() => {
+        source.current = 2;
+      });
+      stop();
+      return lines;
+    };
+
+    const line =
+      process.env['NODE_ENV'] === 'production'
+        ? 'warn: https://svelte.dev/e/derived_inert'
+        : expect.stringMatching(/^warn: %c\[svelte\] derived_inert/);
+    expect(
+      { request: await withRequest(), none: withNone() },
+      'nothing until the source moves, then Svelte’s one line, with a request or without'
+    ).toEqual({ request: { unchanged: [], lines: [line] }, none: [line] });
+  }, 10_000);
 });
