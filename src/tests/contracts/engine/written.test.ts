@@ -6,8 +6,9 @@
  * landing of `C5-C8` (`CW1`), and the edge of what that row excludes (`CW2`).
  *
  * **Public, which is why this is not `C5-C6`.** That row's population is the
- * reach arm's, and it goes through seams no consumer has. Everything here is
- * built from `NostrApp`, `useReq` and the relay's wire.
+ * reach arm's, and it goes through seams no consumer has. Everything here but
+ * the control of `CW2`, which has no library in it, is built from `NostrApp`,
+ * `useReq` and the relay's wire.
  *
  * **`npm test` runs both again with `NODE_ENV=production`**, since a build's
  * console is not a development one's. `CW2` is what says that run is that build.
@@ -446,9 +447,10 @@ describe('C5: what a consumer’s console sees', () => {
     // is one.** One root of the consumer's own holds a request, and one holds
     // only an `$effect`, each past the component whose `$derived` it reads. The
     // source changes, and the flush that follows writes one line either way, so
-    // the line is not the request's. Which line is read too: only Svelte's
-    // production branch writes the bare URL, and a run that says it is production
-    // and is not fails here rather than passing `CW1` under the wrong build.
+    // the line needs no request. That is all the second says: not which read
+    // wrote the first's. Which line is read too: only Svelte's production branch
+    // writes the bare URL, and a run that says it is production and is not fails
+    // here rather than passing `CW1` under the wrong build.
     const after = (change: () => void): readonly string[] => {
       const from = watch.reading().written.length;
       change();

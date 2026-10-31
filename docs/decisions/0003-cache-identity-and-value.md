@@ -83,9 +83,10 @@ landed as nobody re-read it.** The site is `safely(() => getOpts().live) ?? fals
 it sits inside a **published getter**, so a `live` whose getter throws would throw at whoever reads
 `activity` rather than being refused — and the descriptor half of `live` still refuses that same
 value by name on `state.error`. A released handle does not ask at all: reading `live` runs the plan
-of a consumer that has gone, so it answers with the last `live` it read (`C5-C8`). Everything the
-request is _made of_ comes off the normalized descriptor. This paragraph said "the only thing the
-rest accepts" while the engine still read the caller's raw `retain` and `live` elsewhere.
+of a consumer that has gone, so it answers with the last `live` it observed, by the options being
+built or by `activity` (`C5-C8`). Everything the request is _made of_ comes off the normalized
+descriptor. This paragraph said "the only thing the rest accepts" while the engine still read the
+caller's raw `retain` and `live` elsewhere.
 
 What replaces the tally is not a shorter tally but the rule 0005 states at `B4-C6`, which is this
 record's too rather than a second one: **every read of the caller's object is classified — guarded,
