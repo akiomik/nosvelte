@@ -309,17 +309,19 @@ describe('C5: what a consumer’s console sees', () => {
       return { reading, left: readingOf(held), answer, asked: asked(server) };
     };
 
-    // **The `live` a kept handle goes on saying is the last one it read**, so
-    // the plan changes between the options being built and the consumer going,
-    // and it goes in the tick the change was read in. The other way round, with
-    // `activity` never read, it is the one the options were built from.
-    const changed = async () => {
+    // **A kept handle goes on saying what a read would have said as it went**,
+    // which is `A12-C5`'s last value observed, and the handle's rather than the
+    // consumer's. So the plan changes with the consumer going in the tick
+    // `activity` read the change; and the change is built before it goes, with
+    // `activity` last read before that; and `activity` is never read at all.
+    const changed = async (built: boolean) => {
       const plan = box(request({ settleTimeoutMs: 30_000 }));
       const { server, consumer, held } = mounted(() => plan.current);
       await subscription(server, '-b:', 1);
       const before = held.activity;
       plan.current = live(30_000);
-      const read = held.activity;
+      if (built) flushSync();
+      const read = built ? 'not read' : held.activity;
       await unmount(consumer);
       return { before, read, left: held.activity };
     };
@@ -369,7 +371,8 @@ describe('C5: what a consumer’s console sees', () => {
     const readings: Record<string, unknown> = {};
     for (const path of PATHS) readings[path.name] = await run(path);
     const leftEarly = await early();
-    const leftChanged = await changed();
+    const leftChanged = await changed(false);
+    const leftBuilt = await changed(true);
     const leftUnread = await unread();
     const leftOutlived = await outlived();
     const placed = new Set<string>([
@@ -391,6 +394,7 @@ describe('C5: what a consumer’s console sees', () => {
         readings,
         leftEarly,
         leftChanged,
+        leftBuilt,
         leftUnread,
         leftOutlived
       },
@@ -418,6 +422,7 @@ describe('C5: what a consumer’s console sees', () => {
         asked: []
       },
       leftChanged: { before: 'refreshing', read: 'live', left: 'live' },
+      leftBuilt: { before: 'refreshing', read: 'not read', left: 'live' },
       leftUnread: 'live',
       leftOutlived: {
         reading: settled('idle').reads,

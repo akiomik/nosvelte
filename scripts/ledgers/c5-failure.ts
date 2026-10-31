@@ -80,7 +80,7 @@ const HOISTED = '  return watchConsole();\n';
 export default {
   name: 'c5-failure',
   subject:
-    '`C5-C3`, `C5-C5`, `C5-C6`, `C5-C7` and `C5-C8` (what a request reports when an attempt throws, and what the library writes to the console): their landings, `TH1`, `TH2`, `RA2`, `TH3` and `CW1`, and `TH4` beside them.',
+    '`C5-C3`, `C5-C5`, `C5-C6`, `C5-C7` and `C5-C8` (what a request reports when an attempt throws, and what the library writes to the console): their landings, `TH1`, `TH2`, `RA1`, `TH3` and `CW1`, and `TH4` beside them.',
   files: [
     'src/tests/contracts/engine/thrown.test.ts',
     'src/tests/contracts/engine/reach.test.ts',
@@ -493,6 +493,29 @@ export default {
           file: STREAMED,
           from: ACTIVITY,
           to: "      return deriveActivity(asked, query.fetchStatus === 'fetching');\n"
+        }
+      ]
+    },
+    {
+      id: 'C8-the-options-stop-writing-once-read',
+      arm: 'CW1',
+      describe:
+        'a released handle says what the consumer last read, older than the plan it went with',
+      edits: [
+        {
+          file: STREAMED,
+          from: '  let lastLive = false;\n',
+          to: '  let lastLive = false;\n  let read = false;\n'
+        },
+        {
+          file: STREAMED,
+          from: '    lastLive = descriptor?.live ?? false;\n',
+          to: '    if (!read) lastLive = descriptor?.live ?? false;\n'
+        },
+        {
+          file: STREAMED,
+          from: LIVE_READ,
+          to: '      if (!released) {\n        lastLive = safely(() => getOpts().live) ?? false;\n        read = true;\n      }\n'
         }
       ]
     },
