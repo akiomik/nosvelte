@@ -913,9 +913,9 @@ export function createNostrContext(options: {
     // Revoke first: from this instant no request can reach the client, so
     // nothing downstream has to ask whether it is still alive. Then cancel what
     // is running — and cancel it *as a disposal*, so a `refresh()` still in
-    // flight is rejected with `provider-disposed` rather than with the generic
-    // abandonment, which is what makes that code a fact about the owner rather
-    // than about the call. The client is disposed last, where nothing can
+    // flight resolves `cancelled` for `provider-disposed` rather than for the
+    // generic abandonment, which is what makes that reason a fact about the
+    // owner rather than about the call. The client is disposed last, where nothing can
     // observe it: `lease.ts` says why a guard on a shared object cannot replace
     // this ordering.
     ownedTransport?.revoke();

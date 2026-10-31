@@ -73,7 +73,7 @@ export function createOwnedQueryClient(
    *
    * **Ordering, and it is a contract rather than a convenience.** The provider
    * disposes as one linearised operation — revoke, then cancel *as a disposal*
-   * so a `refresh()` in flight is rejected with `provider-disposed`, then
+   * so a `refresh()` in flight resolves `cancelled` for `provider-disposed`, then
    * release the cache — and for one round the cache's release lived in its own
    * `$effect` and ran first. Nothing said so while the arms handed the hook a
    * client of their own: the query was on a cache nobody tore down, so the

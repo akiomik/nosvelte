@@ -3157,11 +3157,11 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // once the request path stopped holding a client it had no caller left.
       //
       // **The call that reaches here is one made *after* the teardown.** A
-      // `refresh()` already in flight when the provider goes away is rejected by
-      // step 2 of the linearisation — its attempt is abandoned *as a disposal* —
-      // rather than by this line, so for a round this branch had no witness at
-      // all and a mutation that took it away killed nothing (`expected: RM4 /
-      // actual: (none)`, measured). `RM8` drives both now.
+      // `refresh()` already in flight when the provider goes away is answered
+      // `cancelled` by step 2 of the linearisation — its attempt is abandoned
+      // *as a disposal* — rather than by this line, so for a round this branch
+      // had no witness at all and a mutation that took it away killed nothing
+      // (`expected: RM4 / actual: (none)`, measured). `RM8` drives both now.
       //
       // **And the caller-owned client is not this event.** They were one
       // condition, so a low-level caller who disposed their own client got

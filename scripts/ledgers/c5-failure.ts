@@ -92,7 +92,7 @@ const REFRESH_GONE =
 export default {
   name: 'c5-failure',
   subject:
-    '`C5-C3`, `C5-C5`, `C5-C6`, `C5-C7`, `C5-C8`, `C5-C9` and `C5-C10` (what a request reports when an attempt throws, and what the library writes to the console): their landings, `TH1`, `TH2`, `RA1`, `TH3` and `CW1`, and `TH4` beside them.',
+    '`C5-C3`, `C5-C5`, `C5-C6`, `C5-C7`, `C5-C8`, `C5-C9` and `C5-C10` (what a request reports when an attempt throws, and what the library writes to the console): their landings, `TH1`, `TH2`, `RA1`, `TH3`, `CW1`, `CW3` and `RL4`, and `TH4` and `CW2` beside them.',
   files: [
     'src/tests/contracts/engine/thrown.test.ts',
     'src/tests/contracts/engine/reach.test.ts',
@@ -810,6 +810,30 @@ export default {
           file: STREAMED,
           from: TOLD,
           to: '    queueMicrotask(() => {\n      providerGone = true;\n    });\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-a-last-read-as-the-provider-goes',
+      arm: 'CW3',
+      describe: 'the listener takes a last `live` off the plan, in the teardown itself',
+      edits: [
+        {
+          file: STREAMED,
+          from: TOLD,
+          to: '    providerGone = true;\n    lastLive = safely(() => getOpts().live) ?? false;\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-the-events-go-with-the-provider',
+      arm: 'CW3',
+      describe: 'the state past the provider holds nothing of what it had settled on',
+      edits: [
+        {
+          file: STREAMED,
+          from: '      const result = deriveState(\n        {\n          data: query.data,\n',
+          to: '      const result = deriveState(\n        {\n          data: providerGone && query.data !== undefined ? { ...query.data, entries: new Map() } : query.data,\n'
         }
       ]
     },

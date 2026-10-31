@@ -17,10 +17,12 @@
  * Port band 10580-10599.
  */
 import { render } from '@testing-library/svelte';
+import type Nostr from 'nostr-typedef';
 import { flushSync, mount, unmount } from 'svelte';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
+import type { NostrContext } from '$lib/v1/context.svelte.js';
 import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
 import { REQ_ERROR_CODES, type ReqErrorCode } from '$lib/v1/reqerror.js';
 
@@ -28,7 +30,8 @@ import DerivedRequest from './fixtures/DerivedRequest.svelte';
 import KeptEffect from './fixtures/KeptEffect.svelte';
 import KeptRequest from './fixtures/KeptRequest.svelte';
 import { NOTHING_WRITTEN } from './helpers/console.js';
-import { respondWithEose } from './helpers/relay.js';
+import { leaseOf, respondWithEose } from './helpers/relay.js';
+import { signed } from './helpers/request.js';
 import { box } from './helpers/runes.svelte.js';
 
 vi.unmock('svelte');
@@ -241,7 +244,7 @@ describe('C5: what a consumer’s console sees', () => {
     // The Error is one object at all of them, on the state and in the diagnostics.
     //
     // **The population is checked against the code list**, so a code added to
-    // the library is placed here or named as out of a consumer's reach.
+    // the library is placed here or named as none of these paths'.
     const run = async (path: Path) => {
       const url = nextUrl();
       const server = new WS(url, { jsonProtocol: true });
@@ -585,6 +588,12 @@ describe('C5: what a consumer’s console sees', () => {
     // descriptor. The relay is not asked, which is the wire's half of "no
     // attempt"; the state not moving is the other, since an attempt on a revoked
     // capability fails rather than reaching a relay.
+    //
+    // **Counted from the revocation itself, so the teardown is inside the
+    // reading.** A listener on the lease is the one anchor for that instant,
+    // and it is taken before any consumer exists, so it runs ahead of theirs. A
+    // plan changed in the tick the provider goes is flushed before the teardown
+    // starts, and that read is the provider's still.
     let reads = 0;
     let fields = 0;
 
@@ -610,6 +619,7 @@ describe('C5: what a consumer’s console sees', () => {
       readonly before?: ReqPlan;
       readonly together?: boolean;
       readonly atOnce?: boolean;
+      readonly holding?: Nostr.Event;
     }
 
     const changed = (): ReqPlan => request({ filters: [{ kinds: [2] }], settleTimeoutMs: 300 });
@@ -631,6 +641,11 @@ describe('C5: what a consumer’s console sees', () => {
         from: request({ settleTimeoutMs: 300 }),
         answers: true,
         beside: true
+      },
+      'holding an event': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        holding: signed('kept')
       },
       'with the plan changed in the tick it went': {
         from: request({ settleTimeoutMs: 300 }),
@@ -663,6 +678,7 @@ describe('C5: what a consumer’s console sees', () => {
       let handle: ReqHandle | undefined;
       let other: ReqHandle | undefined;
       const stops: (() => void)[] = [];
+      const atRevocation = { reads: 0, fields: 0 };
       const view = render(KeptRequest, {
         relays: [url],
         plan: () => {
@@ -678,6 +694,12 @@ describe('C5: what a consumer’s console sees', () => {
         },
         direct: way.direct ?? false,
         watched: way.watched ?? false,
+        ready: (context: NostrContext): void => {
+          leaseOf(context).onRevoke(() => {
+            atRevocation.reads = reads;
+            atRevocation.fields = fields;
+          });
+        },
         ...(way.beside === true
           ? {
               beside: (kept: ReqHandle): void => {
@@ -687,13 +709,21 @@ describe('C5: what a consumer’s console sees', () => {
           : {})
       });
       const held = handle as unknown as ReqHandle;
-      if (way.answers) respondWithEose(server, await subscription(server, '-b:', 1));
+      const contents = (): readonly string[] =>
+        (held.state as { events?: readonly Nostr.Event[] }).events?.map(({ id }) => id) ?? [];
+      if (way.answers) {
+        const named = await subscription(server, '-b:', 1);
+        if (way.holding !== undefined) server.send(['EVENT', named, way.holding]);
+        respondWithEose(server, named);
+      }
       await settle();
       if (way.before !== undefined) {
         plan.current = way.before;
         await settle(40);
       }
       const wire = asked(server).length;
+      const kept = [contents()];
+      const from = watch.reading().written.length;
       if (way.together === true) plan.current = changed();
       view.unmount();
       const readBefore = reads;
@@ -701,25 +731,26 @@ describe('C5: what a consumer’s console sees', () => {
       const readAtOnce = reads - readBefore;
       await settle(40);
       const left = readingOf(held);
+      kept.push(contents());
       if (other !== undefined) (stops.pop() as () => void)();
-      const from = watch.reading().written.length;
-      reads = 0;
-      fields = 0;
 
       plan.current = changed();
       flushSync();
       await settle(40);
       const moved = readingOf(held);
+      kept.push(contents());
       const answer = await answerOf(held.refresh());
       await settle(40);
       const after = readingOf(held);
+      kept.push(contents());
 
       const outcome = {
         left,
         moved: JSON.stringify([moved, after]) !== JSON.stringify([left, left]),
+        kept,
         answer,
-        planRead: reads,
-        fieldRead: fields,
+        planRead: reads - atRevocation.reads,
+        fieldRead: fields - atRevocation.fields,
         asked: asked(server).length - wire,
         written: watch.reading().written.slice(from),
         ...(other === undefined ? {} : { beside: await answerOf(other.refresh()) }),
@@ -733,7 +764,14 @@ describe('C5: what a consumer’s console sees', () => {
     const seen: Record<string, unknown> = {};
     for (const [name, way] of Object.entries(WAYS)) seen[name] = await outlast(way);
 
-    const quiet = { moved: false, planRead: 0, fieldRead: 0, asked: 0, written: [] };
+    const quiet = {
+      moved: false,
+      kept: [[], [], [], []],
+      planRead: 0,
+      fieldRead: 0,
+      asked: 0,
+      written: []
+    };
     const notAsking = {
       status: 'loading',
       code: undefined,
@@ -756,6 +794,14 @@ describe('C5: what a consumer’s console sees', () => {
         left,
         answer: gone,
         beside: 'not-started released'
+      },
+      'holding an event': {
+        ...quiet,
+        left,
+        answer: gone,
+        kept: Array.from({ length: 4 }, () => [
+          (WAYS['holding an event']?.holding as Nostr.Event).id
+        ])
       },
       'with the plan changed in the tick it went': running(),
       'asked in the tick it went': { ...quiet, left, answer: gone, atOnce: gone, readAtOnce: 0 },

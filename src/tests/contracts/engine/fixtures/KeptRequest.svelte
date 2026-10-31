@@ -7,13 +7,16 @@
    * `mounted` holds, so the provider outlives the consumer whose handle is kept.
    * Given `rooted`, the consumer is {@link RootedRequest}, whose request outlives
    * the component and, unmounted whole, the provider. `beside` puts a second on
-   * the same entry, whose `rooted` comes last, and `contexts` is handed what a
-   * consumer under this entry would see.
+   * the same entry, whose `rooted` comes last, `contexts` is handed what a
+   * consumer under this entry would see, and `ready` is handed the provider's
+   * context before any consumer exists.
    */
+  import type { NostrContext } from '$lib/v1/context.svelte.js';
   import { NostrApp, type ReqHandle, type ReqPlan } from '$lib/v1/index.js';
 
   import ContextReader from './ContextReader.svelte';
   import DerivedRequest from './DerivedRequest.svelte';
+  import ProviderReader from './ProviderReader.svelte';
   import RootedRequest from './RootedRequest.svelte';
 
   interface Props {
@@ -26,6 +29,7 @@
     watched?: boolean;
     beside?: (request: ReqHandle) => void;
     contexts?: (read: Map<unknown, unknown>) => void;
+    ready?: (context: NostrContext) => void;
   }
 
   let {
@@ -37,11 +41,15 @@
     direct = false,
     watched = false,
     beside,
-    contexts
+    contexts,
+    ready
   }: Props = $props();
 </script>
 
 <NostrApp {relays}>
+  {#if ready !== undefined}
+    <ProviderReader {ready} />
+  {/if}
   {#if contexts !== undefined}
     <ContextReader read={contexts} />
   {/if}
