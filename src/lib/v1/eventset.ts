@@ -120,18 +120,18 @@ export type LegEnd = { readonly kind: 'ended'; readonly error: RelayLegError | u
  * the two stores a presentation decision as a fact. That is the same argument
  * {@link IncompleteCauses} is built on, applied one layer earlier.
  *
- * `refused` is deliberately **not** among the causes here. A refusal is already
- * on the record, per attempt and per relay, and {@link completionOf} reads it
- * there — producing it twice would be two sources for one claim, which is the
- * shape this file keeps removing.
+ * `refused` is among the causes here, and it is read off the table like the
+ * rest. The refusals on the record, per attempt and per relay, are what was
+ * told, which is a different claim: a relay that answered and then closed is
+ * `complete`, so what it said is on the record and is no cause (`A5-C29`).
  */
 export type BacklogEnd =
   | { readonly kind: 'complete' }
   | {
       readonly kind: 'incomplete';
       /**
-       * Non-empty. `timeout`, `verification-timeout` and/or `ended`; see the
-       * note above about `refused`.
+       * Non-empty. `timeout`, `verification-timeout`, `ended` and/or `refused`;
+       * see the note above about `refused`.
        */
       readonly causes: IncompleteCauses;
       /** The transport failure behind an `ended` relay, when there was one to name. */

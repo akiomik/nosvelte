@@ -1737,9 +1737,10 @@ consumer decides what to do next by reading the whole array**, not by switching 
 
 **The result is a set, not a reason.** With several relays a timer can fire while another relay is
 already gone, and reporting one of those two stores a presentation decision as a fact — the argument
-0003's `IncompleteCauses` is built on, applied one layer earlier. `refused` is deliberately not
-among the causes derived here: a refusal is already recorded on the value, per attempt and per
-relay, and deriving it twice would be two sources for one claim.
+0003's `IncompleteCauses` is built on, applied one layer earlier. `refused` is derived here like the
+rest, from the relay's state. The refusals recorded on the value, per attempt and per relay, are
+what was told, which is a different claim: a relay that answered and then closed adds to that record
+and is no cause.
 
 The same asymmetry as the forward table applies to a relay that was terminal before the request
 began, and it applies to **every** request rather than only a live one: the backlog of a request

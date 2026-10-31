@@ -285,17 +285,15 @@ function nextPhase<Phase extends RelayPhase | BackwardPhase>(
  *
  * There is no setter beside it, and that is the point. A rule the writers merely
  * called left each of them free to keep a habit of its own — a special case
- * before the call — and a reading of the rule could not see it: a writer that
- * let `refused` through over `complete` passed every arm while the rule's cells
- * stayed right, because two of the backward table's determined states derive
- * nothing in the outcome — neither `complete` nor `refused` adds a cause to
- * {@link BacklogEnd}, the refusal being on the record already — so a table that
- * let one overwrite the other is the same table to every answer. **Out of the
- * closure so that the write can be read cell by cell** (`A5-C26`), which is the
- * only reading of a table that tells that table apart — and {@link isPhaseTable} is what
- * says the attempt's own tables are tables of this write rather than copies of
- * it, since a table built by hand that copied the rule but for that one cell
- * passed every arm too.
+ * before the call — and a reading of the rule could not see it: while `refused`
+ * added no cause to {@link BacklogEnd}, a writer that let it through over
+ * `complete` passed every arm while the rule's cells stayed right. It changes
+ * the answer now (`A5-C29`), and a cell no answer reads would pass the same way.
+ * **Out of the closure so that the write can be read cell by cell** (`A5-C26`),
+ * which is the only reading of a table that tells such a table apart — and
+ * {@link isPhaseTable} is what says the attempt's own tables are tables of this
+ * write rather than copies of it, since a table built by hand that copied the
+ * rule but for that one cell passed every arm too.
  */
 export interface PhaseTable<Phase extends RelayPhase | BackwardPhase> {
   get(url: string): Phase | undefined;

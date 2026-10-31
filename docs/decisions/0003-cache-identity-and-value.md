@@ -541,8 +541,8 @@ axis exists so that a consumer can act on each rather than choose between them.
 socket are both true at once with more than one relay, so storing one of them makes the record
 decide which to show — the argument this record already makes about `primaryCause`, one layer
 earlier. The record therefore stores `complete`, or `incomplete` with the causes the per-relay table
-derived. `refused` is not among those: it is already on the record, per attempt and per relay, and a
-second source for one claim is how two readers come to disagree.
+derived, `refused` among them. The refusals beside it, per attempt and per relay, are what was told:
+that a relay said so, not that the saying determined it.
 
 **So the value carries a record per leg, not a leg table and a flat list.** The split above is a
 rule about where a signal belongs, and a `Partial<Record<leg, end>>` beside `readonly Refusal[]`
