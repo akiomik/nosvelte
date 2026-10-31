@@ -123,7 +123,8 @@ export type LegEnd = { readonly kind: 'ended'; readonly error: RelayLegError | u
  * `refused` is among the causes here, and it is read off the table like the
  * rest. The refusals on the record, per attempt and per relay, are what was
  * told, which is a different claim: a relay that answered and then closed is
- * `complete`, so what it said is on the record and is no cause (`A5-C29`).
+ * `complete`, so what it said is on the record while it is still routed, and is
+ * no cause (`A5-C29`).
  */
 export type BacklogEnd =
   | { readonly kind: 'complete' }

@@ -1740,7 +1740,7 @@ already gone, and reporting one of those two stores a presentation decision as a
 0003's `IncompleteCauses` is built on, applied one layer earlier. `refused` is derived here like the
 rest, from the relay's state. The refusals recorded on the value, per attempt and per relay, are
 what was told, which is a different claim: a relay that answered and then closed adds to that record
-and is no cause.
+while the refusal is still routed, and is no cause.
 
 The same asymmetry as the forward table applies to a relay that was terminal before the request
 began, and it applies to **every** request rather than only a live one: the backlog of a request
