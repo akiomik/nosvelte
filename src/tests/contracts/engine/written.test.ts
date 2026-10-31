@@ -3,14 +3,15 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * What a consumer's console sees of a failure and of a handle it kept: the
- * landing of `C5-C8` (`CW1`), and the edge of what that row excludes (`CW2`).
+ * landing of `C5-C8` (`CW1`), the edge of what that row excludes (`CW2`), and
+ * the landing of `C5-C9` (`CW3`).
  *
  * **Public, which is why this is not `C5-C6`.** That row's population is the
  * reach arm's, and it goes through seams no consumer has. Everything here but
  * the control of `CW2`, which has no library in it, is built from `NostrApp`,
  * `useReq` and the relay's wire.
  *
- * **`npm test` runs both again with `NODE_ENV=production`**, since a build's
+ * **`npm test` runs all three again with `NODE_ENV=production`**, since a build's
  * console is not a development one's. `CW2` is what says that run is that build.
  *
  * Port band 10580-10599.
@@ -215,7 +216,7 @@ const PATHS: readonly Path[] = [
   }
 ];
 
-/** The codes no consumer reaches, each for the reason `C5-C8` gives. */
+/** The codes none of `PATHS` reach, each for the reason `C5-C8` gives. */
 const NOT_PUBLIC: readonly ReqErrorCode[] = [
   'accumulator-contract',
   'unspecified',
@@ -442,46 +443,62 @@ describe('C5: what a consumer’s console sees', () => {
     });
   }, 30_000);
 
-  it('CW2: a `$derived` read after its component went is Svelte’s write, with a request there or none, in the form the build gives it', async () => {
+  it('CW2: with the provider standing, a plan over a `$derived` that went is read at the next read and a live one is followed, and Svelte’s line says which build ran', async () => {
     // **The other edge of `C5-C8`'s exclusion, and what shows a production run
-    // is one.** One root of the consumer's own holds a request, and one holds
-    // only an `$effect`, each past the component whose `$derived` it reads. The
-    // source changes, and the flush that follows writes one line either way, so
-    // the line needs no request. That is all the second says: not which read
-    // wrote the first's. Which line is read too: only Svelte's production branch
-    // writes the bare URL, and a run that says it is production and is not fails
-    // here rather than passing `CW1` under the wrong build.
-    const after = (change: () => void): readonly string[] => {
+    // is one.** The provider stands and the consumer's root is kept, so the
+    // request is alive and has to go on reading its plan: a source that stays
+    // alive is followed. Nothing tells it that a plan's `$derived` went with the
+    // component, so the first read of it writes Svelte's line, and that is
+    // `activity` and not the flush. The same read with no library is the last
+    // case. Which line is read too: only Svelte's production branch writes the
+    // bare URL, and a run that says it is production and is not fails here
+    // rather than passing `CW1` under the wrong build.
+    //
+    // **And the other edge of `C5-C9`'s.** A request built after its provider
+    // went has never been told anything it could stop on, so it runs once and
+    // publishes `unspecified`. That is #202's to decide, and this says what it
+    // does until it is.
+    const during = (change: () => void): readonly string[] => {
       const from = watch.reading().written.length;
       change();
-      flushSync();
       return watch.reading().written.slice(from);
     };
 
-    const withRequest = async () => {
+    const standing = async (direct: boolean) => {
       const url = nextUrl();
       const server = new WS(url, { jsonProtocol: true });
       const plan = box(request({ settleTimeoutMs: 300 }));
+      let handle: ReqHandle | undefined;
       let stop = (): void => undefined;
       const view = render(KeptRequest, {
         relays: [url],
         plan: () => plan.current,
         mounted: true,
-        seen: (): void => undefined,
+        seen: (kept: ReqHandle): void => {
+          handle = kept;
+        },
         rooted: (ending: () => void): void => {
           stop = ending;
-        }
+        },
+        direct
       });
       respondWithEose(server, await subscription(server, '-b:', 1));
       await settle();
+      await view.rerender({ mounted: false });
+      await settle(40);
+      const flushed = during(() => {
+        plan.current = request({ filters: [{ kinds: [2] }], settleTimeoutMs: 300 });
+        flushSync();
+      });
+      const read = during(() => {
+        void (handle as unknown as ReqHandle).activity;
+      });
+      await settle(40);
+      const wire = asked(server).filter((name) => name.includes('-b:')).length;
+      stop();
       view.unmount();
       await settle(40);
-      const unchanged = after(() => undefined);
-      const lines = after(() => {
-        plan.current = request({ settleTimeoutMs: 400 });
-      });
-      stop();
-      return { unchanged, lines };
+      return { flushed, read, wire };
     };
 
     const withNone = () => {
@@ -496,11 +513,48 @@ describe('C5: what a consumer’s console sees', () => {
       flushSync();
       view.unmount();
       flushSync();
-      const lines = after(() => {
+      const lines = during(() => {
         source.current = 2;
+        flushSync();
       });
       stop();
       return lines;
+    };
+
+    const builtAfter = async () => {
+      const url = nextUrl();
+      const server = new WS(url, { jsonProtocol: true });
+      let contexts = new Map<unknown, unknown>();
+      const view = render(KeptRequest, {
+        relays: [url],
+        plan: () => ({ kind: 'deferred' }),
+        mounted: false,
+        seen: () => undefined,
+        contexts: (read: Map<unknown, unknown>): void => {
+          contexts = read;
+        }
+      });
+      flushSync();
+      view.unmount();
+      await settle(40);
+      let handle: ReqHandle | undefined;
+      const late = mount(DerivedRequest, {
+        target: document.body,
+        context: contexts,
+        props: {
+          plan: () => request({ settleTimeoutMs: 300 }),
+          seen: (kept: ReqHandle): void => {
+            handle = kept;
+          }
+        }
+      });
+      await settle(40);
+      const held = handle as unknown as ReqHandle;
+      const { status, code } = readingOf(held);
+      const answer = await answerOf(held.refresh());
+      await unmount(late);
+      await settle(40);
+      return { status, code, answer, wire: asked(server).length };
     };
 
     const line =
@@ -508,8 +562,215 @@ describe('C5: what a consumer’s console sees', () => {
         ? 'warn: https://svelte.dev/e/derived_inert'
         : expect.stringMatching(/^warn: %c\[svelte\] derived_inert/);
     expect(
-      { request: await withRequest(), none: withNone() },
-      'nothing until the source moves, then Svelte’s one line, with a request or without'
-    ).toEqual({ request: { unchanged: [], lines: [line] }, none: [line] });
+      {
+        dead: await standing(false),
+        alive: await standing(true),
+        none: withNone(),
+        late: await builtAfter()
+      },
+      'the dead one at the read and asking nothing, the live one followed in silence, and the same line with no library'
+    ).toEqual({
+      dead: { flushed: [], read: [line], wire: 1 },
+      alive: { flushed: [], read: [], wire: 2 },
+      none: [line],
+      late: { status: 'error', code: 'unspecified', answer: `rejected ${OUTLIVED}`, wire: 0 }
+    });
   }, 10_000);
+
+  // @contracts C5-C9
+  it('CW3: a request kept past `NostrApp` stops reading its plan, however it read it, and goes on reading as it did', async () => {
+    // **The plan changes after the provider has gone, and nothing follows it.**
+    // Each way below reads the plan differently, so that one that still asks
+    // has a way to be seen: `reads` counts the plan and `fields` a field of its
+    // descriptor. The relay is not asked, which is the wire's half of "no
+    // attempt"; the state not moving is the other, since an attempt on a revoked
+    // capability fails rather than reaching a relay.
+    let reads = 0;
+    let fields = 0;
+
+    const countingAField = (): ReqPlan =>
+      ({
+        kind: 'request',
+        descriptor: {
+          filters: [{ kinds: [1] }],
+          settleTimeoutMs: 300,
+          get live() {
+            fields += 1;
+            return false;
+          }
+        }
+      }) as ReqPlan;
+
+    interface Way {
+      readonly from: ReqPlan;
+      readonly answers: boolean;
+      readonly direct?: boolean;
+      readonly watched?: boolean;
+      readonly beside?: boolean;
+      readonly before?: ReqPlan;
+      readonly together?: boolean;
+      readonly atOnce?: boolean;
+    }
+
+    const changed = (): ReqPlan => request({ filters: [{ kinds: [2] }], settleTimeoutMs: 300 });
+
+    const WAYS: Record<string, Way> = {
+      'through the `$derived`': { from: request({ settleTimeoutMs: 300 }), answers: true },
+      'from a source that stays alive': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        direct: true
+      },
+      'with an `$effect` that read `activity`': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        watched: true
+      },
+      'with a getter on the descriptor': { from: countingAField(), answers: true, direct: true },
+      'beside another on the entry, which goes first': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        beside: true
+      },
+      'with the plan changed in the tick it went': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        together: true
+      },
+      'asked in the tick it went': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        direct: true,
+        atOnce: true
+      },
+      'not asking': { from: { kind: 'deferred' }, answers: false },
+      'told not to ask before it went': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        before: { kind: 'deferred' }
+      },
+      'refused by the boundary': {
+        from: request({ relays: ['ws://outside.test'] }),
+        answers: false
+      },
+      'still running': { from: live(30_000), answers: false }
+    };
+
+    const outlast = async (way: Way) => {
+      const url = nextUrl();
+      const server = new WS(url, { jsonProtocol: true });
+      const plan = box(way.from);
+      let handle: ReqHandle | undefined;
+      let other: ReqHandle | undefined;
+      const stops: (() => void)[] = [];
+      const view = render(KeptRequest, {
+        relays: [url],
+        plan: () => {
+          reads += 1;
+          return plan.current;
+        },
+        mounted: true,
+        seen: (kept: ReqHandle): void => {
+          handle = kept;
+        },
+        rooted: (ending: () => void): void => {
+          stops.push(ending);
+        },
+        direct: way.direct ?? false,
+        watched: way.watched ?? false,
+        ...(way.beside === true
+          ? {
+              beside: (kept: ReqHandle): void => {
+                other = kept;
+              }
+            }
+          : {})
+      });
+      const held = handle as unknown as ReqHandle;
+      if (way.answers) respondWithEose(server, await subscription(server, '-b:', 1));
+      await settle();
+      if (way.before !== undefined) {
+        plan.current = way.before;
+        await settle(40);
+      }
+      const wire = asked(server).length;
+      if (way.together === true) plan.current = changed();
+      view.unmount();
+      const readBefore = reads;
+      const atOnce = way.atOnce === true ? answerOf(held.refresh()) : undefined;
+      const readAtOnce = reads - readBefore;
+      await settle(40);
+      const left = readingOf(held);
+      if (other !== undefined) (stops.pop() as () => void)();
+      const from = watch.reading().written.length;
+      reads = 0;
+      fields = 0;
+
+      plan.current = changed();
+      flushSync();
+      await settle(40);
+      const moved = readingOf(held);
+      const answer = await answerOf(held.refresh());
+      await settle(40);
+      const after = readingOf(held);
+
+      const outcome = {
+        left,
+        moved: JSON.stringify([moved, after]) !== JSON.stringify([left, left]),
+        answer,
+        planRead: reads,
+        fieldRead: fields,
+        asked: asked(server).length - wire,
+        written: watch.reading().written.slice(from),
+        ...(other === undefined ? {} : { beside: await answerOf(other.refresh()) }),
+        ...(atOnce === undefined ? {} : { atOnce: await atOnce, readAtOnce })
+      };
+      for (const stop of stops) stop();
+      await settle(40);
+      return outcome;
+    };
+
+    const seen: Record<string, unknown> = {};
+    for (const [name, way] of Object.entries(WAYS)) seen[name] = await outlast(way);
+
+    const quiet = { moved: false, planRead: 0, fieldRead: 0, asked: 0, written: [] };
+    const notAsking = {
+      status: 'loading',
+      code: undefined,
+      activity: 'idle',
+      last: undefined,
+      ended: undefined
+    };
+    const gone = `rejected ${OUTLIVED}`;
+    const left = settled('idle').reads;
+    // What an attempt the provider's going caught reads is #202's to decide, and
+    // only that it stays is this row's.
+    const running = (): object => ({ ...quiet, left: expect.anything(), answer: gone });
+    expect(seen, 'the same reading, and no read of the plan, no attempt and no write').toEqual({
+      'through the `$derived`': { ...quiet, left, answer: gone },
+      'from a source that stays alive': { ...quiet, left, answer: gone },
+      'with an `$effect` that read `activity`': { ...quiet, left, answer: gone },
+      'with a getter on the descriptor': { ...quiet, left, answer: gone },
+      'beside another on the entry, which goes first': {
+        ...quiet,
+        left,
+        answer: gone,
+        beside: 'not-started released'
+      },
+      'with the plan changed in the tick it went': running(),
+      'asked in the tick it went': { ...quiet, left, answer: gone, atOnce: gone, readAtOnce: 0 },
+      'not asking': { ...quiet, left: notAsking, answer: 'not-started deferred' },
+      'told not to ask before it went': {
+        ...quiet,
+        left: notAsking,
+        answer: 'not-started deferred'
+      },
+      'refused by the boundary': {
+        ...quiet,
+        left: refused('relay-not-in-scope').reads,
+        answer: 'rejected relay-not-in-scope'
+      },
+      'still running': running()
+    });
+  }, 20_000);
 });

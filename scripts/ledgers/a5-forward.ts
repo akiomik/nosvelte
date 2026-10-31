@@ -71,7 +71,7 @@ const OUTCOME_FOLD =
   "  if (chunk.type === 'settled') return endBacklog(base, chunk.attempt, chunk.end);";
 /** The hook's activity axis, read off the query's fetch status. */
 const ACTIVITY =
-  '      if (!released) lastLive = safely(() => getOpts().live) ?? false;\n' +
+  '      if (!released && !providerGone) lastLive = safely(() => getOpts().live) ?? false;\n' +
   "      return deriveActivity(lastLive, query.fetchStatus === 'fetching');";
 /** The value's rule for a forward leg told it ended: the first end wins. */
 const FIRST_END_WINS = '  if (forward.end !== undefined) return set;\n';

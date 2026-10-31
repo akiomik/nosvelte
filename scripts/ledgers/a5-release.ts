@@ -454,14 +454,14 @@ export default {
       arm: 'RL1',
       describe:
         'the arm’s run on the fake clock with no event, retained without bound, is held up in real time a little past that clock’s budget for what is prompt, a fifth of the library’s default deadline, between the consumer’s teardown and the read after it: the wire reads as it should, and the run is read as held up rather than as prompt — so a close made while it was held up, later than what is prompt, on a clock the fake one does not move, is not read as prompt',
-      edits: HELD_UP('            await consumer.tearDown();\n', 'fake')
+      edits: HELD_UP('\n            await consumer.tearDown();\n', 'fake')
     },
     {
       id: 'C21-the-teardown-read-on-the-real-clock-held-up',
       arm: 'RL1',
       describe:
         'the arm’s run on the real clock with no event, retained without bound, is held up in real time a little past that clock’s budget for what is prompt, half the deadline it gives, between the consumer’s teardown and the read after it: the wire reads as it should, and the run is read as held up rather than as prompt — so a close made while it was held up, later than what is prompt, is not read as prompt',
-      edits: HELD_UP('            await consumer.tearDown();\n', 'real')
+      edits: HELD_UP('\n            await consumer.tearDown();\n', 'real')
     },
     {
       id: 'C21-the-live-leg-asked-again-on-its-name',

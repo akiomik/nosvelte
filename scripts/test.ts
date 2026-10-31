@@ -46,7 +46,7 @@ const { expected: support, faults: supportFaults } = expectedSupport(
 );
 const expected = [...landings, ...support];
 
-const UNDER_PRODUCTION = ['TH3', 'CW1', 'CW2'];
+const UNDER_PRODUCTION = ['TH3', 'CW1', 'CW2', 'CW3'];
 const underProduction = expected.filter(({ id }) => UNDER_PRODUCTION.includes(id));
 
 const directory = mkdtempSync(join(tmpdir(), 'nosvelte-run-'));

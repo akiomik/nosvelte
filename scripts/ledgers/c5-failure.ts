@@ -9,7 +9,9 @@
  * - `C5-C5` on `TH2`, with `TH4` for the one value a rejection is published as;
  * - `C5-C6` on `RA1`, with the supporting arms read after each;
  * - `C5-C7` on `TH3`;
- * - `C5-C8` on `CW1`, with `CW2` for the edge of what it excludes.
+ * - `C5-C8` on `CW1`, with `CW2` for the edge of what it excludes;
+ * - `C5-C9` on `CW3`, with `CW2` for a plan that is still to be followed;
+ * - `C5-C10` on `RL4`.
  *
  * An id begins with the row it is read against, `C<n>-` for `C5-C<n>`, and one
  * beginning `I-` edits an arm's own instrument.
@@ -52,7 +54,8 @@ const QUERY_BUILT = '  const query = createQuery(queryOptions, ownedClient);\n';
 /** The rejection as a `$derived`, as it was before a kept handle was read. */
 const DERIVATION = `${QUERY_BUILT}  const queryRejection = $derived(\n    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined\n  );\n`;
 /** The `live` a released handle answers with. */
-const LIVE_READ = '      if (!released) lastLive = safely(() => getOpts().live) ?? false;\n';
+const LIVE_READ =
+  '      if (!released && !providerGone) lastLive = safely(() => getOpts().live) ?? false;\n';
 /** What `activity` maps through that. */
 const ACTIVITY = "      return deriveActivity(lastLive, query.fetchStatus === 'fetching');\n";
 /** The cleanup that marks the release. */
@@ -76,19 +79,40 @@ const TERMINAL = 'export function terminalFailure(value: ReqError): ReqStateErro
 const SEAM_REFUSED = '    return { read: false };\n';
 /** The watch of `reach.test.ts`, as it is put on. */
 const HOISTED = '  return watchConsole();\n';
+/** The options past the provider. */
+const LAST_OPTIONS = '    if (providerGone && lastOptions !== undefined) return lastOptions;\n';
+/** The options, defaulted here so that the adapter hands the same object on. */
+const DEFAULTED = '    lastOptions = ownedClient().defaultQueryOptions(built) as typeof built;\n';
+/** What the listener on the lease does. */
+const TOLD = '    providerGone = true;\n';
+/** What `refresh()` does past the provider. */
+const REFRESH_GONE =
+  '      if (providerGone) {\n        if (lastPlan?.deferred === true) return NOT_ASKING;\n';
 
 export default {
   name: 'c5-failure',
   subject:
-    '`C5-C3`, `C5-C5`, `C5-C6`, `C5-C7` and `C5-C8` (what a request reports when an attempt throws, and what the library writes to the console): their landings, `TH1`, `TH2`, `RA1`, `TH3` and `CW1`, and `TH4` beside them.',
+    '`C5-C3`, `C5-C5`, `C5-C6`, `C5-C7`, `C5-C8`, `C5-C9` and `C5-C10` (what a request reports when an attempt throws, and what the library writes to the console): their landings, `TH1`, `TH2`, `RA1`, `TH3` and `CW1`, and `TH4` beside them.',
   files: [
     'src/tests/contracts/engine/thrown.test.ts',
     'src/tests/contracts/engine/reach.test.ts',
-    'src/tests/contracts/engine/written.test.ts'
+    'src/tests/contracts/engine/written.test.ts',
+    'src/tests/contracts/engine/release.test.ts'
   ],
   calibration: {
     measured: "one run of each arm's duration in a single Vitest run, plus 1.5 s for the process.",
-    seconds: { TH1: 1.8, TH2: 2.1, TH3: 1.9, TH4: 1.9, RA1: 9.3, RX6: 1.6, CW1: 6.8, CW2: 2.0 }
+    seconds: {
+      TH1: 1.8,
+      TH2: 2.1,
+      TH3: 1.9,
+      TH4: 1.9,
+      RA1: 9.3,
+      RX6: 1.6,
+      CW1: 6.8,
+      CW2: 2.2,
+      CW3: 5.1,
+      RL4: 1.6
+    }
   },
   entries: [
     {
@@ -450,7 +474,7 @@ export default {
         {
           file: STREAMED,
           from: LIVE_READ,
-          to: '      lastLive = safely(() => getOpts().live) ?? false;\n'
+          to: '      if (!providerGone) lastLive = safely(() => getOpts().live) ?? false;\n'
         }
       ]
     },
@@ -487,7 +511,7 @@ export default {
         {
           file: STREAMED,
           from: LIVE_READ,
-          to: '      const asked = released ? lastLive : (safely(() => getOpts().live) ?? false);\n'
+          to: '      const asked = released || providerGone ? lastLive : (safely(() => getOpts().live) ?? false);\n'
         },
         {
           file: STREAMED,
@@ -515,7 +539,7 @@ export default {
         {
           file: STREAMED,
           from: LIVE_READ,
-          to: '      if (!released) {\n        lastLive = safely(() => getOpts().live) ?? false;\n        read = true;\n      }\n'
+          to: '      if (!released && !providerGone) {\n        lastLive = safely(() => getOpts().live) ?? false;\n        read = true;\n      }\n'
         }
       ]
     },
@@ -683,6 +707,129 @@ export default {
           to: ''
         }
       ]
+    },
+    {
+      id: 'C9-the-options-go-on-reading-the-plan',
+      arm: 'CW3',
+      describe:
+        'the options are built past the provider: the plan is read, and a new entry runs an attempt on a revoked capability',
+      edits: [{ file: STREAMED, from: LAST_OPTIONS, to: '' }]
+    },
+    {
+      id: 'C9-the-options-are-a-new-object-to-the-adapter',
+      arm: 'CW3',
+      describe:
+        'the object kept is not the one the adapter saw, so its own defaulting makes a new one past the provider',
+      edits: [{ file: STREAMED, from: DEFAULTED, to: '    lastOptions = built;\n' }]
+    },
+    {
+      id: 'C9-activity-asks-the-plan',
+      arm: 'CW3',
+      describe: '`activity` reads `live` off the plan of a request whose provider has gone',
+      edits: [
+        {
+          file: STREAMED,
+          from: LIVE_READ,
+          to: '      if (!released) lastLive = safely(() => getOpts().live) ?? false;\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-refresh-asks-the-plan',
+      arm: 'CW3',
+      describe: '`refresh()` goes on to read the plan of a request whose provider has gone',
+      edits: [
+        {
+          file: STREAMED,
+          from: REFRESH_GONE,
+          to: '      if (false && providerGone) {\n        if (lastPlan?.deferred === true) return NOT_ASKING;\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-a-plan-not-asking-answers-as-disposed',
+      arm: 'CW3',
+      describe: 'a plan that was not asking loses its answer when the provider goes',
+      edits: [
+        {
+          file: STREAMED,
+          from: '        if (lastPlan?.deferred === true) return NOT_ASKING;\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'C9-a-refused-plan-answers-as-disposed',
+      arm: 'CW3',
+      describe: 'a plan the boundary refused loses its refusal when the provider goes',
+      edits: [
+        {
+          file: STREAMED,
+          from: '        if (lastPlan?.rejection !== undefined) throw lastPlan.rejection;\n',
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'C9-the-plan-kept-is-the-first',
+      arm: 'CW3',
+      describe: 'what `refresh()` answers from is the plan as it was first read',
+      edits: [
+        {
+          file: STREAMED,
+          from: '    lastPlan = { deferred, rejection };\n',
+          to: '    lastPlan ??= { deferred, rejection };\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-the-mark-is-not-a-signal',
+      arm: 'CW3',
+      describe:
+        'the mark moves no reader, so an effect that read the plan keeps it as a dependency and Svelte reads it',
+      edits: [
+        {
+          file: STREAMED,
+          from: '  let providerGone = $state(false);\n',
+          to: '  let providerGone = false;\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-nobody-is-told',
+      arm: 'CW3',
+      describe: 'the listener on the lease marks nothing',
+      edits: [{ file: STREAMED, from: TOLD, to: '    void 0;\n' }]
+    },
+    {
+      id: 'C9-told-a-turn-late',
+      arm: 'CW3',
+      describe: 'the mark moves a turn after the revocation, so a flush between reads the plan',
+      edits: [
+        {
+          file: STREAMED,
+          from: TOLD,
+          to: '    queueMicrotask(() => {\n      providerGone = true;\n    });\n'
+        }
+      ]
+    },
+    {
+      id: 'C9-a-plan-stops-being-followed-as-the-options-are-kept',
+      arm: 'CW2',
+      describe: 'the options stop at the first object, so a provider that stands asks nothing new',
+      edits: [
+        {
+          file: STREAMED,
+          from: LAST_OPTIONS,
+          to: '    if (lastOptions !== undefined) return lastOptions;\n'
+        }
+      ]
+    },
+    {
+      id: 'C10-the-listener-stays-on-the-lease',
+      arm: 'RL4',
+      describe: 'a request gone under a provider that stands is still told when it goes',
+      edits: [{ file: STREAMED, from: '    unwatched?.();\n', to: '' }]
     },
     {
       id: 'I-C8-a-path-dropped',
