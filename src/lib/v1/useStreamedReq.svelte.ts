@@ -1816,19 +1816,39 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * and that nothing is written during a derivation and read from a getter. So
    * it is gone, and this is a function of the query's state alone.
    *
-   * **Derived once per state, because the value it is not true of is the one it
-   * exists for.** Every rejection of the query function is this library's now
+   * **Once per state, because the value it is not true of is the one it exists
+   * for.** Every rejection of the query function is this library's now
    * ({@link rejectsWithOurs}), and the one left is the query library's own: a
    * cancellation that does not revert, which query-core writes to `error`
    * without the query function throwing it. A function called by each reader
    * copied that once per read, so `state.error` was a different object every
-   * time it was read and never `diagnostics.lastError`. A `$derived` is
-   * recomputed whenever the query's status or error moves — error, success,
-   * error with the same object is three states, not a key — so it cannot go
-   * stale the way the memo did, and every reader of one state is handed one
-   * value.
+   * time it was read and never `diagnostics.lastError`. So every reader of one
+   * state is handed one value.
+   *
+   * **A memo again, keyed on the state this time, because a `$derived` cannot
+   * be read after its root.** This was a `$derived`, and one belongs to the
+   * effect that made it. A handle outlives that effect (`A12-C5`), and reading
+   * one then makes Svelte write `derived_inert` to the console, in production
+   * too, on every read of `state` and `diagnostics`, for a request that never
+   * failed: the query adapter rewrites every key on every update, so the
+   * derivation reads as changed with nothing moved (`C5-C8`). The memo removed
+   * above could go stale because its key was the rejected value, so error,
+   * success, error with the same object came back to one key. `errorUpdateCount`
+   * moves on every rejection, which makes those two keys, and what is written
+   * here is a copy of a function of its key rather than a second source for the
+   * fact: the query is read at each read, which is also what `A12-C5` says a
+   * released handle does.
    */
-  const rejectedWith = (): ReqStateError | undefined => queryRejection;
+  let rejection: { source: unknown; count: number; value: ReqStateError } | undefined;
+  const rejectedWith = (): ReqStateError | undefined => {
+    if (query.status !== 'error') return undefined;
+    const source = query.error;
+    const count = query.errorUpdateCount;
+    if (rejection === undefined || rejection.source !== source || rejection.count !== count) {
+      rejection = { source, count, value: terminalFailure(capture(source, 'unspecified')) };
+    }
+    return rejection.value;
+  };
 
   /**
    * The plan the query is running under, as opposed to the one this moment
@@ -1848,6 +1868,18 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * would read the caller's descriptor a second time.
    */
   let planned: RequestPlan = 'open';
+
+  /**
+   * Whether the descriptor the options were last built from is live, for a
+   * reader that may not ask.
+   *
+   * `activity` maps the fetch status through the caller's `live`, and reading
+   * that runs the caller's plan. A plan that reads a `$derived` of its component
+   * is the ordinary one, and once the component has gone that read is Svelte's
+   * `derived_inert` on the console, so a released handle answers from here
+   * (`C5-C8`). Written where the options are built, for {@link planned}'s reason.
+   */
+  let plannedLive = false;
 
   const queryOptions = () => {
     // **This destructure is a read of the caller's object too**, and it runs
@@ -1970,6 +2002,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
         ? 'open'
         : planRequest(descriptor, targets.length);
     planned = plan;
+    plannedLive = descriptor?.live ?? false;
 
     // **Handed the attempt rather than taking one.** This used to call
     // `attempts.begin()` itself, and that made the attempt boundary the *stream
@@ -2767,11 +2800,6 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
   // request at all: the provider built one and nothing installed it. See
   // {@link UseStreamedReqOpts.client}.
   const query = createQuery(queryOptions, ownedClient);
-  // What the query rejected with, derived once per state: {@link rejectedWith}.
-  const queryRejection = $derived(
-    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined
-  );
-
   // **Read once here so that it is read at all.** The query library notifies a
   // subscriber only about properties that subscriber has *touched* — the first
   // read of any property switches the observer from "tell me everything" to
@@ -2866,11 +2894,17 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * runs on every one of those — which would report a release per re-render.
    * This one reads nothing, so Svelte destroys it exactly when the root does.
    *
-   * A plain `let` rather than `$state`: nothing renders from it, and the one
-   * reader is `refresh()`, which a consumer calls from a handler.
+   * **`$effect.pre`, because that one runs as it is declared.** An `$effect`
+   * registers its cleanup when it first runs, after the root has mounted, so a
+   * root torn down before that left this `false` for good, and `refresh()` on
+   * the handle answered `cancelled` rather than `not-started` (`C5-C8`).
+   *
+   * A plain `let` rather than `$state`: nothing renders from it, and its two
+   * readers are `refresh()`, which a consumer calls from a handler, and
+   * `activity`, which reads it for what a released handle may not ask.
    */
   let released = false;
-  $effect(() => () => {
+  $effect.pre(() => () => {
     released = true;
   });
 
@@ -2978,7 +3012,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // inside a **published getter**, so a `live` getter that throws would
       // throw at whoever reads `activity` rather than being refused.
       return deriveActivity(
-        safely(() => getOpts().live) ?? false,
+        released ? plannedLive : (safely(() => getOpts().live) ?? false),
         query.fetchStatus === 'fetching'
       );
     },

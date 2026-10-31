@@ -72,7 +72,7 @@ const OUTCOME_FOLD =
 /** The hook's activity axis, read off the query's fetch status. */
 const ACTIVITY =
   '      return deriveActivity(\n' +
-  '        safely(() => getOpts().live) ?? false,\n' +
+  '        released ? plannedLive : (safely(() => getOpts().live) ?? false),\n' +
   "        query.fetchStatus === 'fetching'\n" +
   '      );';
 /** The value's rule for a forward leg told it ended: the first end wins. */

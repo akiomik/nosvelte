@@ -484,8 +484,8 @@ export default {
       edits: [
         {
           file: 'src/lib/v1/useStreamedReq.svelte.ts',
-          from: '  const rejectedWith = (): ReqStateError | undefined => queryRejection;',
-          to: "  const rejectedWith = (): ReqStateError | undefined =>\n    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined;"
+          from: '    if (rejection === undefined || rejection.source !== source || rejection.count !== count) {',
+          to: '    if (true as boolean) {'
         }
       ]
     },
@@ -497,8 +497,8 @@ export default {
       edits: [
         {
           file: 'src/lib/v1/useStreamedReq.svelte.ts',
-          from: "    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined\n  );",
-          to: "    query.status === 'error' ? terminalFailure(query.error as unknown as ReqError) : undefined\n  );"
+          from: "      rejection = { source, count, value: terminalFailure(capture(source, 'unspecified')) };",
+          to: '      rejection = { source, count, value: terminalFailure(source as unknown as ReqError) };'
         }
       ]
     },
