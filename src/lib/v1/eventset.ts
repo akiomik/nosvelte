@@ -224,7 +224,10 @@ export interface BacklogRecord {
    * being a cause.
    */
   readonly answer: AnswerIdentity;
-  /** This attempt's, and only this attempt's. */
+  /**
+   * This attempt's, and only this attempt's: what its relays said while its
+   * backlog ran, a relay that had already answered among them (`A5-C29`).
+   */
   readonly refusals: readonly Refusal[];
   /**
    * This attempt's refusals that arrived **after** its backlog ended.
@@ -238,13 +241,13 @@ export interface BacklogRecord {
    * the claim that nothing exists, while `ReqDiagnostics.refusals` was empty
    * and the relay had said why.
    *
-   * Kept apart from {@link BacklogRecord.refusals} rather than appended to it,
-   * because the two answer different questions. {@link computeCompletion} reads
-   * the refusals that *prevented* an answer; one that arrives after the answer
-   * is in cannot have prevented it, and counting it would relabel a complete
-   * answer as incomplete — which is what `B10-C2` refuses one leg over. So:
-   * published, because the relay said it, and not a cause, because it caused
-   * nothing.
+   * Kept apart from {@link BacklogRecord.refusals}, which closes when the
+   * backlog ends. Neither list makes an answer `refused`: the per-relay table
+   * does, read where the end is handed over (`backwardEnd` in `machine.ts`). A
+   * refusal that arrives after the answer is in cannot have prevented it, and
+   * counting it would relabel a complete answer as incomplete — which is what
+   * `B10-C2` refuses one leg over. So: published, because the relay said it, and
+   * not a cause, because it caused nothing.
    */
   readonly late: readonly Refusal[];
   /**
@@ -737,19 +740,16 @@ function computeCompletion(backlog: BacklogRecord): Completion {
   // live subscription was later refused — a complete set relabelled by an event
   // that could not have removed anything from it.
   //
-  // The leg filter that used to stand here is gone because the shape now says
-  // it: this record only ever holds refusals aimed at its own attempt's
-  // backward leg, so there is nothing to filter out. A `set.refusals.length > 0`
-  // written against the old flat array was the same line with the filter
-  // dropped, and it read as a simplification.
   const present = new Set<IncompleteCause>();
-  if (backlog.refusals.length > 0) present.add('refused');
-  // `timeout` and `ended` come as a set rather than as a kind, because the
-  // per-relay table can hold both at once: the request's timer firing while one
-  // relay's connection is already gone is two different things missing from the
-  // same answer. Reading a single `end.kind` here is what made `ended`
-  // unreachable — the backlog's end was decided by whichever signal arrived
-  // first, and a dead socket arrived as rx-nostr completing the subscription.
+  // `refused`, `timeout` and `ended` come as a set rather than as a kind,
+  // because the per-relay table can hold them at once: the request's timer
+  // firing while one relay's connection is already gone is two different things
+  // missing from the same answer. Reading a single `end.kind` here is what made
+  // `ended` unreachable — the backlog's end was decided by whichever signal
+  // arrived first, and a dead socket arrived as rx-nostr completing the
+  // subscription. **`refused` is the table's too, and it was read here off
+  // `backlog.refusals`**: that list also holds what a relay said after it had
+  // answered, so an answer every relay had completed came out `refused`.
   if (backlog.end.kind === 'incomplete') for (const cause of backlog.end.causes) present.add(cause);
   // Independent of how the backlog *ended*: an answer can reach EOSE on every
   // relay, be complete in the leg's sense, and still not be everything the

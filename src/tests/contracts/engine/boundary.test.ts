@@ -781,6 +781,7 @@ describe('the boundary where an event off the wire becomes this library’s own'
         const longObject = await closing({ detail: 'x'.repeat(10_000) }, false);
         const endsOf = (chunks: readonly MachineChunk[]) =>
           chunks.flatMap((chunk) => (chunk.type === 'settled' ? [chunk.end] : []));
+        const refused = { kind: 'incomplete', causes: ['refused'], error: undefined };
         expect(
           [object, longText, longObject].map((chunks) => ({
             refusals: refusalsOf(chunks).map(({ leg, notice }) => [leg, measured(notice)]),
@@ -790,12 +791,12 @@ describe('the boundary where an event off the wire becomes this library’s own'
         ).toEqual([
           {
             refusals: [['backward', [false, '{"why":"an object"}']]],
-            ends: [{ kind: 'complete' }]
+            ends: [refused]
           },
-          { refusals: [['backward', [true, 'at the cap']]], ends: [{ kind: 'complete' }] },
+          { refusals: [['backward', [true, 'at the cap']]], ends: [refused] },
           {
             refusals: [['backward', [true, 'within the inner bound']]],
-            ends: [{ kind: 'complete' }]
+            ends: [refused]
           }
         ]);
         ran.push('D-closed');

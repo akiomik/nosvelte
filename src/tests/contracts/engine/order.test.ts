@@ -146,12 +146,12 @@ describe('what reaches a consumer around the end of a stream', () => {
 
     // The refusal is the end: the relay closes the backlog's subscription.
     for (const sameTurnEose of [false, true]) {
-      const name = sameTurnEose ? 'anEoseAndARefusalInOneTurn' : 'theRefusalIsTheEnd';
+      const name = sameTurnEose ? 'aRefusalAndAnEoseInOneTurn' : 'theRefusalIsTheEnd';
       const one = published(nonLive);
       try {
         const backward = await one.subId('b');
-        if (sameTurnEose) one.relay.send(['EOSE', backward]);
         one.relay.send(['CLOSED', backward, `blocked: ${name}`]);
+        if (sameTurnEose) one.relay.send(['EOSE', backward]);
         await vi.waitFor(() => expect(firstOutcome(one.snapshots)).toBeDefined(), {
           timeout: 3000
         });
@@ -208,9 +208,9 @@ describe('what reaches a consumer around the end of a stream', () => {
         atTheOutcome: refused('theRefusalIsTheEnd'),
         afterwards: refused('theRefusalIsTheEnd')
       },
-      anEoseAndARefusalInOneTurn: {
-        atTheOutcome: refused('anEoseAndARefusalInOneTurn'),
-        afterwards: refused('anEoseAndARefusalInOneTurn')
+      aRefusalAndAnEoseInOneTurn: {
+        atTheOutcome: refused('aRefusalAndAnEoseInOneTurn'),
+        afterwards: refused('aRefusalAndAnEoseInOneTurn')
       },
       onARefresh: {
         atTheOutcome: {

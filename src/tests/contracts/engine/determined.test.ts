@@ -1115,11 +1115,16 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
       backward,
       replaceable: [false, false]
     });
-    const reading = (shape: string[], named: string[], tables: ReturnType<typeof held>) => ({
+    const reading = (
+      shape: string[],
+      named: string[],
+      tables: ReturnType<typeof held>,
+      causes = ['ended']
+    ) => ({
       asked: true,
       shape,
       kind: 'incomplete',
-      causes: ['ended'],
+      causes,
       named,
       held: tables
     });
@@ -1310,7 +1315,8 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
         refused: reading(
           ['refused forward', 'refused backward', 'event', 'legEnded', 'settled'],
           ['b'],
-          held(bothStopped, { a: 'refused', b: 'ended' })
+          held(bothStopped, { a: 'refused', b: 'ended' }),
+          ['refused', 'ended']
         ),
         nothing: reading(
           ['refused forward', 'event', 'legEnded', 'settled'],

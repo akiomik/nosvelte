@@ -1146,6 +1146,14 @@ export async function* referenceStream({
     const gone: string[] = [];
     for (const [url, phase] of backwardTargets.entries()) {
       if (phase === 'ended') gone.push(url);
+      // **Read off the table, not off the refusals the attempt was told**, and
+      // that is A5's rule reaching the answer: a relay is refused when refusing
+      // is what determined it. A relay that answered and then closed its
+      // subscription keeps `complete`, and what it said is published without
+      // being a cause (`A5-C29`). Counted from the list, the same relay made an
+      // answer `refused` or not according to whether another relay was still
+      // answering, and to whether two frames fell in one task.
+      else if (phase === 'refused') present.add('refused');
       // Still undetermined at the moment the wait ended. Three ways to reach it,
       // and they are all the request giving up rather than a relay saying
       // something: the timer above; the forward leg ending, which ends the
