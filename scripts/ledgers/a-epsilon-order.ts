@@ -323,6 +323,19 @@ export default {
       ]
     },
     {
+      id: 'C3-the-release-ten-milliseconds-late',
+      arm: 'OR4',
+      describe:
+        'the release falls ten milliseconds after the decision rather than in its turn, the consumer still not waited for',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    queueMicrotask(() => {\n      closeAll();\n      whenBacklogReported(() => {\n',
+          to: '    queueMicrotask(() => {\n      setTimeout(closeAll, 10);\n      whenBacklogReported(() => {\n'
+        }
+      ]
+    },
+    {
       id: 'C3-a-listener-outlives-the-decision',
       arm: 'OR4',
       describe:

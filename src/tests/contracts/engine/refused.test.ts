@@ -40,6 +40,9 @@ const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
 /** A wait long enough for a frame to be taken, and for what follows from it to be published. */
 const A_TURN_MS = 100;
 
+/** Beyond the two seconds a leg that ended with no refusal waits before it is asked again. */
+const PAST_THE_RECOVERYS_FIRST_WAIT_MS = 2600;
+
 /** A request's own deadline, far beyond every reading here: nothing below is its timer. */
 const SETTLE_TIMEOUT_MS = 30_000;
 
@@ -211,6 +214,9 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
     // backlog answered and one still waiting, where the leg's end is published
     // while the attempt is running. The way back is read as frames: a new
     // subscription on each leg of each relay, which, answered, is `complete`.
+    // **And nothing but `refresh()` does that**: a fifth run is left alone past
+    // the recovery's first wait, on the class recorded as clearing by itself,
+    // since a recovery keyed on that class has no other run to show in.
     const run = async (relays: Listening[], notice: string, answered: boolean) => {
       const one = mounted(relays, [request(true)]);
       try {
@@ -260,6 +266,31 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
         vi.unstubAllGlobals();
       }
     };
+    const leftAlone = async () => {
+      const relay = listening();
+      const one = mounted([relay], [request(true)]);
+      try {
+        const forward = await relay.latest('f');
+        relay.server.send(['EOSE', await relay.latest('b')]);
+        await vi.waitFor(() => expect(one.handle().state.status).toBe('settled'), {
+          timeout: 3000
+        });
+        relay.server.send(['CLOSED', forward, 'rate-limited: slow down']);
+        await vi.waitFor(() => expect(one.handle().diagnostics.legEnded).toBeDefined(), {
+          timeout: 3000
+        });
+        await delay(PAST_THE_RECOVERYS_FIRST_WAIT_MS);
+        return {
+          asked: { backward: relay.asked('b').length, forward: relay.asked('f').length },
+          activity: one.handle().activity
+        };
+      } catch (error) {
+        return failed(error);
+      } finally {
+        one.view.unmount();
+        vi.unstubAllGlobals();
+      }
+    };
     const runs = {
       'one relay, a rate limit': await run([listening()], 'rate-limited: slow down', true),
       'two relays, a rate limit': await run(
@@ -272,7 +303,8 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
         [listening(), listening()],
         'rate-limited: slow down',
         false
-      )
+      ),
+      'left alone': await leftAlone()
     };
     const answered = (reason: string, count: number, refusals: number) => ({
       beforeTheLast: {
@@ -311,7 +343,8 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
         },
         outcome: { kind: 'complete' },
         reopened: { status: 'settled', events: [], activity: 'live', refusals: [] }
-      }
+      },
+      'left alone': { asked: { backward: 1, forward: 1 }, activity: 'idle' }
     });
   }, 30_000);
 
@@ -426,31 +459,49 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
   }, 20_000);
 
   // @contracts A5-S4
-  it('RJ6: two requests on one relay, one refused: the refusal is that request’s, whichever it is', async () => {
+  it('RJ6: two requests on one relay, one refused: the refusal is that request’s, whichever it is, on either leg', async () => {
     // **One relay**, read off the frames: both are subscribed there before
     // either is answered, so a refusal arriving from it is one either could
     // claim. **Both ways round**, since an attribution that took the first
     // request subscribed, or the last, passes one of them. The other request
     // is answered in the same turn, and is left as if nothing had been refused.
-    const run = async (refused: 0 | 1) => {
+    // **On either leg**, because each is read off the subId by a test of its
+    // own: two live requests, their backlogs answered, one refused on its
+    // forward subscription, and the other sent an event on its own.
+    const run = async (refused: 0 | 1, live: boolean) => {
       const relay = listening();
-      const one = mounted(
-        [relay],
-        [
-          { kind: 'request', descriptor: { filters: [{ kinds: [1] }] } },
-          { kind: 'request', descriptor: { filters: [{ kinds: [7] }] } }
-        ]
-      );
+      const leg = live ? 'f' : 'b';
+      const one = mounted([relay], [request(live, [1, 7]), request(live, [1, 9])]);
       try {
-        await vi.waitFor(() => expect(relay.asked('b')).toHaveLength(2), { timeout: 3000 });
-        const named = (kind: number) =>
+        await vi.waitFor(
+          () => {
+            expect(relay.asked('b')).toHaveLength(2);
+            expect(relay.asked(leg)).toHaveLength(2);
+          },
+          { timeout: 3000 }
+        );
+        const named = (on: 'b' | 'f', kind: number) =>
           (relay.server.messages as unknown[][]).find(
             (frame) =>
-              frame[0] === 'REQ' && (frame[2] as { kinds?: number[] }).kinds?.includes(kind)
+              frame[0] === 'REQ' &&
+              String(frame[1]).includes(`-${on}:`) &&
+              (frame[2] as { kinds?: number[] }).kinds?.includes(kind)
           )?.[1];
-        const subIds = [named(1), named(7)];
+        const subIds = [named(leg, 7), named(leg, 9)];
+        if (live) {
+          relay.server.send(['EOSE', named('b', 7)]);
+          relay.server.send(['EOSE', named('b', 9)]);
+          await vi.waitFor(
+            () => {
+              expect(one.handle(0).state.status).toBe('settled');
+              expect(one.handle(1).state.status).toBe('settled');
+            },
+            { timeout: 3000 }
+          );
+        }
         relay.server.send(['CLOSED', subIds[refused], 'auth-required: this one']);
-        relay.server.send(['EOSE', subIds[1 - refused]]);
+        if (live) relay.server.send(['EVENT', subIds[1 - refused], signed('the other request')]);
+        else relay.server.send(['EOSE', subIds[1 - refused]]);
         await vi.waitFor(
           () => {
             expect(one.handle(0).state.status).not.toBe('loading');
@@ -467,7 +518,12 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
         vi.unstubAllGlobals();
       }
     };
-    const runs = { 'the first refused': await run(0), 'the second refused': await run(1) };
+    const runs = {
+      'the first refused': await run(0, false),
+      'the second refused': await run(1, false),
+      'the first refused, live': await run(0, true),
+      'the second refused, live': await run(1, true)
+    };
     const refused = {
       status: 'incomplete',
       causes: ['refused'],
@@ -476,9 +532,24 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
       refusals: ['backward:auth-required']
     };
     const bystander = { status: 'settled', events: [], activity: 'idle', refusals: [] };
+    const refusedLive = {
+      status: 'settled',
+      events: [],
+      activity: 'idle',
+      legEnded: 'ended',
+      refusals: ['forward:auth-required']
+    };
+    const bystanderLive = {
+      status: 'settled',
+      events: ['the other request'],
+      activity: 'live',
+      refusals: []
+    };
     expect(runs, 'recorded against that request, and not the other').toEqual({
       'the first refused': { requests: [refused, bystander] },
-      'the second refused': { requests: [bystander, refused] }
+      'the second refused': { requests: [bystander, refused] },
+      'the first refused, live': { requests: [refusedLive, bystanderLive] },
+      'the second refused, live': { requests: [bystanderLive, refusedLive] }
     });
   }, 20_000);
 

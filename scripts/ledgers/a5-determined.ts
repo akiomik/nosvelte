@@ -1001,6 +1001,42 @@ export default {
       ]
     },
     {
+      id: 'C29-a-refusal-counted-while-a-live-backlog-was-open',
+      arm: 'DT4',
+      describe:
+        'a backward refusal on a live request is a cause whenever the backlog is still open, whatever determined the relay: only a second relay holds it open past the `EOSE`',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  let settled = false;\n  /** The forward leg is over. A live request ends when both legs are. */\n',
+          to: '  let settled = false;\n  let refusedWhileLiveBacklog = false;\n  /** The forward leg is over. A live request ends when both legs are. */\n'
+        },
+        {
+          file: MACHINE,
+          from: "    if (viaTimer) present.add('timeout');\n",
+          to: "    if (viaTimer) present.add('timeout');\n    if (refusedWhileLiveBacklog) present.add('refused');\n"
+        },
+        {
+          file: MACHINE,
+          from: "      if (leg === 'backward') advanceBackward(packet.from, 'refused');\n",
+          to: "      if (leg === 'backward' && live && !settled) refusedWhileLiveBacklog = true;\n      if (leg === 'backward') advanceBackward(packet.from, 'refused');\n"
+        }
+      ]
+    },
+    {
+      id: 'C29-a-refusal-behind-the-answer-unpublished',
+      arm: 'DT4',
+      describe:
+        'what a relay says after it has answered is dropped before it is recorded, so the `CLOSED` is published nowhere',
+      edits: [
+        {
+          file: MACHINE,
+          from: '      const notice = packet.notice ?? relayMessage(undefined);\n',
+          to: "      if (leg === 'backward' && backwardTargets.get(packet.from) === 'complete') return;\n      const notice = packet.notice ?? relayMessage(undefined);\n"
+        }
+      ]
+    },
+    {
       id: 'C27-the-gone-relay-not-named',
       arm: 'DT5',
       describe: 'the record names nobody, so the two relays are one cause set and no attribution',

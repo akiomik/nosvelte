@@ -19,6 +19,7 @@ import type { Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
 const REFUSAL = 'src/lib/v1/refusal.ts';
+const STREAMED = 'src/lib/v1/useStreamedReq.svelte.ts';
 
 /** The live leg ends when, and only when, every relay of the target set is terminal. */
 const ALL_TERMINAL = "    if ([...targets.values()].every((each) => each === 'terminal')) {";
@@ -90,6 +91,32 @@ export default {
       edits: [{ file: MACHINE, from: ALL_TERMINAL, to: '    if (false as boolean) {' }]
     },
     {
+      id: 'C3-a-rate-limit-recovered-on-its-own',
+      arm: 'RJ3',
+      describe:
+        'a leg whose every refusal is `rate-limited` is taken for one nothing said no to, so a request left alone is asked again at the first wait of the recovery',
+      edits: [
+        {
+          file: STREAMED,
+          from: "    const recoverable = end?.kind === 'ended' && (value?.forward?.refusals.length ?? 0) === 0;\n",
+          to: "    const recoverable =\n      end?.kind === 'ended' &&\n      (value?.forward?.refusals.every((refusal) => refusal.reason === 'rate-limited') ?? true);\n"
+        }
+      ]
+    },
+    {
+      id: 'C3-a-refresh-that-asks-nothing',
+      arm: 'RJ3',
+      describe:
+        'a request whose leg has ended answers `refresh()` as complete and puts nothing on the wire',
+      edits: [
+        {
+          file: STREAMED,
+          from: '    async refresh(): Promise<RefreshOutcome> {\n',
+          to: "    async refresh(): Promise<RefreshOutcome> {\n      if (query.data?.forward?.end !== undefined) return { kind: 'complete' };\n"
+        }
+      ]
+    },
+    {
       id: 'C4-the-first-refusal-ends-the-leg',
       arm: 'RJ4',
       describe: "one relay's refusal ends the leg, and the event the other sends is not delivered",
@@ -125,6 +152,19 @@ export default {
           file: MACHINE,
           from: "    if (subId.startsWith(`${reqIdBase}-b:`)) return 'backward';\n",
           to: "    if (subId.includes('-b:')) return 'backward';\n"
+        }
+      ]
+    },
+    {
+      id: 'S4-a-forward-refusal-taken-by-any-request',
+      arm: 'RJ6',
+      describe:
+        "the forward leg is read off the suffix alone, so a refusal of one live request's subscription on a shared relay ends the other's too",
+      edits: [
+        {
+          file: MACHINE,
+          from: "    if (subId.startsWith(`${reqIdBase}-f:`)) return 'forward';\n",
+          to: "    if (subId.includes('-f:')) return 'forward';\n"
         }
       ]
     },

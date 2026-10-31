@@ -20,6 +20,7 @@
 import type { Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
+const EVENTSET = 'src/lib/v1/eventset.ts';
 const ENGINE = 'src/lib/v1/engine.ts';
 const REFUSAL = 'src/lib/v1/refusal.ts';
 const ACCUMULATE = 'src/lib/v1/accumulate.ts';
@@ -327,6 +328,19 @@ export default {
           file: MACHINE,
           from: "        if (legOf(packet.subId) === 'backward') advanceBackward(packet.from, 'complete');\n",
           to: ''
+        }
+      ]
+    },
+    {
+      id: 'C13-an-ended-backlog-discards-its-events',
+      arm: 'GN8',
+      describe:
+        'a backlog with a death in it keeps nothing, so the event the relay that answered sent is lost with the answer',
+      edits: [
+        {
+          file: EVENTSET,
+          from: '    backlog: {\n      attemptId,\n      end: Object.freeze(end),\n',
+          to: "    ...(end.kind === 'incomplete' && end.causes.includes('ended') ? { entries: new Map() } : {}),\n    backlog: {\n      attemptId,\n      end: Object.freeze(end),\n"
         }
       ]
     },

@@ -23,7 +23,7 @@
  */
 import { render } from '@testing-library/svelte';
 import { WebSocket as MockWebSocket } from 'mock-socket';
-import { Observable } from 'rxjs';
+import { filter, firstValueFrom, Observable } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
@@ -550,6 +550,10 @@ describe('what reaches a consumer around the end of a stream', () => {
       const listener = rxNostr.createAllMessageObservable().subscribe((packet) => {
         if (packet.type === 'CLOSED') closedFrames.push(packet.subId);
       });
+      const heard = (type: 'EOSE' | 'CLOSED') =>
+        firstValueFrom(
+          rxNostr.createAllMessageObservable().pipe(filter((packet) => packet.type === type))
+        );
       const stream = referenceStream({
         transport,
         targets: requestTargets(transport, scope.current),
@@ -573,15 +577,14 @@ describe('what reaches a consumer around the end of a stream', () => {
         if (live) respondWithEose(server, backward);
         else server.send(['EVENT', backward, fakeEvent({ content: 'the pause' })]);
         const handed = ((await outcome).value as MachineChunk).type;
+        const decided =
+          decision === 'timer' ? delay(timeoutMs) : heard(decision === 'eose' ? 'EOSE' : 'CLOSED');
         if (decision === 'eose') respondWithEose(server, backward);
-        if (decision === 'timer') await delay(timeoutMs);
-        if (live) {
-          server.send(['CLOSED', named('-f:'), 'blocked: the end']);
-          await vi.waitFor(() => expect(closedFrames).toHaveLength(1), { timeout: 3000 });
-        }
+        if (live) server.send(['CLOSED', named('-f:'), 'blocked: the end']);
+        await decided;
         // The consumer has asked for nothing since before the decision, and the
-        // release is a turn after it.
-        await delay(20);
+        // release is a turn after it, so the next task reads it.
+        await delay(0);
         const whilePaused = held;
         const seen = closedFrames.length;
         server.send(['CLOSED', backward, 'blocked: into the pause']);

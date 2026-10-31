@@ -1601,14 +1601,16 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
         aTaskApart: await alone(backlog('dt4-alone-apart'), aTaskApart),
         live: await alone(live('dt4-alone-live'), oneTask),
         liveATaskApart: await alone(live('dt4-alone-live-apart'), aTaskApart),
-        theOtherWayRound: await alone(backlog('dt4-alone-reversed'), theOtherWayRound)
+        theOtherWayRound: await alone(backlog('dt4-alone-reversed'), theOtherWayRound),
+        liveTheOtherWayRound: await alone(live('dt4-alone-live-reversed'), theOtherWayRound)
       },
       beside: {
         oneTask: await beside(backlog('dt4-beside-one'), oneTask),
         aTaskApart: await beside(backlog('dt4-beside-apart'), aTaskApart),
         live: await beside(live('dt4-beside-live'), oneTask),
         liveATaskApart: await beside(live('dt4-beside-live-apart'), aTaskApart),
-        theOtherWayRound: await beside(backlog('dt4-beside-reversed'), theOtherWayRound)
+        theOtherWayRound: await beside(backlog('dt4-beside-reversed'), theOtherWayRound),
+        liveTheOtherWayRound: await beside(live('dt4-beside-live-reversed'), theOtherWayRound)
       }
     };
     const read = { events: [], causes: undefined, legEnded: undefined, named: undefined };
@@ -1628,6 +1630,7 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
     };
     const meanwhile = { ...read, status: 'streaming', activity: 'refreshing', refusals: told };
     const liveMeanwhile = { ...meanwhile, activity: 'live' };
+    const refusedLive = { ...refused, activity: 'live' };
     expect(
       observed,
       'a relay that answered first has answered, whatever follows; one that refused first has refused'
@@ -1639,14 +1642,16 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
         aTaskApart: answered('idle', []),
         live: answered('live', told),
         liveATaskApart: answered('live', told),
-        theOtherWayRound: refused
+        theOtherWayRound: refused,
+        liveTheOtherWayRound: refusedLive
       },
       beside: {
         oneTask: { meanwhile, afterwards: answered('idle', told) },
         aTaskApart: { meanwhile, afterwards: answered('idle', told) },
         live: { meanwhile: liveMeanwhile, afterwards: answered('live', told) },
         liveATaskApart: { meanwhile: liveMeanwhile, afterwards: answered('live', told) },
-        theOtherWayRound: { meanwhile, afterwards: refused }
+        theOtherWayRound: { meanwhile, afterwards: refused },
+        liveTheOtherWayRound: { meanwhile: liveMeanwhile, afterwards: refusedLive }
       }
     });
   });
