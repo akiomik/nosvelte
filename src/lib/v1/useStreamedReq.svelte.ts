@@ -1837,7 +1837,9 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * moves on every rejection, which makes those two keys, and what is written
    * here is a copy of a function of its key rather than a second source for the
    * fact: the query is read at each read, which is also what `A12-C5` says a
-   * released handle does.
+   * released handle does. The key is as good as that count: only a direct write
+   * of the cache entry can put one object back at a count it had, and v1 does
+   * not publish the query or its client.
    */
   let rejection: { source: unknown; count: number; value: ReqStateError } | undefined;
   const rejectedWith = (): ReqStateError | undefined => {
@@ -1870,16 +1872,17 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
   let planned: RequestPlan = 'open';
 
   /**
-   * Whether the descriptor the options were last built from is live, for a
-   * reader that may not ask.
+   * The last `live` this handle read, for a reader that may not ask.
    *
    * `activity` maps the fetch status through the caller's `live`, and reading
    * that runs the caller's plan. A plan that reads a `$derived` of its component
    * is the ordinary one, and once the component has gone that read is Svelte's
    * `derived_inert` on the console, so a released handle answers from here
-   * (`C5-C8`). Written where the options are built, for {@link planned}'s reason.
+   * (`C5-C8`). Written by both that ask, the options and `activity`, because a
+   * plan can change between the two: read by `activity` alone, a handle could
+   * say `live` and then, once released, what the options were last built from.
    */
-  let plannedLive = false;
+  let lastLive = false;
 
   const queryOptions = () => {
     // **This destructure is a read of the caller's object too**, and it runs
@@ -2002,7 +2005,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
         ? 'open'
         : planRequest(descriptor, targets.length);
     planned = plan;
-    plannedLive = descriptor?.live ?? false;
+    lastLive = descriptor?.live ?? false;
 
     // **Handed the attempt rather than taking one.** This used to call
     // `attempts.begin()` itself, and that made the attempt boundary the *stream
@@ -3011,10 +3014,8 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // Guarded like every other read of the caller's object: this one is
       // inside a **published getter**, so a `live` getter that throws would
       // throw at whoever reads `activity` rather than being refused.
-      return deriveActivity(
-        released ? plannedLive : (safely(() => getOpts().live) ?? false),
-        query.fetchStatus === 'fetching'
-      );
+      if (!released) lastLive = safely(() => getOpts().live) ?? false;
+      return deriveActivity(lastLive, query.fetchStatus === 'fetching');
     },
     /** The shared mapping, so both accumulators answer with the same function. */
     get state(): ReqState {
