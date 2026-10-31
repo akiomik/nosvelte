@@ -13,7 +13,7 @@
  */
 import { render } from '@testing-library/svelte';
 import { flushSync, mount, unmount } from 'svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
@@ -21,8 +21,20 @@ import { REQ_ERROR_CODES, type ReqErrorCode } from '$lib/v1/reqerror.js';
 
 import DerivedRequest from './fixtures/DerivedRequest.svelte';
 import KeptRequest from './fixtures/KeptRequest.svelte';
-import { watchConsole } from './helpers/console.js';
+import { NOTHING_WRITTEN } from './helpers/console.js';
 import { respondWithEose } from './helpers/relay.js';
+import { box } from './helpers/runes.svelte.js';
+
+vi.unmock('svelte');
+
+const watch = await vi.hoisted(async () => {
+  const { watchConsole } = await import('./helpers/console.js');
+  return watchConsole();
+});
+
+afterAll(() => {
+  watch.release();
+});
 
 let port = 10580;
 const nextUrl = (): string => `ws://localhost:${String((port += 1))}`;
@@ -72,12 +84,14 @@ interface Reading {
   readonly ended: ReqErrorCode | undefined;
 }
 
+const failureOf = ({ state }: ReqHandle) =>
+  state.status === 'error' || state.status === 'incomplete' ? state.error : undefined;
+
 const readingOf = (handle: ReqHandle): Reading => {
   const { state } = handle;
-  const error = state.status === 'error' || state.status === 'incomplete' ? state.error : undefined;
   return {
     status: state.status,
-    code: error?.code,
+    code: failureOf(handle)?.code,
     activity: handle.activity,
     last: handle.diagnostics.lastError?.code,
     ended: (handle.diagnostics.legEnded as { error?: { code: ReqErrorCode } } | undefined)?.error
@@ -200,9 +214,11 @@ const PATHS: readonly Path[] = [
 const NOT_PUBLIC: readonly ReqErrorCode[] = [
   'accumulator-contract',
   'unspecified',
-  'transport-incompatible',
-  'provider-disposed'
+  'transport-incompatible'
 ];
+
+/** The code of a request its own root keeps past `NostrApp`, which only a `refresh()` carries. */
+const OUTLIVED: ReqErrorCode = 'provider-disposed';
 
 describe('C5: what a consumer’s console sees', () => {
   // @contracts C5-C8
@@ -216,11 +232,10 @@ describe('C5: what a consumer’s console sees', () => {
     // twice since one read says nothing about the next, and then with the whole
     // tree, read again. Every reading is the one from before, which is
     // `A12-C5`'s rule for a released handle, and the last answer is `C11-C19`'s.
+    // The Error is one object at all of them, on the state and in the diagnostics.
     //
     // **The population is checked against the code list**, so a code added to
     // the library is placed here or named as out of a consumer's reach.
-    const watch = watchConsole();
-    const silent = watch.control();
     const run = async (path: Path) => {
       const url = nextUrl();
       const server = new WS(url, { jsonProtocol: true });
@@ -242,7 +257,7 @@ describe('C5: what a consumer’s console sees', () => {
       const answer = await Promise.race([call, delay(2000).then(() => 'unanswered')]);
       await settle();
       const answered = readingOf(held);
-      const error = held.state.status === 'error' ? held.state.error : undefined;
+      const error = failureOf(held);
       if (path.bare !== true) {
         await view.rerender({ mounted: false } as never);
         await settle(40);
@@ -258,16 +273,16 @@ describe('C5: what a consumer’s console sees', () => {
         left,
         again: await answerOf(held.refresh()),
         oneError:
-          held.state.status === 'error'
-            ? held.state.error === error && held.diagnostics.lastError === error
-            : 'not an error'
+          error === undefined
+            ? 'no failure'
+            : failureOf(held) === error && held.diagnostics.lastError === error
       };
     };
 
     // **And one that goes before its effects ran**: mounted and unmounted in
     // one tick, with Svelte's own two calls, read in between so that there is a
     // value to go stale. Nothing is opened for it, and its `refresh()` says so.
-    const early = async () => {
+    const mounted = (plan: () => ReqPlan) => {
       const url = nextUrl();
       const server = new WS(url, { jsonProtocol: true });
       let handle: ReqHandle | undefined;
@@ -275,14 +290,18 @@ describe('C5: what a consumer’s console sees', () => {
         target: document.body.appendChild(document.createElement('div')),
         props: {
           relays: [url],
-          plan: () => request({ settleTimeoutMs: 300 }),
+          plan,
           mounted: true,
           seen: (request: ReqHandle): void => {
             handle = request;
           }
         }
       });
-      const held = handle as unknown as ReqHandle;
+      return { server, consumer, held: handle as unknown as ReqHandle };
+    };
+
+    const early = async () => {
+      const { server, consumer, held } = mounted(() => request({ settleTimeoutMs: 300 }));
       const reading = readingOf(held);
       await unmount(consumer);
       const answer = await answerOf(held.refresh());
@@ -290,58 +309,122 @@ describe('C5: what a consumer’s console sees', () => {
       return { reading, left: readingOf(held), answer, asked: asked(server) };
     };
 
-    try {
-      const readings: Record<string, unknown> = {};
-      for (const path of PATHS) readings[path.name] = await run(path);
-      const leftEarly = await early();
-      const placed = new Set<string>([
-        ...PATHS.flatMap(({ reads: { code, ended } }) => [code, ended]),
-        ...NOT_PUBLIC
-      ] as string[]);
-      const waiting = {
-        status: 'loading',
-        code: undefined,
-        activity: 'refreshing',
-        last: undefined,
-        ended: undefined
-      };
-      expect(
-        {
-          silent,
-          unwatched: watch.unwatched(),
-          written: watch.written,
-          unplaced: REQ_ERROR_CODES.filter((code) => !placed.has(code)),
-          readings,
-          leftEarly
+    // **The `live` a kept handle goes on saying is the last one it read**, so
+    // the plan changes between the options being built and the consumer going,
+    // and it goes in the tick the change was read in. The other way round, with
+    // `activity` never read, it is the one the options were built from.
+    const changed = async () => {
+      const plan = box(request({ settleTimeoutMs: 30_000 }));
+      const { server, consumer, held } = mounted(() => plan.current);
+      await subscription(server, '-b:', 1);
+      const before = held.activity;
+      plan.current = live(30_000);
+      const read = held.activity;
+      await unmount(consumer);
+      return { before, read, left: held.activity };
+    };
+
+    const unread = async () => {
+      const { server, consumer, held } = mounted(() => live(30_000));
+      await subscription(server, '-b:', 1);
+      flushSync();
+      await unmount(consumer);
+      return held.activity;
+    };
+
+    // **And one that outlives `NostrApp`**, in a root of its own, which is the
+    // way a consumer reaches `provider-disposed`. Its plan is left as it was: a
+    // request that is alive reads its plan, and one that changes reads the
+    // `$derived` of a component that has gone, which is `C5-C8`'s exclusion.
+    const outlived = async () => {
+      const url = nextUrl();
+      const server = new WS(url, { jsonProtocol: true });
+      let handle: ReqHandle | undefined;
+      let stop = (): void => undefined;
+      const view = render(KeptRequest, {
+        relays: [url],
+        plan: () => request({ settleTimeoutMs: 300 }),
+        mounted: true,
+        seen: (request: ReqHandle): void => {
+          handle = request;
         },
-        'every method watched, nothing written, and every reading what the path says'
-      ).toEqual({
-        silent: [],
-        unwatched: [],
-        written: [],
-        unplaced: [],
-        readings: Object.fromEntries(
-          PATHS.map(({ name, reads, answers }) => [
-            name,
-            {
-              reading: reads,
-              answer: answers,
-              answered: reads,
-              left: [reads, reads, reads],
-              again: 'not-started released',
-              oneError: reads.status === 'error' ? true : 'not an error'
-            }
-          ])
-        ),
-        leftEarly: {
-          reading: waiting,
-          left: waiting,
-          answer: 'not-started released',
-          asked: []
+        rooted: (ending: () => void): void => {
+          stop = ending;
         }
       });
-    } finally {
-      watch.release();
-    }
+      const held = handle as unknown as ReqHandle;
+      respondWithEose(server, await subscription(server, '-b:', 1));
+      await settle();
+      const reading = readingOf(held);
+      view.unmount();
+      await settle(40);
+      const left = readingOf(held);
+      const answer = await answerOf(held.refresh());
+      const after = readingOf(held);
+      stop();
+      await settle(40);
+      return { reading, left, answer, after };
+    };
+
+    const readings: Record<string, unknown> = {};
+    for (const path of PATHS) readings[path.name] = await run(path);
+    const leftEarly = await early();
+    const leftChanged = await changed();
+    const leftUnread = await unread();
+    const leftOutlived = await outlived();
+    const placed = new Set<string>([
+      ...PATHS.flatMap(({ reads: { code, ended } }) => [code, ended]),
+      ...NOT_PUBLIC,
+      OUTLIVED
+    ] as string[]);
+    const waiting = {
+      status: 'loading',
+      code: undefined,
+      activity: 'refreshing',
+      last: undefined,
+      ended: undefined
+    };
+    expect(
+      {
+        written: watch.reading(),
+        unplaced: REQ_ERROR_CODES.filter((code) => !placed.has(code)),
+        readings,
+        leftEarly,
+        leftChanged,
+        leftUnread,
+        leftOutlived
+      },
+      'nothing written, every method watched, and every reading what the path says'
+    ).toEqual({
+      written: NOTHING_WRITTEN,
+      unplaced: [],
+      readings: Object.fromEntries(
+        PATHS.map(({ name, reads, answers }) => [
+          name,
+          {
+            reading: reads,
+            answer: answers,
+            answered: reads,
+            left: [reads, reads, reads],
+            again: 'not-started released',
+            oneError: reads.code === undefined ? 'no failure' : true
+          }
+        ])
+      ),
+      leftEarly: {
+        reading: waiting,
+        left: waiting,
+        answer: 'not-started released',
+        asked: []
+      },
+      leftChanged: { before: 'refreshing', read: 'live', left: 'live' },
+      leftUnread: 'live',
+      leftOutlived: {
+        reading: settled('idle').reads,
+        left: settled('idle').reads,
+        answer: `rejected ${OUTLIVED}`,
+        after: settled('idle').reads
+      }
+    });
   }, 30_000);
 });

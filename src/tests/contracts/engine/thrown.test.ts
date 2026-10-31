@@ -3,8 +3,8 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * What a request reports when an attempt throws part way through: the landings
- * of `C5-C3` (`TH1`), `C5-C5` (`TH2`) and `C5-C7` (`TH3`), and the key of the
- * one value a rejection is published as (`TH4`, beside `C5-C8`).
+ * of `C5-C3` (`TH1`), `C5-C5` (`TH2`, and `TH4` for the one value a rejection is
+ * published as) and `C5-C7` (`TH3`).
  *
  * **Internal, because no relay reaches this.** A relay's failures never throw
  * out of the stream, so each arm puts the throw in a real accumulator's reducer
@@ -14,7 +14,7 @@
  */
 import { render } from '@testing-library/svelte';
 import { QueryClient } from 'tanstack-svelte-query-v6';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import { createAttemptRegistry } from '$lib/v1/attempt.js';
@@ -24,7 +24,7 @@ import { isOwnedByLibrary } from '$lib/v1/owned.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
 import Outlets from './fixtures/Outlets.svelte';
-import { watchConsole } from './helpers/console.js';
+import { NOTHING_WRITTEN } from './helpers/console.js';
 import {
   acceptAnyEvent,
   createTestRelay,
@@ -33,6 +33,15 @@ import {
   respondWithEvent
 } from './helpers/relay.js';
 import { flush, mount } from './helpers/runes.svelte.js';
+
+const watch = await vi.hoisted(async () => {
+  const { watchConsole } = await import('./helpers/console.js');
+  return watchConsole();
+});
+
+afterAll(() => {
+  watch.release();
+});
 
 const attempts = createAttemptRegistry();
 
@@ -234,7 +243,8 @@ describe('C5: an attempt that throws part way through', () => {
               ? 'none'
               : (outcome as { error?: unknown }).error === told &&
                 (state.status !== 'error' || state.error === told),
-          ours: told === undefined ? 'none' : isOwnedByLibrary(told)
+          ours: told === undefined ? 'none' : isOwnedByLibrary(told),
+          said: told === undefined ? 'none' : told.message === `collect failed on ${poison.id}`
         };
       } finally {
         held.destroy();
@@ -256,7 +266,8 @@ describe('C5: an attempt that throws part way through', () => {
         failed: true,
         outcome: 'error',
         oneError: true,
-        ours: true
+        ours: true,
+        said: true
       },
       'the next event': {
         status: 'streaming',
@@ -266,7 +277,8 @@ describe('C5: an attempt that throws part way through', () => {
         failed: true,
         outcome: 'error',
         oneError: true,
-        ours: true
+        ours: true,
+        said: true
       },
       'no throw': {
         status: 'settled',
@@ -276,19 +288,20 @@ describe('C5: an attempt that throws part way through', () => {
         failed: false,
         outcome: 'complete',
         oneError: 'none',
-        ours: 'none'
+        ours: 'none',
+        said: 'none'
       }
     });
   }, 20_000);
 
   // @contracts C5-C7
   it('TH3: an accumulator that throws writes nothing to the console, on the first attempt or on a retry', async () => {
-    // **Every method the console has**, each shown to be watched by a write of
-    // the arm's own before the throw. The legacy bug logged a stream error, and
-    // in v1 the only failure that is a thrown error comes through the
+    // **Every method the console has**, watched from before the library was
+    // imported, read once the request has gone, and each shown to be watched by
+    // a write of the arm's own after that. The legacy bug logged a stream error,
+    // and in v1 the only failure that is a thrown error comes through the
     // accumulator. The retry is a `refresh()`, on a client that retries nothing
     // on its own, read to have reached the wire and to have failed again.
-    const watch = watchConsole();
     const { rxNostr, server } = createTestRelay(nextUrl());
     const poison = fakeEvent({ content: 'the throw' });
     const held = mount(() =>
@@ -304,8 +317,9 @@ describe('C5: an attempt that throws part way through', () => {
         settleTimeoutMs: 30_000
       }))
     );
+    let retried: unknown;
+    let anotherFailure: boolean | undefined;
     try {
-      const silent = watch.control();
       respondWithEvent(server, await nextBackward(server), poison);
       await vi.waitFor(
         () => {
@@ -318,35 +332,29 @@ describe('C5: an attempt that throws part way through', () => {
       const first = held.value.state.status === 'error' ? held.value.state.error : undefined;
       const call = held.value.refresh();
       respondWithEvent(server, await nextBackward(server, 1), poison);
-      const retried = await Promise.race([call, delay(3000)]);
+      retried = await Promise.race([call, delay(3000)]);
       await settle();
-      expect(
-        {
-          silent,
-          unwatched: watch.unwatched(),
-          retried: (retried as { kind?: string } | undefined)?.kind,
-          anotherFailure: held.value.diagnostics.lastError !== first,
-          written: watch.written
-        },
-        'every method watched, both attempts failed, and nothing written'
-      ).toEqual({
-        silent: [],
-        unwatched: [],
-        retried: 'error',
-        anotherFailure: true,
-        written: []
-      });
+      anotherFailure = held.value.diagnostics.lastError !== first;
     } finally {
-      watch.release();
       held.destroy();
     }
+    await settle();
+    expect(
+      {
+        written: watch.reading(),
+        retried: (retried as { kind?: string } | undefined)?.kind,
+        anotherFailure
+      },
+      'nothing written and every method watched, with both attempts failed'
+    ).toEqual({ written: NOTHING_WRITTEN, retried: 'error', anotherFailure: true });
   }, 20_000);
 
   it('TH4: a failure reported again is read again, though it is the same object', async () => {
     // **The key of what a rejection is published as**, and the value that can
     // only be told apart by reading it: a foreign object the query reports, then
-    // a success, then the same object changed. It is the one rejection that is
-    // copied, so what a second report says is a new copy or an old one, and the
+    // a success, then the same object changed, then another object at the same
+    // count, which is what a reset leaves. It is the one rejection that is
+    // copied, so what a later report says is a new copy or an old one, and the
     // cache entry is written directly since nothing else reaches it twice.
     const { rxNostr, server } = createTestRelay(nextUrl());
     const held = mount(() =>
@@ -372,20 +380,27 @@ describe('C5: an attempt that throws part way through', () => {
       );
       const [entry] = client.getQueryCache().getAll();
       const foreign = new Error('reported once');
-      const report = async (count: number): Promise<string | undefined> => {
-        entry?.setState({ status: 'error', error: foreign, errorUpdateCount: count });
+      const report = async (error: Error, count: number): Promise<string | undefined> => {
+        entry?.setState({ status: 'error', error, errorUpdateCount: count });
         await settle();
         return held.value.diagnostics.lastError?.message;
       };
-      const first = await report(1);
+      const first = await report(foreign, 1);
       const oneValue = held.value.diagnostics.lastError === held.value.diagnostics.lastError;
       entry?.setState({ status: 'success', error: null });
       await settle();
       foreign.message = 'reported twice';
+      const second = await report(foreign, 2);
+      const third = await report(new Error('reported by another'), 2);
       expect(
-        { first, oneValue, second: await report(2) },
-        'one value for one report, and a second report read again'
-      ).toEqual({ first: 'reported once', oneValue: true, second: 'reported twice' });
+        { first, oneValue, second, third },
+        'one value for one report, and a later report read again'
+      ).toEqual({
+        first: 'reported once',
+        oneValue: true,
+        second: 'reported twice',
+        third: 'reported by another'
+      });
     } finally {
       held.destroy();
     }

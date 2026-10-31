@@ -6,11 +6,10 @@
  * way through, and of what the library writes to the console (C5), and its
  * landings:
  * - `C5-C3` on `TH1`;
- * - `C5-C5` on `TH2`;
- * - `C5-C6` on `RA2`;
+ * - `C5-C5` on `TH2`, with `TH4` for the one value a rejection is published as;
+ * - `C5-C6` on `RA1`, with the supporting arms read after each;
  * - `C5-C7` on `TH3`;
- * - `C5-C8` on `CW1`, with `TH4` for the key of what a rejection is published
- *   as.
+ * - `C5-C8` on `CW1`.
  *
  * An id begins with the row it is read against, `C<n>-` for `C5-C<n>`, and one
  * beginning `I-` edits an arm's own instrument.
@@ -53,7 +52,9 @@ const QUERY_BUILT = '  const query = createQuery(queryOptions, ownedClient);\n';
 /** The rejection as a `$derived`, as it was before a kept handle was read. */
 const DERIVATION = `${QUERY_BUILT}  const queryRejection = $derived(\n    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined\n  );\n`;
 /** The `live` a released handle answers with. */
-const LIVE_READ = '        released ? plannedLive : (safely(() => getOpts().live) ?? false),\n';
+const LIVE_READ = '      if (!released) lastLive = safely(() => getOpts().live) ?? false;\n';
+/** What `activity` maps through that. */
+const ACTIVITY = "      return deriveActivity(lastLive, query.fetchStatus === 'fetching');\n";
 /** The cleanup that marks the release. */
 const RELEASE = '  $effect.pre(() => () => {\n    released = true;\n';
 /** The answer of a released handle. */
@@ -68,7 +69,13 @@ const INCOMPLETE = "  if (answer.completion.kind === 'incomplete') {\n";
 /** The failure of a refresh under a provider that is going. */
 const DISPOSED = '  return ownedByLibrary(new ProviderDisposedError(message));';
 /** The watch's own recording. */
-const RECORDING = "      written.push(`${String(method)}: ${args.map(String).join(' ')}`);\n";
+const RECORDING = "      written.push(`${String(method)}: ${args.map(textOf).join(' ')}`);\n";
+/** The function every state's failure leaves through, at the top level of its module. */
+const TERMINAL = 'export function terminalFailure(value: ReqError): ReqStateError {\n';
+/** A seam that could not be read. */
+const SEAM_REFUSED = '    return { read: false };\n';
+/** The watch of `reach.test.ts`, as it is put on. */
+const HOISTED = '  return watchConsole();\n';
 
 export default {
   name: 'c5-failure',
@@ -80,9 +87,8 @@ export default {
     'src/tests/contracts/engine/written.test.ts'
   ],
   calibration: {
-    measured:
-      "one run of each arm's duration in a single Vitest run, plus 1.5 s for the process, and `RA1`'s 12 s for `RA2`, which reads what `RA1` ran.",
-    seconds: { TH1: 2.0, TH2: 2.1, TH3: 2.0, TH4: 2.0, RA2: 12.0, CW1: 5.9 }
+    measured: "one run of each arm's duration in a single Vitest run, plus 1.5 s for the process.",
+    seconds: { TH1: 1.8, TH2: 2.1, TH3: 1.9, TH4: 1.9, RA1: 9.3, RX6: 1.6, CW1: 6.2 }
   },
   entries: [
     {
@@ -109,7 +115,8 @@ export default {
       id: 'C3-a-failure-always-takes-the-state',
       arm: 'TH1',
       requires: ['TH2'],
-      describe: 'the error state replaces events still on screen',
+      describe:
+        'a control, not this Then: the failure takes the state while events are on screen, which `TH1` reads before the deadline and `TH2` on the next event',
       edits: [{ file: ENGINE, from: ERROR_BRANCH, to: '  if (failure !== undefined) {' }]
     },
     {
@@ -211,6 +218,18 @@ export default {
       ]
     },
     {
+      id: 'C5-the-failure-is-a-generic-one',
+      arm: 'TH2',
+      describe: 'an owned Error, and not a copy of what was thrown, once something has been kept',
+      edits: [
+        {
+          file: STREAMED,
+          from: CAUGHT,
+          to: "          const prior = ownedClient().getQueryData<Collected>(key);\n          const error = capture(\n            (prior?.entries.size ?? 0) > 0 ? new Error('stream interrupted') : thrown,\n            'unspecified'\n          );\n"
+        }
+      ]
+    },
+    {
       id: 'C5-the-failure-empties-the-value',
       arm: 'TH2',
       describe: 'the event that folded goes with the failure, so `(2)` reads as `(1)`',
@@ -265,6 +284,37 @@ export default {
       ]
     },
     {
+      id: 'C7-a-write-bound-at-load',
+      arm: 'TH3',
+      describe:
+        'a method bound as the module loads, which is what a watch put on after the imports cannot see',
+      edits: [
+        {
+          file: OWN,
+          from: TERMINAL,
+          to: `const report = console.error.bind(console);\n${TERMINAL}  report('failed');\n`
+        }
+      ]
+    },
+    {
+      id: 'C7-a-write-at-load',
+      arm: 'TH3',
+      describe: 'the module writes as it loads, before any request was made',
+      edits: [{ file: OWN, from: TERMINAL, to: `console.warn('loaded');\n${TERMINAL}` }]
+    },
+    {
+      id: 'C7-a-write-as-the-request-is-built',
+      arm: 'TH3',
+      describe: 'a write before the attempt, which a control run after the build cleared',
+      edits: [{ file: STREAMED, from: QUERY_BUILT, to: `${QUERY_BUILT}  console.warn('built');\n` }]
+    },
+    {
+      id: 'C7-a-write-on-release',
+      arm: 'TH3',
+      describe: 'a write as the request goes, after the attempts have ended',
+      edits: [{ file: STREAMED, from: RELEASE, to: `${RELEASE}    console.warn('released');\n` }]
+    },
+    {
       id: 'I-C7-the-watch-is-one-method',
       arm: 'TH3',
       describe: 'the watch spies on `error` alone, which a list compared with itself cannot see',
@@ -283,8 +333,28 @@ export default {
       edits: [{ file: WATCH, from: RECORDING, to: '' }]
     },
     {
+      id: 'I-C7-the-text-of-a-write-throws',
+      arm: 'TH3',
+      describe: 'the spy throws at a value `String()` refuses, which the control writes',
+      edits: [{ file: WATCH, from: 'args.map(textOf)', to: 'args.map(String)' }]
+    },
+    {
+      id: 'I-C7-the-console-lists-nothing',
+      arm: 'TH3',
+      describe:
+        'no method is listed, so the named six are all that is watched, and one of them is written through',
+      edits: [
+        {
+          file: WATCH,
+          from: '...(Object.keys(console) as (keyof Console)[]).filter(',
+          to: '...([] as (keyof Console)[]).filter('
+        },
+        { file: EVENTSET, from: RECORD, to: `  console.error(error);\n${RECORD}` }
+      ]
+    },
+    {
       id: 'C6-the-rejection-is-a-derivation-again',
-      arm: 'RA2',
+      arm: 'RA1',
       describe:
         'the write this row was found by: a released handle reads a `$derived` of its root, on a path `RA1` drives',
       edits: [
@@ -298,31 +368,56 @@ export default {
     },
     {
       id: 'C6-a-disposed-provider-logs',
-      arm: 'RA2',
+      arm: 'RA1',
       describe: 'a path no public row reaches writes: the failure of a provider that went',
       edits: [{ file: OWN, from: DISPOSED, to: `  console.error(message);\n${DISPOSED}` }]
     },
     {
       id: 'C6-a-recorded-failure-logs',
-      arm: 'RA2',
+      arm: 'RA1',
       describe: 'the accumulator’s failures write, through the seam a consumer does not have',
       edits: [{ file: EVENTSET, from: RECORD, to: `  console.info(error);\n${RECORD}` }]
     },
     {
+      id: 'C6-a-write-bound-at-load',
+      arm: 'RA1',
+      describe:
+        'a method bound as the module loads, which is what a watch put on after the imports cannot see',
+      edits: [
+        {
+          file: OWN,
+          from: TERMINAL,
+          to: `const report = console.error.bind(console);\n${TERMINAL}  report('failed');\n`
+        }
+      ]
+    },
+    {
+      id: 'C6-an-unreadable-seam-logs',
+      arm: 'RX6',
+      describe: 'a path a supporting arm drives writes, and that arm is the one that fails',
+      edits: [
+        {
+          file: STREAMED,
+          from: SEAM_REFUSED,
+          to: `    console.warn('unreadable');\n${SEAM_REFUSED}`
+        }
+      ]
+    },
+    {
       id: 'I-C6-the-watch-goes-early',
-      arm: 'RA2',
+      arm: 'RA1',
       describe: 'the file-wide watch is gone before the first arm runs',
       edits: [
         {
           file: REACH,
-          from: '  watch = watchConsole();\n',
-          to: '  watch = watchConsole();\n  watch.release();\n'
+          from: HOISTED,
+          to: '  const made = watchConsole();\n  made.release();\n  return made;\n'
         }
       ]
     },
     {
       id: 'I-C6-a-path-stopped-running',
-      arm: 'RA2',
+      arm: 'RA1',
       describe: 'a path the file used to drive does not run, and watched nothing',
       edits: [
         {
@@ -352,7 +447,11 @@ export default {
       describe:
         'the defect’s other half: `activity` runs the plan of a consumer that has gone, and its `$derived` writes',
       edits: [
-        { file: STREAMED, from: LIVE_READ, to: '        safely(() => getOpts().live) ?? false,\n' }
+        {
+          file: STREAMED,
+          from: LIVE_READ,
+          to: '      lastLive = safely(() => getOpts().live) ?? false;\n'
+        }
       ]
     },
     {
@@ -374,8 +473,39 @@ export default {
       edits: [
         {
           file: STREAMED,
-          from: '    plannedLive = descriptor?.live ?? false;\n',
-          to: '    plannedLive = false;\n'
+          from: '    lastLive = descriptor?.live ?? false;\n',
+          to: '    lastLive = false;\n'
+        }
+      ]
+    },
+    {
+      id: 'C8-the-kept-live-is-the-one-built',
+      arm: 'CW1',
+      describe:
+        'a released handle says what the options were last built from, which is not what it read',
+      edits: [
+        {
+          file: STREAMED,
+          from: LIVE_READ,
+          to: '      const asked = released ? lastLive : (safely(() => getOpts().live) ?? false);\n'
+        },
+        {
+          file: STREAMED,
+          from: ACTIVITY,
+          to: "      return deriveActivity(asked, query.fetchStatus === 'fetching');\n"
+        }
+      ]
+    },
+    {
+      id: 'C8-the-diagnostic-is-built-at-its-reader',
+      arm: 'CW1',
+      describe:
+        'an incomplete answer’s `lastError` is a new Error at each read, which only identity can see',
+      edits: [
+        {
+          file: ENGINE,
+          from: "      (state.status === 'incomplete' ? state.error : undefined),\n",
+          to: "      (state.status === 'incomplete'\n        ? ownedByLibrary(new IncompleteResultError(state.causes))\n        : undefined),\n"
         }
       ]
     },
@@ -387,8 +517,8 @@ export default {
       edits: [
         {
           file: STREAMED,
-          from: '      return deriveActivity(\n',
-          to: "      if (released) return 'idle';\n      return deriveActivity(\n"
+          from: ACTIVITY,
+          to: `      if (released) return 'idle';\n${ACTIVITY}`
         }
       ]
     },
@@ -441,6 +571,30 @@ export default {
       edits: [{ file: EVENTSET, from: LEG_END, to: `  console.warn('leg ended');\n${LEG_END}` }]
     },
     {
+      id: 'C8-a-disposed-provider-logs',
+      arm: 'CW1',
+      describe: 'the code a consumer reaches by a root of its own writes as it is refused',
+      edits: [{ file: OWN, from: DISPOSED, to: `  console.error(message);\n${DISPOSED}` }]
+    },
+    {
+      id: 'C8-a-write-bound-at-load',
+      arm: 'CW1',
+      describe: 'a method bound as the module loads, on the public row',
+      edits: [
+        {
+          file: OWN,
+          from: TERMINAL,
+          to: `const report = console.error.bind(console);\n${TERMINAL}  report('failed');\n`
+        }
+      ]
+    },
+    {
+      id: 'C8-a-write-at-load',
+      arm: 'CW1',
+      describe: 'the module writes as it loads, on the public row',
+      edits: [{ file: OWN, from: TERMINAL, to: `console.warn('loaded');\n${TERMINAL}` }]
+    },
+    {
       id: 'C8-a-released-call-logs',
       arm: 'CW1',
       describe: 'a call on a released handle is answered and written about',
@@ -453,7 +607,19 @@ export default {
       ]
     },
     {
-      id: 'C8-the-key-forgets-the-count',
+      id: 'C5-the-key-forgets-the-source',
+      arm: 'TH4',
+      describe: 'another object at the same count, which a reset leaves, reads as the last report',
+      edits: [
+        {
+          file: STREAMED,
+          from: REJECTION_KEY,
+          to: '    if (rejection === undefined || rejection.count !== count) {'
+        }
+      ]
+    },
+    {
+      id: 'C5-the-key-forgets-the-count',
       arm: 'TH4',
       describe: 'error, success, error with the same object comes back to one key, and goes stale',
       edits: [
@@ -465,7 +631,7 @@ export default {
       ]
     },
     {
-      id: 'C8-a-copy-per-read',
+      id: 'C5-a-copy-per-read',
       arm: 'TH4',
       describe: 'the memo is off, so one report is a new object at every read',
       edits: [{ file: STREAMED, from: REJECTION_KEY, to: '    if (true as boolean) {' }]
