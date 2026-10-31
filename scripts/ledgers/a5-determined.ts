@@ -7,7 +7,10 @@
  * (A5), and its landings:
  * - `A5-C18` on `DT1`;
  * - `A5-C26` on `DT2`;
- * - `A5-C19` on `DT3`.
+ * - `A5-C19` on `DT3`;
+ * - `A5-C29` on `DT4`;
+ * - `A5-C27` on `DT5`;
+ * - `A5-C28` on `DT6`.
  *
  * An id begins with the row it is read against, `C<n>-` for `A5-C<n>`. Two
  * entries may carry the same edit when two rows each owe a failure under it;
@@ -16,7 +19,13 @@
 import type { Ledger } from '../ledger.ts';
 
 const MACHINE = 'src/lib/v1/machine.ts';
+const EVENTSET = 'src/lib/v1/eventset.ts';
 const ARM = 'src/tests/contracts/engine/determined.test.ts';
+
+/** What the backlog's end is computed from, up to the first cause. */
+const COMPLETION_HEAD = '  const present = new Set<IncompleteCause>();\n';
+/** A relay the backlog names as lost. */
+const GONE_NAMED = "      if (phase === 'ended') gone.push(url);\n";
 
 /** The rule both tables share: an absorbing state is kept, and anything else takes what arrives. */
 const RULE = '  return ABSORBING.has(current) ? current : incoming;\n';
@@ -129,12 +138,12 @@ const TIMER_CUT_TO = (ms: number): string =>
 export default {
   name: 'a5-determined',
   subject:
-    '`A5-C18`, `A5-C26` and `A5-C19` (what an attempt keeps once a relay is determined, and the `timeout` an undetermined relay says on its own): their landings, `DT1`–`DT3`',
+    '`A5-C18`, `A5-C26`, `A5-C19`, `A5-C27`, `A5-C28` and `A5-C29` (what an attempt keeps once a relay is determined, the `timeout` an undetermined relay says on its own, and which relays a backlog names): their landings, `DT1`–`DT6`',
   files: ['src/tests/contracts/engine/determined.test.ts'],
   calibration: {
     measured:
       "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up; one worker, on a shared 10-core machine",
-    seconds: { DT1: 5, DT2: 5, DT3: 4 }
+    seconds: { DT1: 5, DT2: 5, DT3: 4, DT4: 6, DT5: 4, DT6: 4 }
   },
   entries: [
     {
@@ -939,6 +948,117 @@ export default {
       edits: [
         { file: MACHINE, from: COMPLETION, to: '    complete: () => {}\n' },
         { file: MACHINE, from: TIMER, to: TIMER_CUT_TO(60) }
+      ]
+    },
+    {
+      id: 'C29-a-refusal-behind-an-answer-is-a-cause',
+      arm: 'DT4',
+      describe:
+        'the cause is counted off the refusals the attempt was told again, so a relay that answered and then closed makes the answer `refused` while another relay holds the backlog open, and in one task',
+      edits: [
+        {
+          file: EVENTSET,
+          from: COMPLETION_HEAD,
+          to: `${COMPLETION_HEAD}  if (backlog.refusals.length > 0) present.add('refused');\n`
+        }
+      ]
+    },
+    {
+      id: 'C29-the-table-says-nothing-of-a-refusal',
+      arm: 'DT4',
+      describe:
+        "a relay determined by refusing adds no cause: the arm's control, the frames the other way round",
+      edits: [
+        {
+          file: MACHINE,
+          from: "      else if (phase === 'refused') present.add('refused');\n",
+          to: ''
+        }
+      ]
+    },
+    {
+      id: 'C27-the-silent-relay-named',
+      arm: 'DT5',
+      describe: 'a relay left undetermined is named beside the one that was gone',
+      edits: [
+        {
+          file: MACHINE,
+          from: GONE_NAMED,
+          to: "      if (phase !== 'complete' && phase !== 'refused') gone.push(url);\n"
+        }
+      ]
+    },
+    {
+      id: 'C27-the-relay-called-gone-is-not-asked',
+      arm: 'DT5',
+      describe: 'the relay the preflight recorded as gone is left out of the REQ',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  const routeToTargets = { on: { relays: [...targetUrls] } };\n',
+          to: '  const routeToTargets = {\n    on: { relays: [...targetUrls].filter((url) => !preflightTerminal.includes(url)) }\n  };\n'
+        }
+      ]
+    },
+    {
+      id: 'C29-a-refusal-counted-while-a-live-backlog-was-open',
+      arm: 'DT4',
+      describe:
+        'a backward refusal on a live request is a cause whenever the backlog is still open, whatever determined the relay: only a second relay holds it open past the `EOSE`',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  let settled = false;\n  /** The forward leg is over. A live request ends when both legs are. */\n',
+          to: '  let settled = false;\n  let refusedWhileLiveBacklog = false;\n  /** The forward leg is over. A live request ends when both legs are. */\n'
+        },
+        {
+          file: MACHINE,
+          from: "    if (viaTimer) present.add('timeout');\n",
+          to: "    if (viaTimer) present.add('timeout');\n    if (refusedWhileLiveBacklog) present.add('refused');\n"
+        },
+        {
+          file: MACHINE,
+          from: "      if (leg === 'backward') advanceBackward(packet.from, 'refused');\n",
+          to: "      if (leg === 'backward' && live && !settled) refusedWhileLiveBacklog = true;\n      if (leg === 'backward') advanceBackward(packet.from, 'refused');\n"
+        }
+      ]
+    },
+    {
+      id: 'C29-a-refusal-behind-the-answer-unpublished',
+      arm: 'DT4',
+      describe:
+        'what a relay says after it has answered is dropped before it is recorded, so the `CLOSED` is published nowhere',
+      edits: [
+        {
+          file: MACHINE,
+          from: '      const notice = packet.notice ?? relayMessage(undefined);\n',
+          to: "      if (leg === 'backward' && backwardTargets.get(packet.from) === 'complete') return;\n      const notice = packet.notice ?? relayMessage(undefined);\n"
+        }
+      ]
+    },
+    {
+      id: 'C27-the-gone-relay-not-named',
+      arm: 'DT5',
+      describe: 'the record names nobody, so the two relays are one cause set and no attribution',
+      edits: [
+        {
+          file: MACHINE,
+          from: GONE_NAMED,
+          to: "      if (phase === ('never' as string)) gone.push(url);\n"
+        }
+      ]
+    },
+    {
+      id: 'C28-the-answered-relay-named',
+      arm: 'DT6',
+      describe:
+        'a relay that answered is named beside the one that died, which no published reading separates, since the death has added `ended` already',
+      edits: [
+        {
+          file: MACHINE,
+          from: GONE_NAMED,
+          to: "      if (phase === 'ended' || phase === 'complete') gone.push(url);\n"
+        }
       ]
     }
   ]

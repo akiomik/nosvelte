@@ -3,33 +3,32 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * What reaches a consumer around the moment a stream's end is decided: the
- * landings of `A-ε-C1` (`OR1`), `A-ε-C2` (`OR2`) and `A-ε-C5` (`OR3`).
+ * landings of `A-ε-C1` (`OR1`), `A-ε-C2` (`OR2`), `A-ε-C5` (`OR3`), `A-ε-C3`
+ * (`OR4`) and `A-ε-C19` (`OR5`).
  *
- * **`OR1` and `OR2` go through the published entry and nothing else**, because
- * their rows' route is `public`: `NostrApp` with `relays` only, so the verifier
- * is the one the library supplies, a consumer's own `useReq` under it, and
- * what a relay puts on the wire. `OR1` reads the handle twice — as of the
+ * **`OR1`, `OR2` and `OR5` go through the published entry and nothing else**,
+ * because their rows' route is `public`: `NostrApp` with `relays` only, so the
+ * verifier is the one the library supplies, a consumer's own `useReq` under it,
+ * and what a relay puts on the wire. `OR1` reads the handle twice — as of the
  * Svelte flush in which it first published an outcome, through an effect
  * (`WatchedRequest`), or on a refresh in the continuation of the promise it
  * returned; and once the test has waited — because "reflected first" is a
- * claim about the first. **`OR3` drives `referenceStream`**, because its row is
- * `internal`: what it arranges is how the verifier answers.
- *
- * `A-ε-C3` is not here. Its Given needs a consumer that has not asked for the
- * next chunk, and the published entry's only consumer folds each chunk and
- * asks for the next in the same turn. No public arrangement measured separates
- * a producer released with the decision from one released when the consumer
- * next asks, which is the row's subject; it is recorded as a phase-1 route
- * error to reopen (#175).
+ * claim about the first. **`OR3` and `OR4` drive `referenceStream`**, because
+ * their rows are `internal`: `OR3` arranges how the verifier answers, and
+ * `OR4` is a consumer that stops asking, which the published entry's only
+ * consumer never does: it folds each chunk and asks for the next in the same
+ * turn (#175).
  *
  * Port band 9480-9499.
  */
 import { render } from '@testing-library/svelte';
 import { WebSocket as MockWebSocket } from 'mock-socket';
+import { filter, firstValueFrom, Observable } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
+import type { TransportCapability } from '$lib/v1/lease.js';
 import { referenceStream } from '$lib/v1/machine.js';
 import { createRelayScope } from '$lib/v1/scope.svelte.js';
 import type { MachineChunk } from '$lib/v1/stream.js';
@@ -43,6 +42,7 @@ import {
   permanentTransport,
   respondWithEose
 } from './helpers/relay.js';
+import { signed } from './helpers/request.js';
 
 // The provider reads the framework's own context, not the setup's stand-in.
 vi.unmock('svelte');
@@ -146,12 +146,12 @@ describe('what reaches a consumer around the end of a stream', () => {
 
     // The refusal is the end: the relay closes the backlog's subscription.
     for (const sameTurnEose of [false, true]) {
-      const name = sameTurnEose ? 'anEoseAndARefusalInOneTurn' : 'theRefusalIsTheEnd';
+      const name = sameTurnEose ? 'aRefusalAndAnEoseInOneTurn' : 'theRefusalIsTheEnd';
       const one = published(nonLive);
       try {
         const backward = await one.subId('b');
-        if (sameTurnEose) one.relay.send(['EOSE', backward]);
         one.relay.send(['CLOSED', backward, `blocked: ${name}`]);
+        if (sameTurnEose) one.relay.send(['EOSE', backward]);
         await vi.waitFor(() => expect(firstOutcome(one.snapshots)).toBeDefined(), {
           timeout: 3000
         });
@@ -208,9 +208,9 @@ describe('what reaches a consumer around the end of a stream', () => {
         atTheOutcome: refused('theRefusalIsTheEnd'),
         afterwards: refused('theRefusalIsTheEnd')
       },
-      anEoseAndARefusalInOneTurn: {
-        atTheOutcome: refused('anEoseAndARefusalInOneTurn'),
-        afterwards: refused('anEoseAndARefusalInOneTurn')
+      aRefusalAndAnEoseInOneTurn: {
+        atTheOutcome: refused('aRefusalAndAnEoseInOneTurn'),
+        afterwards: refused('aRefusalAndAnEoseInOneTurn')
       },
       onARefresh: {
         atTheOutcome: {
@@ -468,6 +468,232 @@ describe('what reaches a consumer around the end of a stream', () => {
         theForwardLegEnded: true,
         delivered: true
       }
+    });
+  });
+
+  // @contracts A-ε-C3
+  it('OR4: a consumer that has not asked since the end was decided finds the producer gone, and no refusal after it', async () => {
+    // **A consumer that stops asking**, which the published entry does not
+    // have: it takes one chunk and asks for nothing more, so the end is decided
+    // with no `next()` outstanding. One outstanding there is the consumer
+    // asking, and a release that waited to be asked would read as prompt.
+    // **Two reads, each independent of the other.** While it is paused,
+    // the subscriptions the machine took from the transport: none is held, read
+    // off a capability that counts each one taken and torn down, with the count
+    // before the end as the control. That is the release: the frames on the
+    // wire cannot show it, since `settle` closes the backlog's subscription
+    // whether or not the producer goes, and a relay's own `CLOSED` needs no
+    // frame back. A guard on the refusal alone would pass the second read with
+    // the producer leaked. The second is what a refusal sent into the pause
+    // delivers once the consumer asks again: nothing of it, beside a listener
+    // of the arm's own on the client's message channel, which saw the frame
+    // arrive. **Three ways to the decision**: a timer, and the last `EOSE`, on
+    // a request that is not live, paused on an event, and a forward `CLOSED` on
+    // a live one, paused on the outcome.
+    const run = async (reqIdBase: string, decision: 'timer' | 'eose' | 'forward') => {
+      const live = decision === 'forward';
+      const timeoutMs = decision === 'timer' ? 300 : 2000;
+      const url = nextUrl();
+      const { rxNostr, server } = createTestRelay(url);
+      const base = permanentTransport(rxNostr);
+      let held = 0;
+      const counted = <Value>(stream: Observable<Value>): Observable<Value> =>
+        new Observable<Value>((subscriber) => {
+          held += 1;
+          const inner = stream.subscribe(subscriber);
+          return () => {
+            held -= 1;
+            inner.unsubscribe();
+          };
+        });
+      const transport: TransportCapability = {
+        get revoked() {
+          return base.revoked;
+        },
+        relayStatus: () => base.relayStatus(),
+        defaultRelays: () => base.defaultRelays(),
+        reconnect: (relay) => {
+          base.reconnect(relay);
+        },
+        use: (...args) => {
+          const stream = base.use(...args);
+          return stream === undefined ? undefined : counted(stream);
+        },
+        send: (...args) => {
+          const stream = base.send(...args);
+          return stream === undefined ? undefined : counted(stream);
+        },
+        onRevoke: (listener) => {
+          held += 1;
+          const release = base.onRevoke(listener);
+          return () => {
+            held -= 1;
+            release();
+          };
+        },
+        outgoingRequests: () => {
+          const stream = base.outgoingRequests();
+          return stream === undefined ? undefined : counted(stream);
+        },
+        connectionState: () => {
+          const stream = base.connectionState();
+          return stream === undefined ? undefined : counted(stream);
+        },
+        controlMessages: () => {
+          const stream = base.controlMessages();
+          return stream === undefined ? undefined : counted(stream);
+        }
+      };
+      const scope = createRelayScope(rxNostr, [url]);
+      const ac = new AbortController();
+      const closedFrames: string[] = [];
+      const listener = rxNostr.createAllMessageObservable().subscribe((packet) => {
+        if (packet.type === 'CLOSED') closedFrames.push(packet.subId);
+      });
+      const heard = (type: 'EOSE' | 'CLOSED') =>
+        firstValueFrom(
+          rxNostr.createAllMessageObservable().pipe(filter((packet) => packet.type === type))
+        );
+      const stream = referenceStream({
+        transport,
+        targets: requestTargets(transport, scope.current),
+        filters: [{ kinds: [1] }],
+        live,
+        reqIdBase,
+        signal: ac.signal,
+        timeoutMs,
+        verifyEvent: acceptAnyEvent
+      });
+      const named = (leg: string) =>
+        (server.messages as unknown[][]).find(
+          (frame) => frame[0] === 'REQ' && String(frame[1]).includes(leg)
+        )?.[1] as string | undefined;
+      try {
+        const outcome = stream.next();
+        await vi.waitFor(() => expect(named('-b:')).toBeDefined(), { timeout: 3000 });
+        if (live) await vi.waitFor(() => expect(named('-f:')).toBeDefined(), { timeout: 3000 });
+        const backward = named('-b:') as string;
+        const beforeTheEnd = held;
+        if (live) respondWithEose(server, backward);
+        else server.send(['EVENT', backward, fakeEvent({ content: 'the pause' })]);
+        const handed = ((await outcome).value as MachineChunk).type;
+        const decided =
+          decision === 'timer' ? delay(timeoutMs) : heard(decision === 'eose' ? 'EOSE' : 'CLOSED');
+        if (decision === 'eose') respondWithEose(server, backward);
+        if (live) server.send(['CLOSED', named('-f:'), 'blocked: the end']);
+        await decided;
+        // The consumer has asked for nothing since before the decision, and the
+        // release is a turn after it, so the next task reads it.
+        await delay(0);
+        const whilePaused = held;
+        const seen = closedFrames.length;
+        server.send(['CLOSED', backward, 'blocked: into the pause']);
+        await vi.waitFor(() => expect(closedFrames).toHaveLength(seen + 1), { timeout: 3000 });
+        const rest: string[] = [];
+        for await (const chunk of { [Symbol.asyncIterator]: () => stream }) {
+          rest.push(chunk.type === 'refused' ? `refused:${chunk.refusal.leg}` : chunk.type);
+        }
+        return { beforeTheEnd, handed, whilePaused, rest };
+      } catch (error) {
+        return failed(error);
+      } finally {
+        listener.unsubscribe();
+        ac.abort();
+        rxNostr.dispose();
+      }
+    };
+    const paused = { whilePaused: 0 };
+    expect(
+      {
+        timer: await run('or4-timer', 'timer'),
+        eose: await run('or4-eose', 'eose'),
+        forward: await run('or4-forward', 'forward')
+      },
+      'nothing held once the end is decided, and nothing delivered after it'
+    ).toEqual({
+      timer: { ...paused, beforeTheEnd: 4, handed: 'event', rest: ['settled'] },
+      eose: { ...paused, beforeTheEnd: 4, handed: 'event', rest: ['settled'] },
+      forward: {
+        ...paused,
+        beforeTheEnd: 5,
+        handed: 'settled',
+        rest: ['refused:forward', 'legEnded']
+      }
+    });
+  });
+
+  // @contracts A-ε-C19
+  it('OR5: a refusal after the forward `CLOSED` is not published, one before it is, and an event before it is delivered', async () => {
+    // **Five orders, one batch each, on a live request whose backlog has
+    // settled.** The forward `CLOSED` ends the stream. A backward `CLOSED`
+    // after it is not published, and the reverse order, which publishes it as a
+    // late refusal of a running request (0003), is what separates "dropped
+    // because it came after the decision" from "late refusals are never
+    // published". The three with an `EVENT` read that the boundary is a
+    // refusal's and not an event's: an event that arrived before the forward
+    // `CLOSED` is delivered in each, the one a refusal follows included, and a
+    // guard on admission fails them. Each reads once the request has stopped.
+    const live: ReqPlan = {
+      kind: 'request',
+      descriptor: {
+        filters: [{ kinds: [1] }],
+        live: true,
+        retain: 'unbounded',
+        settleTimeoutMs: 2000
+      }
+    };
+    type Frame = 'event' | 'forward' | 'backward';
+    const run = async (order: readonly Frame[]) => {
+      const one = published(live);
+      try {
+        const backward = await one.subId('b');
+        const forward = await one.subId('f');
+        respondWithEose(one.relay, backward);
+        await vi.waitFor(() => expect(one.request().state.status).toBe('settled'), {
+          timeout: 3000
+        });
+        const event = signed('in the batch');
+        for (const frame of order) {
+          if (frame === 'event') one.relay.send(['EVENT', forward, event]);
+          else if (frame === 'forward') one.relay.send(['CLOSED', forward, 'blocked: forward']);
+          else one.relay.send(['CLOSED', backward, 'restricted: backward']);
+        }
+        await vi.waitFor(() => expect(one.request().activity).toBe('idle'), { timeout: 3000 });
+        await delay(100);
+        const { state } = one.request();
+        return {
+          ...snapshotOf(one.request()),
+          delivered: state.status === 'loading' ? [] : state.events.map((each) => each.content)
+        };
+      } catch (error) {
+        return failed(error);
+      } finally {
+        one.view.unmount();
+      }
+    };
+    const runs = {
+      'forward, backward': await run(['forward', 'backward']),
+      'backward, forward': await run(['backward', 'forward']),
+      'event, forward': await run(['event', 'forward']),
+      'event, backward, forward': await run(['event', 'backward', 'forward']),
+      'event, forward, backward': await run(['event', 'forward', 'backward'])
+    };
+    const ended = (refusals: string[], delivered: string[]) => ({
+      status: 'settled',
+      causes: undefined,
+      refusals,
+      activity: 'idle',
+      legEnded: 'ended',
+      delivered
+    });
+    const forward = 'forward:blocked: forward';
+    const backward = 'backward:restricted: backward';
+    expect(runs, 'the end decides a refusal, and no event').toEqual({
+      'forward, backward': ended([forward], []),
+      'backward, forward': ended([backward, forward], []),
+      'event, forward': ended([forward], ['in the batch']),
+      'event, backward, forward': ended([backward, forward], ['in the batch']),
+      'event, forward, backward': ended([forward], ['in the batch'])
     });
   });
 });

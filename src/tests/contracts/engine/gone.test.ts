@@ -4,7 +4,7 @@
  *
  * What a request answers when the relays it is asking are gone: the landings
  * of `A5-C9` (`GN1`), `A5-C11` (`GN2`), `A5-C14` (`GN3`), `A5-C10` (`GN4`),
- * `A5-C15` (`GN5`) and `A5-C22` (`GN6`).
+ * `A5-C15` (`GN5`), `A5-C22` (`GN6`), `A5-C12` (`GN7`) and `A5-C13` (`GN8`).
  *
  * **Through the published entry**, for every row but `A5-C22`: `NostrApp` with
  * `relays` only, so the verifier is the library's, the dependency's retry
@@ -844,6 +844,171 @@ describe('A5: the relays a request is asking are gone', () => {
           { constructed: 6, opened: 1 }
         ],
         after: endedWith([], undefined)
+      }
+    });
+  }, 40_000);
+
+  // @contracts A5-C12
+  it('GN7: one relay gone and another silent when the request’s own timer fires reports both causes, exactly', async () => {
+    // **Each cause is the doing of one relay**, so each run is read beside the
+    // run without it. A relay that refuses the socket, under a 600 ms timeout,
+    // and the ordinary death: its server gone and its retries spent into
+    // `error`, on a fake clock under a 60s timeout. Each is read while the
+    // other relay is still silent, where the request is still waiting, and
+    // once the timer has fired. **The control is the same timer with nothing
+    // gone**, which is `timeout` alone: without it, `ended` could be the
+    // timer's. Which relay was gone is not published (`A5-C27` reads that).
+    const refused = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      return published([a, b], backlog('gn7-refused', [1], 600), async (handle) => {
+        await a.asked(1);
+        await b.asked(1);
+        a.refuse();
+        await delay(200);
+        const waiting = readingOf(handle());
+        await answered(handle);
+        return { waiting, answer: readingOf(handle()) };
+      });
+    })();
+    const exhausted = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      return published(
+        [a, b],
+        backlog('gn7-exhausted', [1], 60_000),
+        async (handle, constructed) => {
+          const asked = await advanceUntil(
+            () => a.reqs().length >= 1 && b.reqs().length >= 1,
+            5000
+          );
+          a.shut(1006);
+          await advanceUntil(() => false, 50_000, 500);
+          const waiting = readingOf(handle());
+          await advanceUntil(() => handle()?.state.status === 'incomplete', 15_000, 500);
+          return {
+            asked,
+            sockets: exhaustedSockets([a], constructed),
+            waiting,
+            answer: readingOf(handle())
+          };
+        },
+        { onAFakeClock: true }
+      );
+    })();
+    const control = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      return published([a, b], backlog('gn7-control', [1], 600), async (handle) => {
+        await a.asked(1);
+        await b.asked(1);
+        await answered(handle);
+        return readingOf(handle());
+      });
+    })();
+    const waiting = {
+      status: 'loading',
+      causes: undefined,
+      events: undefined,
+      legEnded: undefined,
+      activity: 'refreshing'
+    };
+    const stopped = (causes: string[]) => ({
+      status: 'incomplete',
+      causes,
+      events: [],
+      legEnded: undefined,
+      activity: 'idle'
+    });
+    expect(
+      { refused, exhausted, control },
+      'both causes once the timer fires, and timeout alone with nothing gone'
+    ).toEqual({
+      refused: { waiting, answer: stopped(['timeout', 'ended']) },
+      exhausted: {
+        asked: true,
+        sockets: [{ constructed: 6, opened: 1 }],
+        waiting,
+        answer: stopped(['timeout', 'ended'])
+      },
+      control: stopped(['timeout'])
+    });
+  }, 40_000);
+
+  // @contracts A5-C13
+  it('GN8: a relay that answered adds no timeout beside one that then died, and the death is reported', async () => {
+    // **Causes exactly `['ended']`, the timer far away**, because each half
+    // fails alone: a relay that answered and is left undetermined adds
+    // `timeout`, and a backlog that takes every relay's silence for an answer
+    // is `complete`. The death is the two ways again: the socket refused, and
+    // the ordinary one on a fake clock. An event the answered relay sent is
+    // kept. **The control is the same two relays with no death**, which is
+    // `settled`. Whether the relay that answered is counted among those lost is
+    // not published, since the one that died has already added `ended`
+    // (`A5-C28` reads that).
+    const event = signed('the relay that answered');
+    const answeredThenGone = async (
+      how: 'refused' | 'exhausted',
+      go: (relay: Relay) => void,
+      settle: (handle: () => ReqHandle | undefined) => Promise<void>,
+      options: { onAFakeClock?: boolean } = {}
+    ) => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      const plan = backlog(`gn8-${how}`, [1], options.onAFakeClock === true ? 60_000 : 30_000);
+      return published(
+        [a, b],
+        plan,
+        async (handle) => {
+          const asked = options.onAFakeClock === true ? advanceUntil : until;
+          await asked(() => a.reqs().length >= 1 && b.reqs().length >= 1, 3000);
+          a.server.send(['EVENT', a.reqs()[0], event]);
+          a.server.send(['EOSE', a.reqs()[0]]);
+          await (options.onAFakeClock === true ? vi.advanceTimersByTimeAsync(100) : delay(100));
+          go(b);
+          await settle(handle);
+          return readingOf(handle());
+        },
+        options
+      );
+    };
+    const refused = await answeredThenGone(
+      'refused',
+      (relay) => relay.refuse(),
+      (handle) => answered(handle)
+    );
+    const exhausted = await answeredThenGone(
+      'exhausted',
+      (relay) => relay.shut(1006),
+      async (handle) => {
+        await advanceUntil(() => handle()?.state.status === 'incomplete', 45_000, 500);
+      },
+      { onAFakeClock: true }
+    );
+    const control = await (async () => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      return published([a, b], backlog('gn8-control', [1]), async (handle) => {
+        await a.asked(1);
+        await b.asked(1);
+        a.server.send(['EOSE', a.reqs()[0]]);
+        b.server.send(['EOSE', b.reqs()[0]]);
+        await vi.waitFor(() => expect(handle()?.state.status).toBe('settled'), { timeout: 2000 });
+        return readingOf(handle());
+      });
+    })();
+    expect(
+      { refused, exhausted, control },
+      'ended alone, with what the relay that answered sent, and settled with no death'
+    ).toEqual({
+      refused: endedWith([event.id], undefined),
+      exhausted: endedWith([event.id], undefined),
+      control: {
+        status: 'settled',
+        causes: undefined,
+        events: [],
+        legEnded: undefined,
+        activity: 'idle'
       }
     });
   }, 40_000);

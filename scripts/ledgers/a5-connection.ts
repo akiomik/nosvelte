@@ -34,6 +34,8 @@ const ABSORBING = '      const next = nextPhase(current, incoming);\n';
 /** The tables' membership test, inside their one write: a relay outside the target set is not this request's. */
 const MEMBERSHIP =
   '      const current = phases.get(url);\n      if (current === undefined) return undefined;\n';
+/** The connection-state channel's reading of what it was told. */
+const CONNECTION_READ = '      const phase = phaseOfConnectionState(packet.state);\n';
 /** The connection-state channel's write of the live table. */
 const CONNECTION_WRITE = '      if (live) advance(packet.from, phase);';
 /** The outgoing-REQ channel's write of the live table. */
@@ -826,6 +828,71 @@ export default {
       describe:
         "the absorbing rule's mirror: held only for a relay that reached `terminal` through recovery, so one that went there directly is revived",
       edits: absorbingOnlyWhen('reachedFromRecovery.has(url)')
+    },
+    {
+      id: 'C25-the-handler-reads-initialized-as-recovering',
+      arm: 'CS5',
+      describe:
+        'the machine classifies at its own call and `initialized` moves the relay to `recovering`: the classifier is untouched, and no wire produces the state',
+      edits: [
+        {
+          file: MACHINE,
+          from: CONNECTION_READ,
+          to: "      const phase =\n        packet.state === 'initialized' ? 'recovering' : phaseOfConnectionState(packet.state);\n"
+        }
+      ]
+    },
+    {
+      id: 'C25-the-handler-writes-initialized-as-pending',
+      arm: 'CS5',
+      describe:
+        'the machine classifies at its own call and `initialized` writes `pending`: at a relay that never moved that reads as deciding nothing',
+      edits: [
+        {
+          file: MACHINE,
+          from: CONNECTION_READ,
+          to: "      const phase =\n        packet.state === 'initialized' ? 'pending' : phaseOfConnectionState(packet.state);\n"
+        }
+      ]
+    },
+    {
+      id: 'C25-the-handler-reads-connecting-as-active',
+      arm: 'CS5',
+      describe:
+        'the machine classifies at its own call and `connecting` reads as `active`: the classifier is untouched',
+      edits: [
+        {
+          file: MACHINE,
+          from: CONNECTION_READ,
+          to: "      const phase =\n        packet.state === 'connecting' ? 'active' : phaseOfConnectionState(packet.state);\n"
+        }
+      ]
+    },
+    {
+      id: 'C8-a-relay-with-no-status-re-opened',
+      arm: 'CS7',
+      describe:
+        'a relay the status has no entry for is taken for one whose retries ran out, so a first request calls `reconnect` on a relay no socket has been opened to',
+      edits: [
+        {
+          file: MACHINE,
+          from: PREFLIGHT_SWITCH,
+          to: "    switch (approachFor(status[url]?.connection ?? 'error')) {"
+        }
+      ]
+    },
+    {
+      id: 'C8-the-preflight-re-opens-a-dormant-relay',
+      arm: 'CS7',
+      describe:
+        'the preflight decides `dormant` as a re-open at its own call: the frames are the same, since the dependency re-opens only `error` and `rejected`, so only the call to `reconnect` tells them apart',
+      edits: [
+        {
+          file: MACHINE,
+          from: "    switch (approachFor(status[url]?.connection ?? 'initialized')) {\n",
+          to: "    switch (\n      status[url]?.connection === 'dormant'\n        ? 'reconnect-then-ask'\n        : approachFor(status[url]?.connection ?? 'initialized')\n    ) {\n"
+        }
+      ]
     }
   ]
 } satisfies Ledger;
