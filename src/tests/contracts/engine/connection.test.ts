@@ -42,8 +42,14 @@
 import { render } from '@testing-library/svelte';
 import { WebSocket as MockWebSocket } from 'mock-socket';
 import type Nostr from 'nostr-typedef';
-import { type ConnectionState, createRxForwardReq, createRxOneshotReq } from 'rx-nostr';
+import {
+  type ConnectionState,
+  type ConnectionStatePacket,
+  createRxForwardReq,
+  createRxOneshotReq
+} from 'rx-nostr';
 import { getEventHash, getPublicKey, getSignature } from 'rx-nostr-crypto';
+import { NEVER, Subject } from 'rxjs';
 import { QueryClient } from 'tanstack-svelte-query-v6';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
@@ -53,7 +59,9 @@ import { createAttemptRegistry } from '$lib/v1/attempt.js';
 import type { NostrContext } from '$lib/v1/context.svelte.js';
 import type { RefreshOutcome, ReqHandle, ReqPlan } from '$lib/v1/index.js';
 import type { TransportCapability } from '$lib/v1/lease.js';
+import type { BackwardPhase, PhaseTable } from '$lib/v1/machine.js';
 import { referenceStream } from '$lib/v1/machine.js';
+import type { RelayPhase } from '$lib/v1/refusal.js';
 import { approachFor, phaseOfConnectionState } from '$lib/v1/refusal.js';
 import { requestTargets } from '$lib/v1/stream.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
@@ -857,6 +865,81 @@ describe('A5: what a request does with each relay’s connection', () => {
   }, 30_000);
 });
 
+/**
+ * A live attempt over two relays on a transport the arm answers for, with no
+ * wire under it: a status read that reports `connection` for one relay when the
+ * attempt begins, and a connection channel the arm reports on. So the machine's
+ * two classifying statements are read by what each does where it stands:
+ * `taken` is what the preflight did about `connection`, and `report` then
+ * `phases` are a state handed to the handler and what it wrote. Nothing goes
+ * out, so no other writer moves a table.
+ */
+async function attemptOn(connection: ConnectionState) {
+  const a = 'ws://a.example/';
+  const b = 'ws://b.example/';
+  const states = new Subject<ConnectionStatePacket>();
+  const reconnected: string[] = [];
+  const transport: TransportCapability = {
+    revoked: false,
+    relayStatus: () =>
+      ({ [a]: { connection }, [b]: { connection: 'connected' } }) as ReturnType<
+        TransportCapability['relayStatus']
+      >,
+    defaultRelays: () => undefined,
+    reconnect: (relay) => {
+      reconnected.push(relay);
+    },
+    use: () => NEVER,
+    send: () => undefined,
+    onRevoke: () => () => {},
+    outgoingRequests: () => NEVER,
+    connectionState: () => states,
+    controlMessages: () => NEVER
+  };
+  const ac = new AbortController();
+  let forward: PhaseTable<RelayPhase> | undefined;
+  let backward: PhaseTable<BackwardPhase> | undefined;
+  let threw: unknown;
+  const handed: unknown[] = [];
+  const done = (async () => {
+    for await (const chunk of referenceStream({
+      verifyEvent: acceptAnyEvent,
+      transport,
+      targets: [a, b],
+      filters: [{ kinds: [1] }],
+      live: true,
+      reqIdBase: 'cs-call-site',
+      signal: ac.signal,
+      timeoutMs: 10_000,
+      witnessTables: (forwardTable, backwardTable) => {
+        forward = forwardTable;
+        backward = backwardTable;
+      }
+    }))
+      handed.push(chunk);
+  })().catch((error: unknown) => {
+    threw = error;
+  });
+  await vi.waitFor(() => expect(states.observed || threw !== undefined).toBe(true), {
+    timeout: 2000
+  });
+  return {
+    report: (state: ConnectionState): void => {
+      states.next({ from: a, state });
+    },
+    phases: () => ({ forward: forward?.get(a), backward: backward?.get(a) }),
+    taken: () => ({
+      reconnected,
+      forward: forward?.get(a),
+      failed: threw instanceof Error ? threw.message : undefined
+    }),
+    end: async (): Promise<void> => {
+      ac.abort();
+      await done;
+    }
+  };
+}
+
 describe('A5: what a provider-held transport, and the classifiers, decide', () => {
   // @contracts A5-C5
   it('CS3: a relay added behind the scope after a request began does not keep its leg alive', async () => {
@@ -976,7 +1059,7 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
   }, 30_000);
 
   // @contracts A5-C25
-  it('CS5: every connection state rx-nostr reports is classified, initialized as deciding nothing', () => {
+  it('CS5: every connection state rx-nostr reports is classified, initialized as deciding nothing', async () => {
     // **The classifier, called directly**, over the dependency's own
     // vocabulary. The nine names are held both ways against rx-nostr's
     // `ConnectionState` — the `DS20` construction — so a state added or
@@ -984,6 +1067,12 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
     // no decision about it. Retrying states keep the leg alive, terminal ones
     // end that relay, `dormant` among them, and `initialized` — a socket that
     // has not been anywhere — decides nothing.
+    //
+    // **And the same nine at the machine's own call**, because a copy of the
+    // classifier inlined there passes the reading above, and a state no wire
+    // produces could differ in it unseen. Each is pushed at a relay still
+    // `pending`, so every answer moves it somewhere of its own or leaves it,
+    // and the phase is read off the table the attempt holds.
     const NINE = [
       'initialized',
       'connecting',
@@ -1015,6 +1104,27 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
       error: 'terminal',
       rejected: 'terminal',
       terminated: 'terminal'
+    });
+
+    const handled: Record<string, unknown> = {};
+    for (const state of NINE) {
+      const attempt = await attemptOn('connected');
+      attempt.report(state);
+      handled[state] = attempt.phases();
+      await attempt.end();
+    }
+    const moved = (forward: RelayPhase) => ({ forward, backward: 'pending' });
+    const gone = { forward: 'terminal', backward: 'ended' };
+    expect(handled, 'the phase the machine put the relay in').toEqual({
+      initialized: moved('pending'),
+      connecting: moved('recovering'),
+      connected: moved('active'),
+      'waiting-for-retrying': moved('recovering'),
+      retrying: moved('recovering'),
+      dormant: gone,
+      error: gone,
+      rejected: gone,
+      terminated: gone
     });
   });
 
@@ -1249,8 +1359,20 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
       'terminated'
     ];
     const table = Object.fromEntries(STATES.map((state) => [state, approachFor(state)]));
+    // **And the decision as the preflight took it**, read by what it does, over
+    // every state: `dormant` asked as it stands and asked after a re-open are
+    // the same frames, since the dependency's `reconnect()` acts only on `error`
+    // and `rejected`, so `dormant` above cannot tell them apart. The call to
+    // `reconnect` can.
+    const taken: Record<string, unknown> = {};
+    for (const state of STATES) {
+      const attempt = await attemptOn(state);
+      taken[state] = attempt.taken();
+      await attempt.end();
+    }
+    const asked = { reconnected: [], forward: 'pending', failed: undefined };
     expect(
-      { error, rejected, dormant, terminated, order, table },
+      { error, rejected, dormant, terminated, order, table, taken },
       'each terminal state is decided before the relay is asked, and differently'
     ).toEqual({
       error: {
@@ -1305,6 +1427,17 @@ describe('A5: what a provider-held transport, and the classifiers, decide', () =
         error: 'reconnect-then-ask',
         rejected: 'give-up',
         terminated: 'disposed'
+      },
+      taken: {
+        initialized: asked,
+        connecting: asked,
+        connected: asked,
+        'waiting-for-retrying': asked,
+        retrying: asked,
+        dormant: asked,
+        error: { ...asked, reconnected: ['ws://a.example/'] },
+        rejected: { ...asked, forward: 'terminal' },
+        terminated: { ...asked, failed: expect.stringContaining('is terminated') }
       }
     });
   }, 20_000);

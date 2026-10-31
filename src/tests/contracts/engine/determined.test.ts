@@ -4,9 +4,10 @@
  *
  * What an attempt keeps once a relay's state is determined, and the `timeout`
  * a relay left undetermined says on its own: the landings of `A5-C18`
- * (`DT1`), `A5-C26` (`DT2`) and `A5-C19` (`DT3`).
+ * (`DT1`), `A5-C26` (`DT2`), `A5-C19` (`DT3`), `A5-C29` (`DT4`), `A5-C27`
+ * (`DT5`) and `A5-C28` (`DT6`).
  *
- * **Through the published entry**, for `DT1`: `NostrApp` with `relays` only, so
+ * **Through the published entry**, for `DT1` and `DT4`: `NostrApp` with `relays` only, so
  * the verifier is the library's and an event a relay sends is signed for real;
  * a consumer's own `useReq` under it; and a relay that dies twice over — its
  * retries spent into `error` under the shipping policy, on a fake clock, and a
@@ -19,8 +20,9 @@
  * held one relay's backlog open with a verifier that never answered, which no
  * published input reaches.
  *
- * **On the machine directly**, for `DT2` and `DT3`: `referenceStream` on a
- * client of the arm's own, because what they read is not published. `DT2`
+ * **On the machine directly**, for `DT2`, `DT3`, `DT5` and `DT6`:
+ * `referenceStream` on a client of the arm's own, because what they read is
+ * not published. `DT5` and `DT6` read which relays that record names. `DT2`
  * reads the backlog's own record of the relays it lost — the error a
  * `BacklogEnd` carries, which `eventset.ts` keeps for the machine's own
  * witnesses and publishes nowhere — and forces a relay's status to `rejected`
@@ -1534,5 +1536,237 @@ describe('A5: what an attempt keeps once a relay is determined', () => {
       { timed: await run(10_000), untimed: await run(undefined) },
       'the relay left undetermined is the timeout, and the timer is not'
     ).toEqual({ timed: reading, untimed: reading });
+  });
+
+  // @contracts A5-C29
+  it('DT4: a relay that answered and then closed its subscription has answered, however the frames fall', async () => {
+    // **Each arrangement differs from its neighbour in one thing**: live or
+    // not, the two frames in one task or a task apart, and another relay still
+    // answering or none. `EOSE` determines the relay, so the `CLOSED` behind it
+    // is no cause, and it is published where it is still routed. With a second
+    // relay the reading is taken twice, because a request can only show what
+    // the first relay did while the second holds the backlog open.
+    //
+    // **The control is the same frames the other way round**, where the
+    // `CLOSED` is what determined the relay and the answer is `refused`. An arm
+    // that never reached a refusal would read the same without it.
+    const backlog = (namespace: string): ReqPlan => ({
+      kind: 'request',
+      descriptor: { filters: [{ kinds: [1] }], settleTimeoutMs: 30_000, namespace }
+    });
+    const asked = (relay: Relay): Promise<boolean> =>
+      until(() => relay.reqs().some((subId) => subId.includes('-b:')), 3000);
+    type Frames = (relay: Relay) => void | Promise<void>;
+    const oneTask: Frames = (relay) => {
+      relay.answerBacklog();
+      relay.refuseBacklog();
+    };
+    const aTaskApart: Frames = async (relay) => {
+      relay.answerBacklog();
+      await delay(0);
+      relay.refuseBacklog();
+    };
+    const theOtherWayRound: Frames = (relay) => {
+      relay.refuseBacklog();
+      relay.answerBacklog();
+    };
+    const alone = (plan: ReqPlan, frames: Frames): Promise<unknown> => {
+      const a = relayAt(nextUrl());
+      const labels = { a: a.url };
+      return published([a], plan, async (handle) => {
+        await asked(a);
+        await frames(a);
+        await delay(100);
+        return readingOf(handle(), labels);
+      });
+    };
+    const beside = (plan: ReqPlan, frames: Frames): Promise<unknown> => {
+      const a = relayAt(nextUrl());
+      const b = relayAt(nextUrl());
+      const labels = { a: a.url, b: b.url };
+      return published([a, b], plan, async (handle) => {
+        await asked(a);
+        await asked(b);
+        await frames(a);
+        await delay(100);
+        const meanwhile = readingOf(handle(), labels);
+        b.answerBacklog();
+        await delay(100);
+        return { meanwhile, afterwards: readingOf(handle(), labels) };
+      });
+    };
+    const observed = {
+      alone: {
+        oneTask: await alone(backlog('dt4-alone-one'), oneTask),
+        aTaskApart: await alone(backlog('dt4-alone-apart'), aTaskApart),
+        live: await alone(live('dt4-alone-live'), oneTask),
+        liveATaskApart: await alone(live('dt4-alone-live-apart'), aTaskApart),
+        theOtherWayRound: await alone(backlog('dt4-alone-reversed'), theOtherWayRound)
+      },
+      beside: {
+        oneTask: await beside(backlog('dt4-beside-one'), oneTask),
+        aTaskApart: await beside(backlog('dt4-beside-apart'), aTaskApart),
+        theOtherWayRound: await beside(backlog('dt4-beside-reversed'), theOtherWayRound)
+      }
+    };
+    const read = { events: [], causes: undefined, legEnded: undefined, named: undefined };
+    const answered = (activity: string, refusals: string[]) => ({
+      ...read,
+      status: 'settled',
+      activity,
+      refusals
+    });
+    const told = ['backward a'];
+    const refused = {
+      ...read,
+      status: 'incomplete',
+      causes: ['refused'],
+      activity: 'idle',
+      refusals: told
+    };
+    const meanwhile = { ...read, status: 'streaming', activity: 'refreshing', refusals: told };
+    expect(
+      observed,
+      'a relay that answered first has answered, whatever follows; one that refused first has refused'
+    ).toEqual({
+      alone: {
+        oneTask: answered('idle', told),
+        // The request has ended and let go of the channel, so nothing is
+        // routed to publish.
+        aTaskApart: answered('idle', []),
+        live: answered('live', told),
+        liveATaskApart: answered('live', told),
+        theOtherWayRound: refused
+      },
+      beside: {
+        oneTask: { meanwhile, afterwards: answered('idle', told) },
+        aTaskApart: { meanwhile, afterwards: answered('idle', told) },
+        theOtherWayRound: { meanwhile, afterwards: refused }
+      }
+    });
+  });
+
+  // @contracts A5-C27
+  it('DT5: one relay gone and one silent at the timer: both causes, both asked, and the backlog names the gone one', async () => {
+    // **Internal**, because which relay a backlog lost is published nowhere:
+    // `GN7` reads the causes through the published entry. b's status is reported
+    // `rejected` when the attempt begins, which is the `ended` half, and its
+    // socket is open, so it is asked all the same; a is asked and stays silent
+    // until the request's own timer, which is the `timeout` half. `a` being
+    // named would be a silence taken for a loss.
+    const aUrl = nextUrl();
+    const bUrl = nextUrl();
+    const { rxNostr, server } = createTestRelay(aUrl);
+    const a = relayOn(server);
+    const b = relayOn(new WS(bUrl, { jsonProtocol: true }));
+    rxNostr.setDefaultRelays([aUrl, bUrl]);
+    const transport = permanentTransport(rxNostr);
+    const targets = requestTargets(transport, undefined);
+    const spelled = (url: string): string => targets.find((each) => each.startsWith(url)) ?? url;
+    rxNostr.getAllRelayStatus = () =>
+      ({
+        [spelled(aUrl)]: { connection: 'connected' },
+        [spelled(bUrl)]: { connection: 'rejected' }
+      }) as ReturnType<typeof rxNostr.getAllRelayStatus>;
+    const ac = new AbortController();
+    let tables: Tables | undefined;
+    const { chunks, done } = driven({
+      verifyEvent: acceptAnyEvent,
+      transport,
+      targets,
+      filters: [{ kinds: [1] }],
+      live: false,
+      reqIdBase: 'dt5',
+      signal: ac.signal,
+      timeoutMs: 300,
+      witnessTables: (forward, backward) => {
+        tables = { forward, backward };
+      }
+    });
+    try {
+      const askedBoth = await until(() => a.reqs().length >= 1 && b.reqs().length >= 1, 2000);
+      await Promise.race([done, delay(3000)]);
+      const labels = { a: aUrl, b: bUrl };
+      expect(
+        { askedBoth, ...recordOf(chunks, labels), backward: heldBy(tables, labels)?.backward },
+        'both causes, and the one relay that was gone'
+      ).toEqual({
+        askedBoth: true,
+        shape: ['settled'],
+        kind: 'incomplete',
+        causes: ['timeout', 'ended'],
+        named: ['b'],
+        backward: { a: 'active', b: 'ended' }
+      });
+    } finally {
+      ac.abort();
+      await done;
+      rxNostr.dispose();
+    }
+  });
+
+  // @contracts A5-C28
+  it('DT6: a relay that answered is not named beside one that then died', async () => {
+    // **Internal**, for the reason `DT5` is: `GN8` reads the causes, and a
+    // relay that answered and is counted as lost adds `ended`, which the relay
+    // that died has already added, so no published reading can tell them
+    // apart. The two deaths `GN8` takes: the socket closed with 4000, and
+    // dropped with retries off, so the connection is left in `error`.
+    const died = async (name: string, go: (relay: ReturnType<typeof relayOn>) => void) => {
+      const aUrl = nextUrl();
+      const bUrl = nextUrl();
+      const { rxNostr, server } = createTestRelay(aUrl);
+      const a = relayOn(server);
+      const b = relayOn(new WS(bUrl, { jsonProtocol: true }));
+      rxNostr.setDefaultRelays([aUrl, bUrl]);
+      const transport = permanentTransport(rxNostr);
+      const ac = new AbortController();
+      let tables: Tables | undefined;
+      const { chunks, done } = driven({
+        verifyEvent: acceptAnyEvent,
+        transport,
+        targets: requestTargets(transport, undefined),
+        filters: [{ kinds: [1] }],
+        live: false,
+        reqIdBase: `dt6-${name}`,
+        signal: ac.signal,
+        timeoutMs: 10_000,
+        witnessTables: (forward, backward) => {
+          tables = { forward, backward };
+        }
+      });
+      try {
+        const askedBoth = await until(() => a.reqs().length >= 1 && b.reqs().length >= 1, 2000);
+        a.answerBacklog();
+        await delay(50);
+        go(b);
+        await Promise.race([done, delay(3000)]);
+        const labels = { a: aUrl, b: bUrl };
+        return { askedBoth, ...recordOf(chunks, labels), backward: heldBy(tables, labels)?.backward };
+      } finally {
+        ac.abort();
+        await done;
+        rxNostr.dispose();
+      }
+    };
+    const reading = {
+      askedBoth: true,
+      shape: ['settled'],
+      kind: 'incomplete',
+      causes: ['ended'],
+      named: ['b'],
+      backward: { a: 'complete', b: 'ended' }
+    };
+    expect(
+      {
+        refused: await died('refused', (relay) => {
+          relay.refuse();
+        }),
+        dropped: await died('dropped', (relay) => {
+          relay.shut();
+        })
+      },
+      'the relay that died, and not the one that answered'
+    ).toEqual({ refused: reading, dropped: reading });
   });
 });

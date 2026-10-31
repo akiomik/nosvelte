@@ -4,9 +4,9 @@
  *
  * What a relay's refusal is called, and what it does to a request: the
  * landings of `A-α-C1` (`RD1`), `A-α-C2` (`RD2`), `A-α-C3` (`RD3`), `A-α-C4`
- * (`RD4`), `A-α-C5` (`RD5`) and `A5-S4` (`RD6`).
+ * (`RD4`), `A-α-C5` (`RD5`), `A5-S4` (`RD6`) and `A-α-C6` (`RD7`).
  *
- * **Through the published entry**, because the rows are `public`: `NostrApp`
+ * **Through the published entry**, because the rows but `A-α-C6` are `public`: `NostrApp`
  * with `relays` only and consumers' own `useReq` under it
  * (`descriptor/Host.svelte`), and what a relay puts on the wire. The subId a
  * relay answers with is the relay's to choose, so each `CLOSED` here is a frame
@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
+import { recoveryFor, type RefusalReason } from '$lib/v1/refusal.js';
 
 import Host from '../descriptor/Host.svelte';
 import { signed, urlsFrom } from './helpers/request.js';
@@ -480,4 +481,45 @@ describe('A-α: what a relay’s refusal is called, and what it does', () => {
       'the second refused': { requests: [bystander, refused] }
     });
   }, 20_000);
+
+  // @contracts A-α-C6
+  it('RD7: `rate-limited` is the one class recorded as clearing on its own, and every class stops', () => {
+    // **Internal, and an annotation**: nothing reads this answer, so it says
+    // what a retry policy would be written against and promises no recovery.
+    // Every class, `unknown` among them, is held both ways against the type, so
+    // a class added to it is a type error here (`npm run check`) and not a
+    // class with no answer.
+    const TEN = [
+      'duplicate',
+      'pow',
+      'blocked',
+      'rate-limited',
+      'invalid',
+      'restricted',
+      'mute',
+      'error',
+      'auth-required',
+      'unknown'
+    ] as const;
+    const _fromTheType: (typeof TEN)[number] = null as unknown as RefusalReason;
+    const _toTheType: RefusalReason = null as unknown as (typeof TEN)[number];
+    void _fromTheType;
+    void _toTheType;
+    const stops = { selfClearing: false, action: 'stop' };
+    expect(
+      Object.fromEntries(TEN.map((reason) => [reason, recoveryFor(reason)])),
+      'what each class is recorded as'
+    ).toEqual({
+      duplicate: stops,
+      pow: stops,
+      blocked: stops,
+      'rate-limited': { selfClearing: true, action: 'stop' },
+      invalid: stops,
+      restricted: stops,
+      mute: stops,
+      error: stops,
+      'auth-required': stops,
+      unknown: stops
+    });
+  });
 });
