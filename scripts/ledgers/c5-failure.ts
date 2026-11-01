@@ -100,18 +100,18 @@ export default {
     'src/tests/contracts/engine/release.test.ts'
   ],
   calibration: {
-    measured: "one run of each arm's duration in a single Vitest run, plus 1.5 s for the process.",
+    measured: 'the mean of each run in a full run at a73fcf8, one at a time.',
     seconds: {
-      TH1: 1.8,
-      TH2: 2.1,
-      TH3: 1.9,
-      TH4: 1.9,
-      RA1: 9.3,
-      RX6: 1.6,
-      CW1: 6.8,
-      CW2: 2.2,
-      CW3: 5.1,
-      RL4: 1.6
+      TH1: 4.7,
+      TH2: 4.7,
+      TH3: 6.1,
+      TH4: 4.6,
+      RA1: 14.6,
+      RX6: 4.3,
+      CW1: 10.3,
+      CW2: 4.9,
+      CW3: 8.3,
+      RL4: 4.3
     }
   },
   entries: [
