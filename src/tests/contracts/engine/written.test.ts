@@ -460,14 +460,16 @@ describe('C5: what a consumer’s console sees', () => {
     // **And the other edge of `C5-C9`'s.** A request built after its provider
     // went has never been told anything it could stop on, so it runs once and
     // publishes `unspecified`. That is #202's to decide, and this says what it
-    // does until it is.
+    // does until it is. **And the controls of `CW3`'s later plans:** a plan that
+    // no longer asks, or that the boundary refuses, is followed while the
+    // provider stands, and `CW3` cannot tell them apart because it reads neither.
     const during = (change: () => void): readonly string[] => {
       const from = watch.reading().written.length;
       change();
       return watch.reading().written.slice(from);
     };
 
-    const standing = async (direct: boolean) => {
+    const kept = async (direct: boolean) => {
       const url = nextUrl();
       const server = new WS(url, { jsonProtocol: true });
       const plan = box(request({ settleTimeoutMs: 300 }));
@@ -489,19 +491,41 @@ describe('C5: what a consumer’s console sees', () => {
       await settle();
       await view.rerender({ mounted: false });
       await settle(40);
+      return {
+        server,
+        plan,
+        held: handle as unknown as ReqHandle,
+        end: async (): Promise<void> => {
+          stop();
+          view.unmount();
+          await settle(40);
+        }
+      };
+    };
+
+    const standing = async (direct: boolean) => {
+      const { server, plan, held, end } = await kept(direct);
       const flushed = during(() => {
         plan.current = request({ filters: [{ kinds: [2] }], settleTimeoutMs: 300 });
         flushSync();
       });
       const read = during(() => {
-        void (handle as unknown as ReqHandle).activity;
+        void held.activity;
       });
       await settle(40);
       const wire = asked(server).filter((name) => name.includes('-b:')).length;
-      stop();
-      view.unmount();
-      await settle(40);
+      await end();
       return { flushed, read, wire };
+    };
+
+    const followed = async (to: ReqPlan) => {
+      const { plan, held, end } = await kept(true);
+      plan.current = to;
+      await settle(40);
+      const { status, code } = readingOf(held);
+      const answer = await answerOf(held.refresh());
+      await end();
+      return { status, code, answer };
     };
 
     const withNone = () => {
@@ -569,14 +593,22 @@ describe('C5: what a consumer’s console sees', () => {
         dead: await standing(false),
         alive: await standing(true),
         none: withNone(),
-        late: await builtAfter()
+        late: await builtAfter(),
+        toDeferred: await followed({ kind: 'deferred' }),
+        toRefused: await followed(request({ relays: ['ws://outside.test'] }))
       },
       'the dead one at the read and asking nothing, the live one followed in silence, and the same line with no library'
     ).toEqual({
       dead: { flushed: [], read: [line], wire: 1 },
       alive: { flushed: [], read: [], wire: 2 },
       none: [line],
-      late: { status: 'error', code: 'unspecified', answer: `rejected ${OUTLIVED}`, wire: 0 }
+      late: { status: 'error', code: 'unspecified', answer: `rejected ${OUTLIVED}`, wire: 0 },
+      toDeferred: { status: 'loading', code: undefined, answer: 'not-started deferred' },
+      toRefused: {
+        status: 'error',
+        code: 'relay-not-in-scope',
+        answer: 'rejected relay-not-in-scope'
+      }
     });
   }, 10_000);
 
@@ -620,6 +652,7 @@ describe('C5: what a consumer’s console sees', () => {
       readonly together?: boolean;
       readonly atOnce?: boolean;
       readonly holding?: Nostr.Event;
+      readonly then?: ReqPlan;
     }
 
     const changed = (): ReqPlan => request({ filters: [{ kinds: [2] }], settleTimeoutMs: 300 });
@@ -646,6 +679,18 @@ describe('C5: what a consumer’s console sees', () => {
         from: request({ settleTimeoutMs: 300 }),
         answers: true,
         holding: signed('kept')
+      },
+      'holding an event, told not to ask after it went': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        holding: signed('kept past a deferral'),
+        then: { kind: 'deferred' }
+      },
+      'holding an event, refused after it went': {
+        from: request({ settleTimeoutMs: 300 }),
+        answers: true,
+        holding: signed('kept past a refusal'),
+        then: request({ relays: ['ws://outside.test'] })
       },
       'with the plan changed in the tick it went': {
         from: request({ settleTimeoutMs: 300 }),
@@ -734,7 +779,7 @@ describe('C5: what a consumer’s console sees', () => {
       kept.push(contents());
       if (other !== undefined) (stops.pop() as () => void)();
 
-      plan.current = changed();
+      plan.current = way.then ?? changed();
       flushSync();
       await settle(40);
       const moved = readingOf(held);
@@ -784,6 +829,13 @@ describe('C5: what a consumer’s console sees', () => {
     // What an attempt the provider's going caught reads is #202's to decide, and
     // only that it stays is this row's.
     const running = (): object => ({ ...quiet, left: expect.anything(), answer: gone });
+    // What answered the earlier plan stays, and the later one is not heard.
+    const holding = (name: string): object => ({
+      ...quiet,
+      left,
+      answer: gone,
+      kept: Array.from({ length: 4 }, () => [(WAYS[name]?.holding as Nostr.Event).id])
+    });
     expect(seen, 'the same reading, and no read of the plan, no attempt and no write').toEqual({
       'through the `$derived`': { ...quiet, left, answer: gone },
       'from a source that stays alive': { ...quiet, left, answer: gone },
@@ -795,14 +847,11 @@ describe('C5: what a consumer’s console sees', () => {
         answer: gone,
         beside: 'not-started released'
       },
-      'holding an event': {
-        ...quiet,
-        left,
-        answer: gone,
-        kept: Array.from({ length: 4 }, () => [
-          (WAYS['holding an event']?.holding as Nostr.Event).id
-        ])
-      },
+      'holding an event': holding('holding an event'),
+      'holding an event, told not to ask after it went': holding(
+        'holding an event, told not to ask after it went'
+      ),
+      'holding an event, refused after it went': holding('holding an event, refused after it went'),
       'with the plan changed in the tick it went': running(),
       'asked in the tick it went': { ...quiet, left, answer: gone, atOnce: gone, readAtOnce: 0 },
       'not asking': { ...quiet, left: notAsking, answer: 'not-started deferred' },

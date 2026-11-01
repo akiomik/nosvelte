@@ -416,7 +416,7 @@ export interface UseStreamedReqOpts {
    * no REQ; it reports `loading` with `activity: 'idle'`; `refresh()` resolves
    * `{ kind: 'not-started', reason: 'deferred' }`. Becoming a request applies
    * the ordinary mount triggers, and going back releases the observer without
-   * deleting the entry.
+   * deleting the entry, both while the provider stands (`C5-C9`).
    *
    * **What it does occupy is one inert entry, shared by every deferred hook on
    * a client, and that is a price rather than a promise.** The query library
@@ -1891,11 +1891,15 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * Whether the provider has gone, which is when this request stops reading its
    * plan (`C5-C9`).
    *
-   * **The plan has nothing left to say, and reading it does harm.** The
-   * `$derived` it reads may have gone with the provider, which is
-   * `derived_inert` on the console, and an options evaluation then reaches an
-   * emptied cache, builds a new entry and runs an attempt on a revoked
-   * capability, which published `unspecified` for a plan that had only changed.
+   * **A restriction, and it costs the consumer their plan.** The plan can go on
+   * changing, and a change to `deferred` or to one the boundary refuses needs no
+   * transport, but finding that out is a read, and the read is the harm. The
+   * `$derived` it reads may have gone with the provider, which is `derived_inert`
+   * on the console, and an options evaluation then reaches an emptied cache,
+   * builds a new entry and runs an attempt on a revoked capability, which
+   * published `unspecified` for a plan that had only changed. So a later plan is
+   * not applied or refused, what is held goes on answering the earlier one, and
+   * nothing says so: that is #202's to decide.
    *
    * **`$state`, because a reader that stops reading has to run to stop.** A
    * reaction that read the plan depends on it until it next runs, and Svelte's
@@ -3176,8 +3180,9 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // green.
       //
       // **Above the read of the plan, because a request that has gone may not
-      // make it** (`C5-C9`). What the plan said is kept, so a plan that was not
-      // asking and one the boundary refused answer as they did.
+      // make it** (`C5-C9`). What the plan last said is kept, so a plan that was
+      // not asking and one the boundary refused answer as they did, and a plan
+      // changed since is not heard: this answers the earlier one.
       if (providerGone) {
         if (lastPlan?.deferred === true) return NOT_ASKING;
         if (lastPlan?.rejection !== undefined) throw lastPlan.rejection;
