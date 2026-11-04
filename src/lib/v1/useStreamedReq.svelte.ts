@@ -211,6 +211,10 @@ export function collect(
   // refresh does not move the primary state (P30). Keeping the forward record
   // would carry an end that belongs to a subscription this attempt has not
   // opened, so a request that stopped once would report itself stopped forever.
+  //
+  // **The engine has usually begun the attempt already**, at its query
+  // function's entry (`SB1`), so here it is a second begin of the same attempt
+  // and changes nothing. It still begins one whose value did not exist then.
   const base = chunk.fresh === true ? beginAttempt(acc, chunk.attempt) : acc;
   // Named with the attempt that produced it, so a `refresh()` can tell its own
   // answer from the one that was already there. The end arrives worked out: the
@@ -1925,6 +1929,12 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
     // not be constructed", which is what this said and was wrong about.
     const given = getOpts();
     const attempts = ownedAttempts();
+    // Captured with the options, as `attempts` is, because the query function
+    // writes the attempt's start through it before its first `await` — inside
+    // `createQuery`'s `$effect`, where reading the caller's options made them
+    // a dependency of that effect, and a scope that changed nothing a request
+    // can be told then asked the question again (`SG25`, measured).
+    const client = ownedClient();
     const verifyEvent = runtime.verifierOf();
     const {
       reqIdBase,
@@ -2488,6 +2498,28 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
           ? linkCancellation((context as { signal: AbortSignal }).signal, attemptId, invocation)
           : undefined;
         try {
+          // **The attempt's start withdraws the last one's records, here and
+          // not at its first chunk.** `twoStageStream` marks an attempt `fresh`
+          // on the first chunk it yields, and `collect` begins the attempt
+          // there — so while the new attempt was silent, its REQs on the wire
+          // and nothing answered, the forward record and the running backward
+          // record of the attempt it replaced stayed published, which is the
+          // start of `B-η-C5` read at the wrong instant (`SB1`). Here is the
+          // boundary every invocation crosses, an accumulator that throws or
+          // never calls `streamFn` included.
+          //
+          // An updater on the captured key that returns `undefined` when there
+          // is no value: query-core then writes nothing, so a start makes no
+          // answer and recreates no entry that was collected. An invocation
+          // already cancelled at its entry begins nothing. What `beginAttempt`
+          // keeps is the rest — the backlog record, the events and the failure
+          // — so neither the primary state nor the activity moves when an
+          // attempt starts.
+          if (!invocation.signal.aborted) {
+            client.setQueryData<Collected>(key, (previous) =>
+              previous === undefined ? undefined : beginAttempt(previous, attemptId)
+            );
+          }
           const inner = accumulator({
             initialValue: initialCollected,
             reducer: reduceChunk,
