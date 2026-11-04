@@ -8,6 +8,13 @@
  * published type that lets a write through. One beginning `I-` edits an
  * instrument: the arrangement, the run-time discipline, or the compile probe.
  *
+ * Each `-settled-reused` entry hands the promise of one `refresh()` path, once
+ * it has settled, to the next caller at one entrance — the engine's hook or
+ * `useReq()` — one entry for each path `PB13` drives at the entrance it drives
+ * it through (`REFRESH_PATHS`). The two that follow a cancellation hand it to
+ * the call after it, which is another path's, since a cancellation ends the
+ * handle's lifetime or its provider's.
+ *
  * Retired with no entry:
  * - unreachable from the repository: an exclusion looked up by an inherited
  *   key, which needs an export named after a member of `Object.prototype`.
@@ -2768,6 +2775,266 @@ export default {
           file: 'src/lib/v1/send.svelte.ts',
           from: '  return Object.freeze((input: SendInput, options?: SendOptions) =>\n    sendThrough(port, input, options)\n  );',
           to: "  const settled = new WeakMap<object, Promise<SendResult>>();\n  return Object.freeze((input: SendInput, options?: SendOptions) => {\n    if (typeof input !== 'object' || input === null || 'sig' in input || !('kind' in input)) return sendThrough(port, input, options);\n    const previous = settled.get(input);\n    if (previous !== undefined) return previous;\n    const sent = sendThrough(port, input, options);\n    void sent.then(() => {\n      if (!settled.has(input)) settled.set(input, sent);\n    });\n    return sent;\n  });"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-complete-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise of a `complete` refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'complete') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-incomplete-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise of an `incomplete` refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'incomplete') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-error-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise of an `error` refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'error') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-released-cancelled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands the call after a `cancelled` (`consumer-released`) refresh its settled promise',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'cancelled' && (outcome as { reason?: unknown }).reason === 'consumer-released') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-disposed-cancelled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands the call after a `cancelled` (`provider-disposed`) refresh its settled promise',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'cancelled' && (outcome as { reason?: unknown }).reason === 'provider-disposed') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-released-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise of a `not-started` (`released`) refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'not-started' && (outcome as { reason?: unknown }).reason === 'released') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-server-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise of a `not-started` (`server`) refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'not-started' && (outcome as { reason?: unknown }).reason === 'server') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-deferred-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise of a `not-started` (`deferred`) refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'not-started' && (outcome as { reason?: unknown }).reason === 'deferred') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-nowhere-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise of a `not-started` (`no-readable-relay`) refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'not-started' && (outcome as { reason?: unknown }).reason === 'no-readable-relay') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-invalid-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `invalid-descriptor` at the boundary, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'invalid-descriptor' && (thrown as { field?: unknown }).field !== 'deferred') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-invalid-seam-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `invalid-descriptor` before the boundary, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'invalid-descriptor' && (thrown as { field?: unknown }).field === 'deferred') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-unsupported-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `unsupported-filter`, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'unsupported-filter') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-not-in-scope-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `relay-not-in-scope`, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'relay-not-in-scope') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-incompatible-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `transport-incompatible`, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'transport-incompatible') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-unreadable-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `descriptor-unreadable`, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'descriptor-unreadable') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-unowned-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `missing-provider`, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'missing-provider') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-disposed-settled-reused',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` hands a later caller the promise it rejected with `provider-disposed`, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (false) kept = pending;\n          },\n          (thrown) => {\n            if ((thrown as { code?: unknown }).code === 'provider-disposed') kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-useReq-incomplete-settled-reused',
+      arm: 'PB13',
+      describe:
+        '`useReq()`’s `refresh()` hands a later caller the promise of an `incomplete` refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/req.svelte.ts',
+          from: '    refresh: () => handle.refresh()\n  });',
+          to: "    refresh: (() => {\n      let kept: Promise<RefreshOutcome> | undefined;\n      return {\n        refresh(): Promise<RefreshOutcome> {\n          if (kept !== undefined) return kept;\n          const pending = handle.refresh();\n          pending.then(\n            (outcome) => {\n              if (outcome.kind === 'incomplete') kept = pending;\n            },\n            (thrown) => {\n              if (false) kept = pending;\n            }\n          );\n          return pending;\n        }\n      }.refresh;\n    })()\n  });"
+        }
+      ]
+    },
+    {
+      id: 'C8-useReq-deferred-settled-reused',
+      arm: 'PB13',
+      describe:
+        '`useReq()`’s `refresh()` hands a later caller the promise of a `not-started` (`deferred`) refresh once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/req.svelte.ts',
+          from: '    refresh: () => handle.refresh()\n  });',
+          to: "    refresh: (() => {\n      let kept: Promise<RefreshOutcome> | undefined;\n      return {\n        refresh(): Promise<RefreshOutcome> {\n          if (kept !== undefined) return kept;\n          const pending = handle.refresh();\n          pending.then(\n            (outcome) => {\n              if (outcome.kind === 'not-started' && (outcome as { reason?: unknown }).reason === 'deferred') kept = pending;\n            },\n            (thrown) => {\n              if (false) kept = pending;\n            }\n          );\n          return pending;\n        }\n      }.refresh;\n    })()\n  });"
+        }
+      ]
+    },
+    {
+      id: 'C8-useReq-not-in-scope-settled-reused',
+      arm: 'PB13',
+      describe:
+        '`useReq()`’s `refresh()` hands a later caller the promise it rejected with `relay-not-in-scope`, once it has settled',
+      edits: [
+        {
+          file: 'src/lib/v1/req.svelte.ts',
+          from: '    refresh: () => handle.refresh()\n  });',
+          to: "    refresh: (() => {\n      let kept: Promise<RefreshOutcome> | undefined;\n      return {\n        refresh(): Promise<RefreshOutcome> {\n          if (kept !== undefined) return kept;\n          const pending = handle.refresh();\n          pending.then(\n            (outcome) => {\n              if (false) kept = pending;\n            },\n            (thrown) => {\n              if ((thrown as { code?: unknown }).code === 'relay-not-in-scope') kept = pending;\n            }\n          );\n          return pending;\n        }\n      }.refresh;\n    })()\n  });"
         }
       ]
     }
