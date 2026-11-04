@@ -7,6 +7,8 @@
     readonly objects: number;
     /** Every query client reached, by identity. */
     readonly clients: readonly unknown[];
+    /** Where each value the walk reached and could not look inside was found. */
+    readonly unlooked: readonly string[];
   }
 </script>
 
@@ -19,12 +21,20 @@
    * client it reaches through the framework's own context.
    *
    * **It walks rather than looks a name up**: from each value
-   * `getAllContexts()` hands it, through every own member, to a bounded depth,
-   * so a client nested inside a value is reached as well as one held directly.
-   * A query client is recognised by the pair of methods every one answers, and
-   * the arm decides whose it is by identity. A class's prototype is not walked
-   * as a value somebody put there — `QueryClient.prototype` answers the same
-   * pair — and neither is the language's own floor.
+   * `getAllContexts()` hands it, through every own member, with no depth to
+   * run out, so a client nested inside a value is reached as well as one held
+   * directly, and an object reached twice was looked inside wholly the first
+   * time. A query client is recognised by the pair of methods every one
+   * answers, and the arm decides whose it is by identity; what a client holds
+   * is its cache, which the arms read as notifications, so the walk stops
+   * there.
+   *
+   * **Every way it stops is a reading.** A value it cannot look inside is
+   * reported where it was found rather than passed over: a function, which can
+   * close over anything; an object that is neither a plain object nor an
+   * array, whose class may keep private fields or whose internal slots — a
+   * `Map`'s, a `Set`'s, a `Promise`'s — hold what its own members do not show;
+   * and a member that throws when it is read.
    */
   import { getAllContexts } from 'svelte';
 
@@ -39,32 +49,41 @@
   // a built-in `Set` in a component, and reactivity is not what these are for.
   const seen: unknown[] = [];
   const clients: unknown[] = [];
-  let objects = 0;
+  const unlooked: string[] = [];
 
-  const walk = (value: unknown, depth: number): void => {
-    if (depth < 0 || value === null || typeof value !== 'object') return;
+  const walk = (value: unknown, where: string): void => {
+    if (typeof value === 'function') {
+      unlooked.push(where);
+      return;
+    }
+    if (value === null || typeof value !== 'object') return;
     if (seen.includes(value)) return;
     seen.push(value);
-    if ((value as { constructor?: { prototype?: unknown } }).constructor?.prototype === value)
-      return;
-    objects += 1;
     const held = value as Record<string | symbol, unknown>;
     if (typeof held['getQueryCache'] === 'function' && typeof held['setQueryData'] === 'function') {
       clients.push(value);
-    }
-    for (const key of Reflect.ownKeys(value)) {
-      try {
-        walk(held[key], depth - 1);
-      } catch {
-        // A member that refuses to be read is not a reference to follow.
-      }
+      return;
     }
     const proto: unknown = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== Array.prototype) walk(proto, depth - 1);
+    if (proto !== Object.prototype && proto !== Array.prototype && proto !== null) {
+      unlooked.push(where);
+      return;
+    }
+    for (const key of Reflect.ownKeys(value)) {
+      const at = `${where}.${String(key)}`;
+      let member: unknown;
+      try {
+        member = held[key];
+      } catch {
+        unlooked.push(at);
+        continue;
+      }
+      walk(member, at);
+    }
   };
 
-  for (const value of all.values()) walk(value, 6);
+  for (const [key, value] of all) walk(value, String(key));
 
   // svelte-ignore state_referenced_locally
-  walked({ entries: all.size, objects, clients });
+  walked({ entries: all.size, objects: seen.length, clients, unlooked });
 </script>

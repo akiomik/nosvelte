@@ -3,7 +3,9 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * The client a provider owns, and the one a consumer owns above it: the
- * landing of `A15-C3` (`AM1`–`AM4`).
+ * landing of `A15-C3` (`AM1`, with `AM2`–`AM5`). `AM5` alone is on the
+ * standalone seam (`0002` A16), since only a request that brings its own
+ * inputs can bring every one but the client.
  *
  * **Through the published entry**: the dependency's own `QueryClientProvider`
  * around `NostrApp` with `relays` only, and a consumer's `useReq` under it
@@ -26,12 +28,17 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
+import { createAttemptRegistry } from '$lib/v1/attempt.js';
 import type { NostrContext } from '$lib/v1/context.svelte.js';
 import { libraryQueryDefaults } from '$lib/v1/engine.js';
 import type { ReqHandle, ReqPlan } from '$lib/v1/index.js';
+import type { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
+import AmbientCallerOwned from './fixtures/AmbientCallerOwned.svelte';
 import AmbientClient from './fixtures/AmbientClient.svelte';
 import type { Walked } from './fixtures/ContextWalker.svelte';
+import PlantedWalk from './fixtures/PlantedWalk.svelte';
+import { acceptAnyEvent, createTestRelay } from './helpers/relay.js';
 import { relayAt, urlsFrom } from './helpers/request.js';
 
 // The framework's own context, which is what a consumer's provider writes to
@@ -73,7 +80,8 @@ function consumerClient(enabled: boolean): Client {
     networkMode: 'online' as const,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
-    refetchOnMount: true
+    refetchOnMount: true,
+    refetchInterval: 60_000
   };
   const client = new QueryClient({ defaultOptions: { queries: disagreeing } });
   client.setQueryDefaults(['nosvelte'], disagreeing);
@@ -221,6 +229,40 @@ describe('A15-C3: a request runs on the provider’s client with its defaults, a
 
   it('AM3: a descendant that imports no key finds a consumer’s client through the framework’s context, and never the provider’s', async () => {
     const reports: Record<string, unknown> = {};
+    // **The walk's own control**, with no library in the tree: a value that
+    // holds a client each way a walk can miss one — reached first deep down
+    // and then from the value itself, behind a closure, in a `Map`'s slots,
+    // in a class's private field, and behind a member that throws when read.
+    // The first is found, and each of the others is reported where it is.
+    const planted = new QueryClient();
+    const services = { client: planted };
+    let control: Walked | undefined;
+    render(PlantedWalk, {
+      planted: {
+        nosvelte: 'provider',
+        debug: { a: { b: { c: { d: { services } } } } },
+        services,
+        resolve: () => planted,
+        held: new Map([['client', planted]]),
+        boxed: new (class Boxed {
+          readonly #client = planted;
+          client(): Client {
+            return this.#client;
+          }
+        })(),
+        get refusing(): never {
+          throw new Error('nosvelte test: not to be read');
+        }
+      },
+      walked: (report: Walked) => {
+        control = report;
+      }
+    }).unmount();
+    reports['the walk’s control'] = {
+      clients: control?.clients.length,
+      thePlanted: control?.clients.includes(planted),
+      unlooked: control?.unlooked
+    };
     for (const [name, consumer] of [
       ['under a consumer’s client', new QueryClient()],
       ['under none', undefined]
@@ -239,18 +281,36 @@ describe('A15-C3: a request runs on the provider’s client with its defaults, a
         walkedSomething: found.entries > 0 && found.objects > 0,
         clients: found.clients.length,
         theConsumers: consumer !== undefined && found.clients.includes(consumer),
-        theProviders: found.clients.includes(one.context().client)
+        theProviders: found.clients.includes(one.context().client),
+        unlooked: found.unlooked
       };
       one.view.unmount();
     }
     expect(reports).toEqual({
+      'the walk’s control': {
+        clients: 1,
+        thePlanted: true,
+        unlooked: [
+          'Symbol(planted).resolve',
+          'Symbol(planted).held',
+          'Symbol(planted).boxed',
+          'Symbol(planted).refusing'
+        ]
+      },
       'under a consumer’s client': {
         walkedSomething: true,
         clients: 1,
         theConsumers: true,
-        theProviders: false
+        theProviders: false,
+        unlooked: []
       },
-      'under none': { walkedSomething: true, clients: 0, theConsumers: false, theProviders: false }
+      'under none': {
+        walkedSomething: true,
+        clients: 0,
+        theConsumers: false,
+        theProviders: false,
+        unlooked: []
+      }
     });
   });
 });
@@ -305,10 +365,14 @@ const CHECKER_OPTIONS: ts.CompilerOptions = {
  *   creator left without a client.
  * - `unnamedClient`: each reference to `createQuery` that is not a call
  *   handing it a client — it reads the ambient context when the second
- *   argument is left out.
+ *   argument is left out, and when the one given is typed to admit no client:
+ *   `undefined`, or an accessor whose return type admits it.
  * - `contextReads`: each call to the framework's context readers, with what it
  *   asks for: the library's own key, or anything else — a consumer's client
- *   sits in that same context under the query library's key.
+ *   sits in that same context under the query library's key. A namespace of
+ *   the framework that carries a reader is every reader at once, whichever way
+ *   a member is then taken from it, so each reference to one is reported as
+ *   `*`.
  * - `dynamic`: each `import()`, which no binding above would see.
  *
  * A component is read by its syntax alone, since the checker is not handed
@@ -345,6 +409,23 @@ function ambientReads(virtual: ReadonlyMap<string, string> = new Map()) {
   };
   const homeOf = (symbol: ts.Symbol | undefined): string =>
     symbol?.declarations?.[0]?.getSourceFile().fileName ?? '';
+  const admitsNone = (type: ts.Type): boolean =>
+    (type.flags &
+      (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined | ts.TypeFlags.Void)) !==
+      0 ||
+    (type.isUnion() && type.types.some(admitsNone));
+  // **A client the type says is there**: an argument that may be `undefined`,
+  // or an accessor that may return it, leaves the creator to read the ambient
+  // context exactly as leaving it out does.
+  const handsAClientIn = (call: ts.CallExpression): boolean => {
+    const argument = call.arguments[1];
+    if (argument === undefined || ts.isSpreadElement(argument)) return false;
+    const type = checker.getTypeAtLocation(argument);
+    return (
+      !admitsNone(type) &&
+      type.getCallSignatures().every((signature) => !admitsNone(signature.getReturnType()))
+    );
+  };
   // **A module's own export, and not a member of something it exports**: a
   // method of the client the library was handed is a name the query library
   // declares too, and reads nothing but that client.
@@ -384,12 +465,21 @@ function ambientReads(virtual: ReadonlyMap<string, string> = new Map()) {
           if (symbol?.name === 'createQuery') {
             const call = node.parent;
             const handsAClient =
-              ts.isCallExpression(call) && call.expression === node && call.arguments.length > 1;
+              ts.isCallExpression(call) && call.expression === node && handsAClientIn(call);
             const isTheImport = ts.isImportSpecifier(node.parent);
             if (!handsAClient && !isTheImport)
               unnamedClient.push(`${label(root)}: ${node.parent.getText()}`);
           }
         }
+        if (
+          /\/node_modules\/svelte\//.test(home) &&
+          symbol !== undefined &&
+          (symbol.flags & ts.SymbolFlags.ValueModule) !== 0 &&
+          // A rune is a namespace too, and carries no reader.
+          checker.getExportsOfModule(symbol).some((each) => CONTEXT_READERS.has(each.name)) &&
+          !ts.isNamespaceImport(node.parent)
+        )
+          contextReads.push(`${label(root)}: *`);
         if (
           /\/node_modules\/svelte\//.test(home) &&
           CONTEXT_READERS.has(symbol?.name ?? '') &&
@@ -469,13 +559,17 @@ describe('A15-C3: no module in the library reads a client it was not handed', ()
           control,
           [
             "import { getContext } from 'svelte';",
+            "import * as framework from 'svelte';",
             "import * as query from 'tanstack-svelte-query-v6';",
-            "import { createQuery, useQueryClient as reach } from 'tanstack-svelte-query-v6';",
+            "import { createQuery, type QueryClient, useQueryClient as reach } from 'tanstack-svelte-query-v6';",
             'export const a = reach();',
             'export const b = query.getQueryClientContext();',
             'export const c = createQuery(() => ({ queryKey: [] }));',
             "export const d = getContext('$$_queryClient');",
-            "export const e = import('tanstack-svelte-query-v6');"
+            "export const e = import('tanstack-svelte-query-v6');",
+            "export const f = framework['getContext']('$$_queryClient');",
+            'export const g = createQuery(() => ({ queryKey: [] }), undefined);',
+            'export const h = createQuery(() => ({ queryKey: [] }), (): QueryClient | undefined => undefined);'
           ].join('\n')
         ]
       ])
@@ -502,8 +596,12 @@ describe('A15-C3: no module in the library reads a client it was not handed', ()
     }).toEqual({
       control: {
         named: ['*', 'getQueryClientContext', 'useQueryClient'],
-        unnamedClient: ['ambient-control.ts: createQuery(() => ({ queryKey: [] }))'],
-        contextReads: ["ambient-control.ts: getContext('$$_queryClient')"],
+        unnamedClient: [
+          'ambient-control.ts: createQuery(() => ({ queryKey: [] }))',
+          'ambient-control.ts: createQuery(() => ({ queryKey: [] }), undefined)',
+          'ambient-control.ts: createQuery(() => ({ queryKey: [] }), (): QueryClient | undefined => undefined)'
+        ],
+        contextReads: ["ambient-control.ts: getContext('$$_queryClient')", 'ambient-control.ts: *'],
         dynamic: ["ambient-control.ts: import('tanstack-svelte-query-v6')"]
       },
       shipped: {
@@ -516,5 +614,57 @@ describe('A15-C3: no module in the library reads a client it was not handed', ()
         dynamic: []
       }
     });
+  });
+
+  it('AM5: at run time, on the standalone seam: a request that brings no client, under a consumer’s, is refused and leaves the consumer’s untouched', async () => {
+    // **What `AM4` reads by the type, read where it runs**: an accessor that
+    // hands the creator nothing has every shape of a call that hands it a
+    // client, and the creator then reads the ambient context. A caller-owned
+    // request that brings every owner input but the client is the one
+    // arrangement with no client to hand, and a consumer's above it is the
+    // one an ambient read would find.
+    const { rxNostr, server } = createTestRelay(nextUrl());
+    const consumer = new QueryClient();
+    const touched = notificationsOf(consumer);
+    // Built once, outside the options: what the caller brings is the caller's.
+    const attempts = createAttemptRegistry();
+    let handle: ReturnType<typeof useStreamedReq> | undefined;
+    const view = render(AmbientCallerOwned, {
+      consumer,
+      options: () => ({
+        verifyEvent: acceptAnyEvent,
+        attempts,
+        rxNostr,
+        namespace: 'am5',
+        filters: [{ kinds: [1] }],
+        reqIdBase: 'am5',
+        settleTimeoutMs: 30_000
+      }),
+      seen: (held: ReturnType<typeof useStreamedReq>) => {
+        handle = held;
+      }
+    });
+    try {
+      await delay(A_TURN_MS);
+      const state = handle?.state;
+      const refused =
+        state?.status === 'error'
+          ? (state.error as { code?: unknown; field?: unknown })
+          : undefined;
+      expect({
+        status: state?.status,
+        refused: { code: refused?.code, field: refused?.field },
+        asked: (server.messages as unknown[][]).filter((frame) => frame[0] === 'REQ').length,
+        consumer: { entries: consumer.getQueryCache().getAll().length, notifications: touched() }
+      }).toEqual({
+        status: 'error',
+        refused: { code: 'invalid-descriptor', field: 'client' },
+        asked: 0,
+        consumer: { entries: 0, notifications: 0 }
+      });
+    } finally {
+      view.unmount();
+      rxNostr.dispose();
+    }
   });
 });
