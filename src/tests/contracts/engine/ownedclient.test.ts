@@ -231,36 +231,44 @@ describe('A15-C3: a request runs on the provider’s client with its defaults, a
     const reports: Record<string, unknown> = {};
     // **The walk's own control**, with no library in the tree: a value that
     // holds a client each way a walk can miss one — reached first deep down
-    // and then from the value itself, behind a closure, in a `Map`'s slots,
-    // in a class's private field, and behind a member that throws when read.
-    // The first is found, and each of the others is reported where it is.
+    // and then from the value itself, under a symbol, under a member that is
+    // not enumerable, behind a closure, in a `Map`'s slots, in a class's
+    // private field, and behind a member that throws when read. The first
+    // three are found, and each of the others is reported where it is.
     const planted = new QueryClient();
+    const bySymbol = new QueryClient();
+    const unlisted = new QueryClient();
     const services = { client: planted };
     let control: Walked | undefined;
     render(PlantedWalk, {
-      planted: {
-        nosvelte: 'provider',
-        debug: { a: { b: { c: { d: { services } } } } },
-        services,
-        resolve: () => planted,
-        held: new Map([['client', planted]]),
-        boxed: new (class Boxed {
-          readonly #client = planted;
-          client(): Client {
-            return this.#client;
+      planted: Object.defineProperty(
+        {
+          nosvelte: 'provider',
+          debug: { a: { b: { c: { d: { services } } } } },
+          services,
+          [Symbol('state')]: { client: bySymbol },
+          resolve: () => planted,
+          held: new Map([['client', planted]]),
+          boxed: new (class Boxed {
+            readonly #client = planted;
+            client(): Client {
+              return this.#client;
+            }
+          })(),
+          get refusing(): never {
+            throw new Error('nosvelte test: not to be read');
           }
-        })(),
-        get refusing(): never {
-          throw new Error('nosvelte test: not to be read');
-        }
-      },
+        },
+        'unlisted',
+        { value: { client: unlisted }, enumerable: false }
+      ),
       walked: (report: Walked) => {
         control = report;
       }
     }).unmount();
     reports['the walk’s control'] = {
       clients: control?.clients.length,
-      thePlanted: control?.clients.includes(planted),
+      found: [planted, bySymbol, unlisted].map((each) => control?.clients.includes(each)),
       unlooked: control?.unlooked
     };
     for (const [name, consumer] of [
@@ -288,8 +296,8 @@ describe('A15-C3: a request runs on the provider’s client with its defaults, a
     }
     expect(reports).toEqual({
       'the walk’s control': {
-        clients: 1,
-        thePlanted: true,
+        clients: 3,
+        found: [true, true, true],
         unlooked: [
           'Symbol(planted).resolve',
           'Symbol(planted).held',
@@ -569,7 +577,9 @@ describe('A15-C3: no module in the library reads a client it was not handed', ()
             "export const e = import('tanstack-svelte-query-v6');",
             "export const f = framework['getContext']('$$_queryClient');",
             'export const g = createQuery(() => ({ queryKey: [] }), undefined);',
-            'export const h = createQuery(() => ({ queryKey: [] }), (): QueryClient | undefined => undefined);'
+            'export const h = createQuery(() => ({ queryKey: [] }), (): any => undefined);',
+            'declare const maybe: (() => QueryClient) | undefined;',
+            'export const i = createQuery(() => ({ queryKey: [] }), maybe);'
           ].join('\n')
         ]
       ])
@@ -599,7 +609,8 @@ describe('A15-C3: no module in the library reads a client it was not handed', ()
         unnamedClient: [
           'ambient-control.ts: createQuery(() => ({ queryKey: [] }))',
           'ambient-control.ts: createQuery(() => ({ queryKey: [] }), undefined)',
-          'ambient-control.ts: createQuery(() => ({ queryKey: [] }), (): QueryClient | undefined => undefined)'
+          'ambient-control.ts: createQuery(() => ({ queryKey: [] }), (): any => undefined)',
+          'ambient-control.ts: createQuery(() => ({ queryKey: [] }), maybe)'
         ],
         contextReads: ["ambient-control.ts: getContext('$$_queryClient')", 'ambient-control.ts: *'],
         dynamic: ["ambient-control.ts: import('tanstack-svelte-query-v6')"]
@@ -620,9 +631,10 @@ describe('A15-C3: no module in the library reads a client it was not handed', ()
     // **What `AM4` reads by the type, read where it runs**: an accessor that
     // hands the creator nothing has every shape of a call that hands it a
     // client, and the creator then reads the ambient context. A caller-owned
-    // request that brings every owner input but the client is the one
-    // arrangement with no client to hand, and a consumer's above it is the
-    // one an ambient read would find.
+    // request that brings the other owner inputs it must — a verifier, a
+    // transport and an attempt registry, the seam resolving the optional ones
+    // — and no client is the one arrangement with no client to hand, and a
+    // consumer's above it is the one an ambient read would find.
     const { rxNostr, server } = createTestRelay(nextUrl());
     const consumer = new QueryClient();
     const touched = notificationsOf(consumer);

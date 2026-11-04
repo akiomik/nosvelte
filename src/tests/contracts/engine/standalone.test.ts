@@ -40,15 +40,18 @@ const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
 const A_TURN_MS = 200;
 
 /**
- * Whether `message` offers the provider and the option as alternatives — an
- * "Either" and then both, joined by "or", in either order and within one
- * sentence — rather than only naming both, which a refusal that denies one of
- * them does too.
+ * The sentence that offers the two ways out, each as enough on its own.
+ * **Read as one sentence, and not as a pattern of names**: a refusal that names
+ * both can still deny one — "you must pass `verifyEvent` even inside
+ * `NostrApp`", or an "either … or" whose two arms both ask for the option —
+ * and every pattern tried was satisfied by one of those. So the arm supports
+ * this wording and refuses every other.
  */
-const offersBoth = (message: string): boolean =>
-  /\bEither\b[^.]*(?:`NostrApp`[^.]*\bor\b[^.]*`verifyEvent`|`verifyEvent`[^.]*\bor\b[^.]*`NostrApp`)/.test(
-    message
-  );
+const THE_WAYS_OUT =
+  'Either use it inside a `NostrApp` provider, which supplies one, or pass `verifyEvent` explicitly.';
+
+/** Whether `message` offers the two ways out, in {@link THE_WAYS_OUT}'s words. */
+const offersBoth = (message: string): boolean => message.includes(THE_WAYS_OUT);
 
 /** The `REQ`s a relay was sent. */
 const reqsTo = (server: WS): unknown[][] =>
@@ -96,17 +99,18 @@ describe('A-ε-C16: a request built with neither a verifier nor a provider is re
         asked: reqsTo(server).length,
         status: state.status,
         offersBoth: offersBoth(message),
-        // **The reading's control**: a refusal that names both and denies one.
-        refusesTheDenial: offersBoth(
-          'You must pass `verifyEvent` even inside a `NostrApp` provider.'
-        ),
+        // **The reading's control**: refusals that name both and deny one.
+        refusesTheDenials: [
+          'You must pass `verifyEvent` even inside a `NostrApp` provider.',
+          'Either pass `verifyEvent` explicitly, or use `NostrApp` and still pass `verifyEvent` explicitly.'
+        ].map(offersBoth),
         // **The instrument's control**: the count covers four invocations.
         invocations: entry()?.fetchFailureCount
       }).toEqual({
         asked: 0,
         status: 'error',
         offersBoth: true,
-        refusesTheDenial: false,
+        refusesTheDenials: [false, false],
         invocations: 4
       });
     } finally {

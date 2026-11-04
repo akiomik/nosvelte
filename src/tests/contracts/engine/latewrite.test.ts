@@ -170,14 +170,15 @@ const caseName = ({ delivery, events }: Case): string =>
  *   each by the fields it was delivered with, or `'none'` when there is no
  *   entry for its key — **what it holds and not how many**, since an
  *   accumulator that folds a copy it altered keeps the count;
- * - `added`: how many entries the cache announced under the request's key
- *   **other than the request's own**, counted by a listener put on the cache
+ * - `added`: how many entries the cache announced under the request's key,
+ *   counted by a listener put on the cache once the request's entry exists and
  *   before the teardown — a reading taken only at the end would pass an entry
- *   recreated and collected again, which `gcTime` 0 does at once. The cache
- *   can add another only once the request's has gone, so the count needs no
- *   order between this listener and the removal: one put on before it can add
- *   an entry inside the removal's own notification, before this one hears of
- *   the removal;
+ *   recreated and collected again, which `gcTime` 0 does at once. **Every
+ *   announcement is counted**, since the cache can make one only once the
+ *   request's entry has gone: so the count needs no order between this
+ *   listener and the removal — one put on before it can add an entry inside
+ *   the removal's own notification, before this one hears of the removal —
+ *   and no new object either, since the removed entry itself can be put back;
  * - `byHand`: the count's own control — an entry written by hand under the key
  *   once the rest has run out: whether it is there at once, whether it has
  *   gone once the work has run out again, and how many additions the listener
@@ -240,7 +241,7 @@ async function delivered(inner: StreamAccumulator, clock: Clock, each: Case) {
     client.getQueryCache().subscribe((event) => {
       if (event.query.queryHash !== entry.queryHash) return;
       if (event.type === 'removed' && event.query === entry) removed = true;
-      if (event.type === 'added' && event.query !== entry) added += 1;
+      if (event.type === 'added') added += 1;
     });
     if (each.delivery === 'while the request stands') {
       for (let at = 1; at <= each.events; at += 1) {

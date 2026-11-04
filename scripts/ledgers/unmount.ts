@@ -155,7 +155,7 @@ export default {
       arm: 'UM4',
       rows: ['C6-C9'],
       describe:
-        'the dependency’s cache lets a settled entry go without clearing its collection timer, and the teardown destroys late only the fetches still in flight, so nothing of the library’s clears it either',
+        'the dependency’s cache lets a settled entry go without clearing its collection timer, and the teardown destroys late only the entries with no answer yet, so nothing of the library’s clears it either',
       edits: [
         {
           file: QUERY_CACHE,
@@ -165,7 +165,7 @@ export default {
         {
           file: CLIENT,
           from: '        void query.promise?.finally(() => query.destroy()).catch(() => undefined);\n',
-          to: "        if (query.state.fetchStatus === 'fetching')\n          void query.promise?.finally(() => query.destroy()).catch(() => undefined);\n"
+          to: "        if (query.state.status === 'pending')\n          void query.promise?.finally(() => query.destroy()).catch(() => undefined);\n"
         }
       ]
     },
@@ -237,7 +237,7 @@ export default {
       id: 'AM3-the-token-resolves-the-context',
       arm: 'AM3',
       rows: ['A15-C3'],
-      describe: 'the token carries a resolver of the provider’s context in place of the side table',
+      describe: 'the token carries a resolver of the provider’s context beside the side table',
       edits: [{ file: CONTEXT, from: TOKEN, to: tokenWith('resolve: () => context') }]
     },
     {
@@ -315,12 +315,12 @@ export default {
       requires: ['AM5'],
       rows: ['A15-C3'],
       describe:
-        'the engine hands its query the client a request brings, typed to be absent when it brings none',
+        'the engine hands its query no client when a request brings none, so the creator reads the ambient one',
       edits: [
         {
           file: ENGINE,
           from: CREATED,
-          to: '  const query = createQuery(queryOptions, (): QueryClient | undefined => runtime.clientOf());'
+          to: '  const query = createQuery(\n    queryOptions,\n    runtime.clientOf() === undefined ? undefined : ownedClient\n  );'
         }
       ]
     },
@@ -388,6 +388,20 @@ export default {
           file: ENGINE,
           from: NO_VERIFIER_WORDS,
           to: "      'nosvelte: this request has no signature verifier. You must pass `verifyEvent` even inside a `NostrApp` provider.'"
+        }
+      ]
+    },
+    {
+      id: 'SA1-either-way-the-option',
+      arm: 'SA1',
+      rows: ['A-ε-C16'],
+      describe:
+        'the refusal offers two ways out in an “either … or”, and both of them ask for the option',
+      edits: [
+        {
+          file: ENGINE,
+          from: NO_VERIFIER_WORDS,
+          to: "      'nosvelte: this request has no signature verifier. Either pass `verifyEvent` explicitly, or use `NostrApp` and still pass `verifyEvent` explicitly.'"
         }
       ]
     },

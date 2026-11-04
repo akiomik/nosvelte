@@ -91,6 +91,33 @@ const PUT_BACK = `    const putBack = context.client.getQueryCache().subscribe((
       const kept = event.query.state.data as CachedEventSet | undefined;
       if (kept !== undefined) context.client.setQueryData<CachedEventSet>(context.queryKey, kept);
     });`;
+/**
+ * An accumulator's listener that puts the removed entry itself back for a
+ * turn, inside the removal's own notification, and then stops listening: the
+ * cache is empty again by the end.
+ */
+const REVIVED = `    const cache = context.client.getQueryCache();
+    const revive = cache.subscribe((event) => {
+      if (event.type !== 'removed') return;
+      if (JSON.stringify(event.query.queryKey) !== JSON.stringify(context.queryKey)) return;
+      revive();
+      cache.add(event.query);
+      setTimeout(() => cache.remove(event.query), 0);
+    });`;
+/** Adapter A with `listener` put on the client's cache as each invocation begins. */
+const adapterAListening = (listener: string): string =>
+  `export const streamedQueryAccumulator: StreamAccumulator = ({ initialValue, reducer, streamFn }) => {
+  const helper = experimental_streamedQuery<Chunk, CachedEventSet, QueryKey>({
+    refetchMode: 'append',
+    initialValue,
+    reducer,
+    streamFn
+  });
+  return (context) => {
+${listener}
+    return helper(context);
+  };
+};`;
 /** The set named `set`, its events copies with their content emptied: as many, and not as delivered. */
 const altered = (set: string): string =>
   `{\n        ...${set},\n        entries: new Map(\n          [...${set}.entries].map(([id, packet]) => [id, { ...packet, event: { ...packet.event, content: '' } }])\n        )\n      }`;
@@ -539,18 +566,7 @@ export default {
         {
           file: ACCUMULATE,
           from: ADAPTER_A,
-          to: `export const streamedQueryAccumulator: StreamAccumulator = ({ initialValue, reducer, streamFn }) => {
-  const helper = experimental_streamedQuery<Chunk, CachedEventSet, QueryKey>({
-    refetchMode: 'append',
-    initialValue,
-    reducer,
-    streamFn
-  });
-  return (context) => {
-${PUT_BACK}
-    return helper(context);
-  };
-};`
+          to: adapterAListening(PUT_BACK)
         }
       ]
     },
@@ -565,6 +581,28 @@ ${PUT_BACK}
           file: ACCUMULATE,
           from: '    const stream = await streamFn(streamContext);\n',
           to: `    const stream = await streamFn(streamContext);\n${PUT_BACK}\n`
+        }
+      ]
+    },
+    {
+      id: 'LW1-the-removed-entry-put-back',
+      arm: 'LW1',
+      rows: ['A11-C19'],
+      describe:
+        'adapter A puts the removed entry itself back for a turn, inside the removal’s own notification',
+      edits: [{ file: ACCUMULATE, from: ADAPTER_A, to: adapterAListening(REVIVED) }]
+    },
+    {
+      id: 'LW2-the-removed-entry-put-back',
+      arm: 'LW2',
+      rows: ['A11-C19'],
+      describe:
+        'adapter B puts the removed entry itself back for a turn, inside the removal’s own notification',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: '    const stream = await streamFn(streamContext);\n',
+          to: `    const stream = await streamFn(streamContext);\n${REVIVED}\n`
         }
       ]
     },

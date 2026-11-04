@@ -35,6 +35,9 @@
    * array, whose class may keep private fields or whose internal slots — a
    * `Map`'s, a `Set`'s, a `Promise`'s — hold what its own members do not show;
    * and a member that throws when it is read.
+   *
+   * **It reads once**, as it is initialised: a value written into the map, or
+   * into something in it, later than that is not read.
    */
   import { getAllContexts } from 'svelte';
 
