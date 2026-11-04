@@ -1919,6 +1919,7 @@ describe('a leg ends once', () => {
     expect(twice.forward?.end).toEqual({ kind: 'ended', error: why });
   });
 
+  // @contracts B10-C5
   it('ES16: a superseded attempt cannot write the forward record of the one that replaced it', () => {
     // The counterexample the review found, walked in the four steps it names.
     // It needs no engine: the guard is on the fold, and so is the defect.
@@ -2359,7 +2360,8 @@ describe('a leg ends once', () => {
     expect(refusalsOf(endBacklog(runningB, b, { kind: 'complete' }))).toEqual([]);
   });
 
-  it('ES21: a late chunk from a superseded producer does not rewind the value', () => {
+  // @contracts B-η-C7
+  it('ES21: a late chunk from a superseded producer does not rewind the value, and the attempt already current begun again changes nothing', () => {
     // **The precondition `collect` had and did not check.** `beginAttempt` took
     // whatever attempt a `fresh` chunk named, so replaying an older attempt's
     // first chunk put the value back on that attempt — and then the newer
@@ -2399,10 +2401,21 @@ describe('a leg ends once', () => {
     const c = registry.mint();
     expect(beginAttempt(set, c).running?.attemptId).toBe(c);
 
-    // And the same guard once the backlog has ended, which is the other slot
+    // **The attempt already current, begun again**, which the engine does at
+    // its query function's entry and again at the stream's first chunk
+    // (`SB1`): a refusal recorded on it in between is still there, and
+    // nothing was rebuilt.
+    const withOwn = addRefusal(set, refusal('backward', 'restricted: members only'), b);
+    expect(beginAttempt(withOwn, b)).toBe(withOwn);
+    expect(refusalsOf(withOwn).map((each) => each.notice.text)).toEqual([
+      'restricted: members only'
+    ]);
+
+    // And the same guards once the backlog has ended, which is the other slot
     // the value's current attempt can be in.
-    const ended = endBacklog(set, b, { kind: 'complete' });
+    const ended = endBacklog(withOwn, b, { kind: 'complete' });
     expect(beginAttempt(ended, a)).toBe(ended);
+    expect(beginAttempt(ended, b)).toBe(ended);
     expect(beginAttempt(ended, c).running?.attemptId).toBe(c);
 
     // **The direction the guard fails in, measured with the value that actually

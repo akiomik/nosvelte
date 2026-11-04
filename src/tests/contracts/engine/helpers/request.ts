@@ -144,9 +144,9 @@ export const REAL: Clock = {
 const SECKEY = '7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a';
 
 /** An event signed correctly over its own fields, as a relay would carry one. */
-export const signed = (content: string, createdAt = 1000): Nostr.Event => {
+export const signed = (content: string, createdAt = 1000, kind = 1): Nostr.Event => {
   const unsigned = {
-    kind: 1,
+    kind,
     created_at: createdAt,
     tags: [],
     content,
