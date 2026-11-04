@@ -1109,21 +1109,26 @@ as `{ kind: 'not-started', reason: 'deferred' }`, applying the ordinary mount tr
 becomes a request, and releasing the observer without deleting the entry when it goes back. **Both
 transitions are a request whose provider stands.** A request a consumer keeps past its provider
 stops reading its plan, so a plan already deferred goes on answering as above and a later change,
-deferral included, is not applied (`C5-C9`). It is repeated here in an indented block rather than a
-fenced one because the fenced declarations — the `useReq` signature above and `ReqPlan` beside
-`ReqDescriptor` below — are the ones `LK13` holds. `filters: []` and `authors: []` are **not** the
-encoding — they stay `B8`'s genuine empty-set questions, which is also what stops a descriptor being
-validated for a question nobody is asking. There is no `cancel()`: `refresh()` closes and re-opens,
-which is the opposite. And an abort is therefore not something a consumer raises at all — it is the
-teardown's, a consumer holds no signal, and since ruling 5 it resolves `cancelled` rather than
-rejecting. The cancel is a v1 omission rather than an oversight: it is a handle operation whose
-interaction with the query layer's own lifetime nobody has decided. **Per-relay selection was the
-fourth, and it is no longer an omission (ruling 3)**: the relay set was the provider's prop alone,
-so two relay sets on one page meant two providers, which `C6` says share nothing — two connections,
-two caches, the same event twice. That was the one `req` use case the descriptor did not cover, and
-`C3`'s falsifier names exactly that shape; it was recorded here as a known gap for a reviewer to
-rule on, and the ruling added `ReqDescriptor.relays`, a target set resolved inside the provider's
-readable scope. The passage is kept as the state that ruling answered.
+deferral included, is not applied (`C5-C9`). **A request lives as long as its provider** (#202): a
+handle kept past `NostrApp` keeps the answer it holds, and its `refresh()` answers as `C11-C17` says
+— one outstanding at the teardown resolves `cancelled` for `provider-disposed`, and a later one
+rejects with that code. Nothing more is promised of it: its `state` and `activity` are not promised
+to move again, and a consumer who keeps a request in a root of its own releases it with the
+provider. It is repeated here in an indented block rather than a fenced one because the fenced
+declarations — the `useReq` signature above and `ReqPlan` beside `ReqDescriptor` below — are the
+ones `LK13` holds. `filters: []` and `authors: []` are **not** the encoding — they stay `B8`'s
+genuine empty-set questions, which is also what stops a descriptor being validated for a question
+nobody is asking. There is no `cancel()`: `refresh()` closes and re-opens, which is the opposite.
+And an abort is therefore not something a consumer raises at all — it is the teardown's, a consumer
+holds no signal, and since ruling 5 it resolves `cancelled` rather than rejecting. The cancel is a
+v1 omission rather than an oversight: it is a handle operation whose interaction with the query
+layer's own lifetime nobody has decided. **Per-relay selection was the fourth, and it is no longer
+an omission (ruling 3)**: the relay set was the provider's prop alone, so two relay sets on one page
+meant two providers, which `C6` says share nothing — two connections, two caches, the same event
+twice. That was the one `req` use case the descriptor did not cover, and `C3`'s falsifier names
+exactly that shape; it was recorded here as a known gap for a reviewer to rule on, and the ruling
+added `ReqDescriptor.relays`, a target set resolved inside the provider's readable scope. The
+passage is kept as the state that ruling answered.
 
 **And the fifth is not an omission of an option but of a direction — sending — and v1 publishes it
 as an operation rather than as the connection (ruling 17).** Today's surface exports `app`, a
@@ -2215,7 +2220,7 @@ member, and the set `refresh()` rejects with is seven codes.
 
 **Two remedies are the library's rather than the consumer's in v1, and the column says so rather
 than pretending.** "Fix the accumulator" and the clause about a caller-owned `rxNostr` are both
-actions only somebody holding a seam can take, and `A16` keeps every seam inside the provider: an
+actions only somebody holding a seam can take, and `A16` publishes none outside the provider: an
 accumulator is not on the descriptor, and neither is a client. So for a v1 consumer those rows say
 _report it_ — the library or its port broke a contract it holds — and they are kept with their own
 codes rather than folded into `unspecified` because the library **can** attribute them, and because
@@ -2254,11 +2259,11 @@ wiring error, not a request failure: it is `MissingVerifierError`, and its `code
 `ReqErrorCode`. **That class is not exported — `LK2` and `SUR10` both say so now — and this
 paragraph said it stood beside `MissingProviderError` in the entry.** It does not: a consumer under
 a provider cannot reach it, because the provider is what supplies the verifier, and the only
-entrance is the low-level seam this API does not publish — and which `0002` A16 decides v1 does not
-keep internally either. **What a consumer without a provider meets is not this class**, which the
-sentence used to leave implied and an adversarial pass read the other way: the request refuses with
+entrance is the low-level seam this API does not publish, which `0002` A16 keeps as the engine's
+internal seam. **What a consumer without a provider meets is not this class**, which the sentence
+used to leave implied and an adversarial pass read the other way: the request refuses with
 `missing-provider` before a verifier is looked for, so the path that could have reached this one is
-closed one step earlier. In v1 there is no entrance. A name a consumer can never need is a SemVer
+closed one step earlier. A consumer has no entrance. A name a consumer can never need is a SemVer
 surface taken on for nothing. And the abort reason for a query function that returned while it was
 still streaming is a private teardown note that reaches no published surface — the _published_
 failure for that case already has a code (`accumulator-contract`), and giving the cleanup mechanism
@@ -2529,10 +2534,10 @@ because the values agree; `0002` records that a port mints the request id itself
 one. **This said "those are the provider's" of all fifteen**, which is true of six: `accumulator` in
 particular is `0001`'s escape route rather than the provider's, and the provider has no field for
 it. `OM6` exhibits the hazard by breaking the second sentence: it drives the low-level seam **`A16`
-withdrew from v1**, where a request took its runtime from the caller, and puts two such requests
-over one client. Nothing a v1 consumer can write reaches that arrangement. A v2 that publishes a
-seam breaks the first, at which point the seam joins the key or the design owes a reason it does
-not.
+keeps internal and publishes nowhere**, where a request takes its runtime from the caller, and puts
+two such requests over one client. Nothing a v1 consumer can write reaches that arrangement. A v2
+that publishes a seam breaks the first, at which point the seam joins the key or the design owes a
+reason it does not.
 
 ```ts
 // **What a consumer writes**, and the only published type they build rather than
