@@ -116,7 +116,8 @@ const sentAs = (sent: readonly Named[]): string => sent.map(({ name }) => name).
  * Two revisions of one coordinate of `kind`, one strictly newer than the
  * other or both at one `created_at`, and which of them wins. The winner is
  * written out here rather than taken from the library: the newer, and at a tie
- * the lower id, as NIP-01 says.
+ * the lower id, which NIP-01 says of replaceable events and `0003` applies to
+ * addressable ones.
  */
 const revisionsOf = (
   name: string,
@@ -271,7 +272,9 @@ const LIVE: readonly Case[] = CLASSES.flatMap(({ name, kind, tags }) =>
 /**
  * **The identity each class dictates** (`B5-C1`): two addressable events of
  * one kind and author under different `d` tags are two coordinates, and two
- * regular events of one author are never replaced. Both are held, in both
+ * regular events of one author are never replaced. The kind is part of the
+ * identity too: one author's events of two replaceable kinds, or of two
+ * addressable kinds under one `d`, are two coordinates. Both are held, in both
  * orders.
  */
 const DISTINCT: readonly Case[] = (
@@ -280,7 +283,12 @@ const DISTINCT: readonly Case[] = (
       signedAs(30023, 'an article', 1000, [['d', 'an-article']]),
       signedAs(30023, 'another article', 2000, [['d', 'another-article']])
     ],
-    [signedAs(1, 'a note', 1000), signedAs(1, 'a later note', 2000)]
+    [signedAs(1, 'a note', 1000), signedAs(1, 'a later note', 2000)],
+    [signedAs(10000, 'a mute list', 1000), signedAs(10002, 'a relay list', 2000)],
+    [
+      signedAs(30000, 'a follow set', 1000, [['d', 'an-article']]),
+      signedAs(30023, 'an article', 2000, [['d', 'an-article']])
+    ]
   ] as const
 ).flatMap(([older, newer]) => {
   const both = [
@@ -288,7 +296,7 @@ const DISTINCT: readonly Case[] = (
     { name: 'newer', event: newer }
   ];
   return [both, [...both].reverse()].map((backlog) => ({
-    name: `two kind-${String(older.kind)} events that are not one coordinate, ${sentAs(backlog)}`,
+    name: `two ${older.kind === newer.kind ? `kind-${String(older.kind)}` : `kind-${String(older.kind)} and kind-${String(newer.kind)}`} events that are not one coordinate, ${sentAs(backlog)}`,
     retain: 'unbounded' as const,
     backlog,
     held: ['newer', 'older']
@@ -299,12 +307,14 @@ const DISTINCT: readonly Case[] = (
  * **Each kind where a class that replaces begins or ends, and the regular
  * kinds beside them** (`B5-C11`): two revisions of one coordinate at 0, 3,
  * 10000, 19999, 30000 and 39999, of which the newer is held, and two events of
- * one author at 2, 4, 9999 and 40000, both held, in both orders. The class is
- * written out here rather than taken from the library, the 40000 pair with the
- * `d` tag an addressable pair would carry. Without a bound, since bounded to
- * one a regular pair is cut to its newer event and reads as a replacement.
- * The kinds beside the other two edges, 20000 and 29999, are ephemeral, which
- * a request does not keep, and only `B5-C7` reads them, on the classifier.
+ * one author at 2, 4, 9999 and 40000, both held, in both orders; `1`, beside
+ * `0`, is `DISTINCT`'s regular notes. The class is written out here rather
+ * than taken from the library, the 40000 pair with the `d` tag an addressable
+ * pair would carry. Without a bound, since bounded to one a regular pair is cut
+ * to its newer event and reads as a replacement. The kinds beside the other two
+ * edges, 20000 and 29999, are ephemeral: a request naming one is refused, and
+ * one naming no kinds does not keep them (`B7a`), so this arm leaves them to
+ * `B5-C7` on the classifier and to `ES7` at the descriptor.
  */
 const EDGES: readonly Case[] = (
   [
@@ -366,7 +376,7 @@ const planOf = (retain: Retain, live: boolean, namespace: string): ReqPlan => ({
 describe('B5: which revision of a coordinate a consumer holds', () => {
   // @contracts B5-C11
   it(
-    'RP1: a consumer holds the revision NIP-01 says wins, as it was sent, in every order the revisions arrive in, on either leg, bounded or not, at each kind where a class that replaces begins or ends',
+    'RP1: a consumer holds the revision that wins, as it was sent, in every order the revisions arrive in, on either leg, bounded or not, at each kind where a class that replaces begins or ends',
     async () => {
       // Each case is its own request on its own relay, all at once. The relay
       // sends the case's backlog in order, then `EOSE`, and the consumer's
@@ -377,7 +387,7 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
       // gives them, sorted, since the order a list is shown in is `B6`'s and
       // not this arm's.
       const cases = [...PAIRS, ...BETWEEN, ...TIED, ...LIVE, ...DISTINCT, ...EDGES];
-      expect(cases, 'the cases this arm reads').toHaveLength(152);
+      expect(cases, 'the cases this arm reads').toHaveLength(156);
       const readings = await Promise.all(
         cases.map((each, at) => {
           const relay = relayAt(nextUrl());

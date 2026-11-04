@@ -37,8 +37,11 @@
  * `B6-C1`'s ordering at a tie, which `RP1` reads and does not land, since
  * `B6-C1` has no landing yet. Each `C11-` entry moves one edge of a class
  * that replaces by one kind, drops a special kind or makes its neighbour one,
- * wherever a request can name the kind on the other side; the two it cannot,
- * 20000 and 29999, are ephemeral, and only `B5-C7` reads them.
+ * wherever a request can name the kind on the other side. The two it cannot,
+ * 20000 and 29999, are ephemeral: a request naming one is refused, and one
+ * naming no kinds does not keep them, so `B5-C7` reads them on the classifier
+ * and `ES7` at the descriptor. Moving the addressable range down to 29999
+ * changes nothing, since the ephemeral range is decided first.
  */
 import type { Ledger } from '../ledger.ts';
 
@@ -104,6 +107,32 @@ export default {
           file: EVENTSET,
           from: '      return `${event.kind}:${event.pubkey}:${identifierOf(event)}`;',
           to: '      return `${event.kind}:${event.pubkey}`;'
+        }
+      ]
+    },
+    {
+      id: 'C1-a-replaceable-coordinate-without-its-kind',
+      arm: 'RP1',
+      describe:
+        "a replaceable event is replaced by author alone, so one author's lists of two replaceable kinds are one coordinate",
+      edits: [
+        {
+          file: EVENTSET,
+          from: '      return `${event.kind}:${event.pubkey}`;',
+          to: '      return `${event.pubkey}`;'
+        }
+      ]
+    },
+    {
+      id: 'C1-an-addressable-coordinate-without-its-kind',
+      arm: 'RP1',
+      describe:
+        "an addressable event is replaced by author and `d` alone, so one author's events of two addressable kinds under one `d` are one coordinate",
+      edits: [
+        {
+          file: EVENTSET,
+          from: '      return `${event.kind}:${event.pubkey}:${identifierOf(event)}`;',
+          to: '      return `${event.pubkey}:${identifierOf(event)}`;'
         }
       ]
     },
@@ -357,6 +386,18 @@ export default {
       describe:
         "kind 3 is not replaceable, so an author's earlier follow list is held beside the later",
       edits: [{ file: EVENTSET, from: SPECIALS, to: "  if (kind === 0) return 'replaceable';" }]
+    },
+    {
+      id: 'C11-kind-1-replaceable',
+      arm: 'RP1',
+      describe: 'kind 1 is replaceable, as the special kind beside it is',
+      edits: [
+        {
+          file: EVENTSET,
+          from: SPECIALS,
+          to: "  if (kind <= 1 || kind === 3) return 'replaceable';"
+        }
+      ]
     },
     {
       id: 'C11-kind-2-replaceable',
