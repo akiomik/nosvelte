@@ -13,7 +13,9 @@
  * `useReq()` — one entry for each path `PB13` drives at the entrance it drives
  * it through (`REFRESH_PATHS`). The two that follow a cancellation hand it to
  * the call after it, which is another path's, since a cancellation ends the
- * handle's lifetime or its provider's.
+ * handle's lifetime or its provider's. And one keeps the `error` path's
+ * promise only once every caller it was handed to is answered, which a third
+ * call made while the second of its pair is pending never meets.
  *
  * Retired with no entry:
  * - unreachable from the repository: an exclusion looked up by an inherited
@@ -2814,6 +2816,19 @@ export default {
           file: 'src/lib/v1/useStreamedReq.svelte.ts',
           from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
           to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            if (outcome.kind === 'error') kept = pending;\n          },\n          (thrown) => {\n            if (false) kept = pending;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
+        }
+      ]
+    },
+    {
+      id: 'C8-refresh-error-kept-once-answered',
+      arm: 'PB13',
+      describe:
+        'the engine’s `refresh()` keeps the promise of an `error` refresh once every caller it was handed to is answered, and hands it to the next caller',
+      edits: [
+        {
+          file: 'src/lib/v1/useStreamedReq.svelte.ts',
+          from: '  sealInterface(handle);\n  let recoveryFrom: unknown;',
+          to: "  {\n    const asked = handle.refresh;\n    let kept: Promise<RefreshOutcome> | undefined;\n    let outstanding = 0;\n    handle.refresh = {\n      refresh(): Promise<RefreshOutcome> {\n        if (kept !== undefined) return kept;\n        outstanding += 1;\n        const pending = asked.call(handle);\n        pending.then(\n          (outcome) => {\n            outstanding -= 1;\n            if (outcome.kind === 'error' && outstanding === 0) kept = pending;\n          },\n          () => {\n            outstanding -= 1;\n          }\n        );\n        return pending;\n      }\n    }.refresh;\n  }\n  sealInterface(handle);\n  let recoveryFrom: unknown;"
         }
       ]
     },
