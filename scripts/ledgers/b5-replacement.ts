@@ -72,6 +72,7 @@ export default {
     {
       id: 'C1-a-replacement-keeps-the-older-revision',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the hook keeps what it held whenever a fold replaces rather than adds, so the revision that arrives second is lost (#193)',
       edits: [
@@ -88,6 +89,7 @@ export default {
     {
       id: 'C1-the-older-revision-wins',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe: 'of two revisions at different `created_at`, the older wins',
       edits: [
         {
@@ -100,6 +102,7 @@ export default {
     {
       id: 'C1-an-addressable-coordinate-without-its-d',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'an addressable event is replaced by kind and author alone, so two articles under different `d` tags are one coordinate',
       edits: [
@@ -113,6 +116,7 @@ export default {
     {
       id: 'C1-a-replaceable-coordinate-without-its-kind',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         "a replaceable event is replaced by author alone, so one author's lists of two replaceable kinds are one coordinate",
       edits: [
@@ -126,6 +130,7 @@ export default {
     {
       id: 'C1-an-addressable-coordinate-without-its-kind',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         "an addressable event is replaced by author and `d` alone, so one author's events of two addressable kinds under one `d` are one coordinate",
       edits: [
@@ -139,6 +144,7 @@ export default {
     {
       id: 'C1-a-regular-event-replaced-by-its-authors-next',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'a regular event is replaced by kind and author, as a replaceable one is, so an author’s later note replaces the earlier',
       edits: [
@@ -152,6 +158,7 @@ export default {
     {
       id: 'C2-the-incumbent-kept-at-an-equal-created-at',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the hook keeps the revision it holds when another arrives at the same `created_at`, so the tie goes to whichever arrived first',
       edits: [
@@ -178,6 +185,7 @@ export default {
     {
       id: 'C2-the-higher-id-wins-a-tie',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe: 'of two revisions at an equal `created_at`, the higher id wins',
       edits: [
         {
@@ -190,6 +198,7 @@ export default {
     {
       id: 'C4-the-bound-keeps-the-last-to-arrive',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'a bounded request keeps the entries last in the set’s insertion order rather than the newest, a replacement keeping the place of the revision it replaced, so the newer revision can be let go before the older arrives, and the older is then held',
       edits: [
@@ -208,6 +217,7 @@ export default {
     {
       id: 'C4-the-bound-breaks-a-tie-toward-the-higher-id',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the hook bounds the set itself, and of two events at one `created_at` keeps the higher id where the fold keeps the lower, so the winner can be let go for a regular event of that instant and the superseded revision then kept over it',
       edits: [
@@ -229,6 +239,7 @@ export default {
     {
       id: 'C1-a-live-replacement-keeps-the-older-revision',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'once the backlog has settled, the hook keeps what it held whenever a fold replaces rather than adds, so a revision that arrives on the live leg is lost',
       edits: [
@@ -245,6 +256,7 @@ export default {
     {
       id: 'C1-a-replacement-keeps-the-older-content',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'where a fold replaces one revision with another, the hook keeps the replaced revision’s `content` under the winner’s id, so the consumer holds the winner’s id over the superseded content',
       edits: [
@@ -267,6 +279,7 @@ export default {
     {
       id: 'C1-a-live-replacement-lost-retaining-one',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'once the backlog has settled, a request retaining one keeps what it held whenever a fold replaces rather than adds, so a revision that arrives on the live leg is lost',
       edits: [
@@ -288,6 +301,7 @@ export default {
     {
       id: 'B6-C1-the-bound-prefers-a-text-note-at-a-tie',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the hook bounds the set itself, and of two events at one `created_at` keeps a text note over an event of another kind before it compares ids, so retaining one at a tie keeps the regular event where the winner’s id is the lower',
       edits: [
@@ -312,6 +326,7 @@ export default {
     {
       id: 'B6-C1-the-bound-keeps-the-first-to-arrive-at-a-tie',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the bound’s comparator answers `0` for two events at one `created_at`, so the stable sort keeps whichever arrived first, and retaining one at a tie keeps it rather than the lower id',
       edits: [
@@ -329,6 +344,7 @@ export default {
     {
       id: 'C1-a-live-replacement-lost-while-the-leg-is-open',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'once the backlog has settled, a request retaining one keeps what it held whenever a fold replaces rather than adds while its forward leg is open, so a revision that arrives live is lost, and one folded after the leg ended is not',
       edits: [
@@ -351,6 +367,7 @@ export default {
     {
       id: 'C1-a-live-revision-replaces-what-it-meets',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'once the backlog has settled and while its forward leg is open, the hook lets an arriving event replace whatever it holds under the same coordinate, so a live revision older than the one held, or losing its tie, replaces it',
       edits: [
@@ -376,6 +393,7 @@ export default {
     {
       id: 'C11-kind-0-not-replaceable',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         "kind 0 is not replaceable, so an author's earlier metadata is held beside the later",
       edits: [{ file: EVENTSET, from: SPECIALS, to: "  if (kind === 3) return 'replaceable';" }]
@@ -383,6 +401,7 @@ export default {
     {
       id: 'C11-kind-3-not-replaceable',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         "kind 3 is not replaceable, so an author's earlier follow list is held beside the later",
       edits: [{ file: EVENTSET, from: SPECIALS, to: "  if (kind === 0) return 'replaceable';" }]
@@ -390,6 +409,7 @@ export default {
     {
       id: 'C11-kind-1-replaceable',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe: 'kind 1 is replaceable, as the special kind beside it is',
       edits: [
         {
@@ -402,6 +422,7 @@ export default {
     {
       id: 'C11-kind-2-replaceable',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe: 'kind 2 is replaceable, as the special kind beside it is',
       edits: [
         {
@@ -414,6 +435,7 @@ export default {
     {
       id: 'C11-kind-4-replaceable',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe: 'kind 4 is replaceable, as the special kind beside it is',
       edits: [
         {
@@ -426,6 +448,7 @@ export default {
     {
       id: 'C11-the-replaceable-class-begins-past-10000',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the replaceable range begins one past 10000, so two revisions at kind 10000 are both held',
       edits: [
@@ -439,6 +462,7 @@ export default {
     {
       id: 'C11-the-replaceable-class-begins-at-9999',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the replaceable range begins at 9999, so two events of one author at that regular kind are one coordinate',
       edits: [
@@ -452,6 +476,7 @@ export default {
     {
       id: 'C11-the-replaceable-class-ends-before-19999',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the replaceable range ends before 19999, so two revisions at kind 19999 are both held',
       edits: [
@@ -465,6 +490,7 @@ export default {
     {
       id: 'C11-the-addressable-class-begins-past-30000',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the addressable range begins one past 30000, so two revisions at kind 30000 are both held',
       edits: [
@@ -478,6 +504,7 @@ export default {
     {
       id: 'C11-the-addressable-class-ends-before-39999',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the addressable range ends before 39999, so two revisions at kind 39999 are both held',
       edits: [
@@ -491,6 +518,7 @@ export default {
     {
       id: 'C11-the-addressable-class-takes-40000',
       arm: 'RP1',
+      rows: ['B5-C11'],
       describe:
         'the addressable range takes 40000, so two events of one author there under one `d` are one coordinate',
       edits: [

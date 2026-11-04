@@ -40,6 +40,7 @@ export default {
     {
       id: 'C1-the-relay-count-read-first',
       arm: 'NW1',
+      rows: ['B-γ-C1'],
       describe:
         'the relay count is read before the filters, so a request that can only match nothing, with nowhere to ask, waits to be asked instead of being answered',
       edits: [
@@ -53,6 +54,7 @@ export default {
     {
       id: 'C1-a-write-only-relay-counts-as-readable',
       arm: 'NW1',
+      rows: ['B-γ-C1'],
       describe:
         'the scope counts a write-only relay among those it reads from, so a request whose only relay is write-only is asked there',
       edits: [
@@ -66,6 +68,7 @@ export default {
     {
       id: 'C1-nowhere-to-ask-reports-nothing-found',
       arm: 'NW1',
+      rows: ['B-γ-C1'],
       describe:
         'a request with no readable relay is answered `settled` and empty, as though every filter matched nothing',
       edits: [
@@ -79,6 +82,7 @@ export default {
     {
       id: 'C1-refresh-names-the-wrong-reason',
       arm: 'NW1',
+      rows: ['B-γ-C1'],
       describe:
         '`refresh()` on a request with no readable relay resolves `not-started` under `deferred` rather than `no-readable-relay`',
       edits: [
@@ -92,6 +96,7 @@ export default {
     {
       id: 'C1-a-request-with-nowhere-to-ask-runs',
       arm: 'NW1',
+      rows: ['B-γ-C1'],
       describe:
         'a request with no readable relay is not held back, so it runs with nowhere to ask and its timer reports it `incomplete`',
       edits: [
@@ -105,6 +110,7 @@ export default {
     {
       id: 'C2-an-unreadable-target-is-dropped',
       arm: 'NW2',
+      rows: ['C3-C2'],
       describe:
         'a named relay the provider cannot read from is dropped from the targets instead of refused, so the request waits with nowhere to ask',
       edits: [
@@ -118,6 +124,7 @@ export default {
     {
       id: 'C2-configured-never-said',
       arm: 'NW2',
+      rows: ['C3-C2'],
       describe: 'the refusal says the relay is not configured, whether or not the provider has it',
       edits: [
         {
@@ -130,6 +137,7 @@ export default {
     {
       id: 'C2-a-write-only-target-is-asked',
       arm: 'NW2',
+      rows: ['C3-C2'],
       describe: 'a named relay the provider has as write-only is accepted as a target, and asked',
       edits: [
         {
@@ -142,6 +150,7 @@ export default {
     {
       id: 'C2-refresh-resolves-a-refused-request',
       arm: 'NW2',
+      rows: ['C3-C2'],
       describe:
         '`refresh()` on a refused request resolves `not-started` instead of rejecting with the refusal',
       edits: [
@@ -155,6 +164,7 @@ export default {
     {
       id: 'C2-the-diagnostics-carry-no-refusal',
       arm: 'NW2',
+      rows: ['C3-C2'],
       describe: "`lastError` does not carry the refusal the request's state does",
       edits: [
         {
@@ -167,6 +177,7 @@ export default {
     {
       id: 'C2-the-scope-read-at-mount',
       arm: 'NW2',
+      rows: ['C3-C2'],
       describe:
         "the hook reads its provider's scope once, at mount, so a named relay that later leaves the provider, or becomes write-only there, is still asked",
       edits: [

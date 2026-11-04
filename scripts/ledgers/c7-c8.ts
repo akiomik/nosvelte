@@ -36,6 +36,7 @@ export default {
     {
       id: 'C8-by-id-asks-only-for-text-notes',
       arm: 'CM9',
+      rows: ['C7-C8'],
       describe: 'the components that ask by id put `kinds: [1]` in the filter beside the ids',
       edits: [
         {
@@ -53,6 +54,7 @@ export default {
     {
       id: 'C8-a-by-id-request-keeps-only-text-notes',
       arm: 'CM9',
+      rows: ['C7-C8'],
       describe:
         'a request whose every filter names ids and no kinds drops an arriving event that is not a text note, the key and the REQ unchanged',
       edits: [
@@ -72,6 +74,7 @@ export default {
     {
       id: 'C8-a-by-id-component-shows-only-text-notes',
       arm: 'CM9',
+      rows: ['C7-C8'],
       describe:
         'the components that ask by id hand their outlets only the text notes among the events the request holds',
       edits: [
@@ -118,6 +121,7 @@ export default {
     {
       id: 'C8-a-by-id-component-hands-its-outlet-other-content',
       arm: 'CM9',
+      rows: ['C7-C8'],
       describe:
         'the outlets hand on each event the request holds with its `content` emptied, so a component shows the id it was answered with over other content',
       edits: [

@@ -174,6 +174,12 @@ export interface Entry {
   readonly arm: string;
   /** Arms that must fail too, for the entry to count as killed. */
   readonly requires?: readonly string[];
+  /**
+   * The rows whose promise this mutation breaks and whose Evidence cell cites
+   * this ledger. The cell names the ledger and the arms; which entries are the
+   * row's is said here and nowhere else, and `CAT45` holds the two together.
+   */
+  readonly rows?: readonly string[];
   readonly edits: readonly Edit[];
   /** What the mutation breaks, in a reviewer's words; the table's first column. */
   readonly describe?: string;

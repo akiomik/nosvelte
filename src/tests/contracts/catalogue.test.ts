@@ -12,7 +12,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
@@ -36,6 +36,13 @@ import {
   testEvidence
 } from './bridge.js';
 import {
+  citationFaults,
+  citationsOf,
+  type CitedEntry,
+  type CitedLedger,
+  implementationCells
+} from './citations.js';
+import {
   HELD_BY,
   INHERITED,
   recordedMatrix,
@@ -54,6 +61,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TESTS_ROOT = resolve(HERE, '..');
 const DECISIONS = resolve(HERE, '../../../docs/decisions');
+const LEDGERS = resolve(HERE, '../../../scripts/ledgers');
 
 // The parser walks `<suite root>/contracts` and the record says `src/tests/contracts`;
 // if this file moves, those stop being one directory.
@@ -945,5 +953,152 @@ describe('the production contract bridge', () => {
       expect(legacyBlockers(text), 'what stands between v1 and closing the legacy issues').toEqual(
         []
       );
+  });
+
+  it('CAT45: every ledger an Evidence cell cites names the row in its entries, held to the arms the cell names', async () => {
+    const ledgers: CitedLedger[] = [];
+    for (const file of readdirSync(LEDGERS)
+      .filter((name) => name.endsWith('.ts'))
+      .sort())
+      ledgers.push(
+        ((await import(pathToFileURL(join(LEDGERS, file)).href)) as { default: CitedLedger })
+          .default
+      );
+    expect(citationFaults(CATALOGUE, ledgers), 'the cells, against the ledgers').toEqual([]);
+    // **The premise**: the trial's cells were read, and each cites a ledger.
+    const cited = [...implementationCells(CATALOGUE)].flatMap(
+      ([row, cell]) => citationsOf(row, cell).citations
+    );
+    expect(cited.length, 'the premise: the trial cells were read').toBeGreaterThanOrEqual(14);
+
+    // **The checker's controls**, on a record and a ledger of its own, so a
+    // landing in the real ones cannot change what they ask. Each is read for
+    // its own fault, so one check cannot stand in for another.
+    const CELL =
+      'TBD — **Read:** a reading. **Ledger:** `x-ledger`, held to `XA1`. **Limitations:** none.';
+    const record = (first = CELL, second = 'TBD') =>
+      [
+        '| Contract | Decision | Kind | Given / When | Observable Then | Spike witness | Implementation test |',
+        '| --- | --- | --- | --- | --- | --- | --- |',
+        `| \`X1-C1\` | X1 | behavior | a given | a then | SW1 | ${first} |`,
+        `| \`X1-C2\` | X1 | behavior | a given | a then | SW2 | ${second} |`,
+        '',
+        '#### The port route of a row',
+        '',
+        '```text',
+        'X1-C1        public        test:XA1+XA2',
+        'X1-C2        public        test:XB1',
+        '```',
+        ''
+      ].join('\n');
+    const entry = (id: string, arm: string, rows?: string[]): CitedEntry =>
+      rows === undefined ? { id, arm } : { id, arm, rows };
+    const ledger = (
+      entries: CitedEntry[] = [entry('C1-a', 'XA1', ['X1-C1']), entry('C1-b', 'XA1', ['X1-C1'])],
+      retired: CitedEntry[] = []
+    ): CitedLedger => ({ name: 'x-ledger', entries, retired });
+    const other: CitedLedger = { name: 'y-ledger', entries: [entry('Y-a', 'XA1', ['X1-C1'])] };
+    expect(citationFaults(record(), [ledger()]), 'the control record reads clean').toEqual([]);
+    const refuses = (found: string[], fault: string): boolean =>
+      found.length > 0 && found.every((one) => one.includes(fault));
+    const cell = (part: string): string => CELL.replace('`x-ledger`, held to `XA1`.', part);
+    expect(
+      [
+        refuses(
+          citationFaults(record(CELL.replace(/\*\*Ledger:\*\*.*\. /, '')), [ledger([])]),
+          'a trial cell with no'
+        ),
+        refuses(
+          citationFaults(
+            record(CELL.replace('**Limitations:**', '**Ledger:** x. **Limitations:**')),
+            [ledger([])]
+          ),
+          'two **Ledger:** parts'
+        ),
+        refuses(
+          citationFaults(record(cell('`x-ledger`: the entries that break it.')), [ledger([])]),
+          'that is not `ledger`, held to `ARM` clauses'
+        ),
+        refuses(
+          citationFaults(record(cell('`x-ledger`, held to `XA1`,')), [ledger([])]),
+          'that is not `ledger`, held to `ARM` clauses'
+        ),
+        refuses(
+          citationFaults(record(cell('`x-ledger`, held to `XA1`, `XA2`.')), [ledger([])]),
+          'that is not `ledger`, held to `ARM` clauses'
+        ),
+        refuses(
+          citationFaults(record(cell('`x-ledger`, held to `XA1`; `x-ledger`, held to `XA1`.')), [
+            ledger()
+          ]),
+          'cites x-ledger twice'
+        ),
+        refuses(
+          citationFaults(record(cell('`z-ledger`, held to `XA1`.')), [ledger([])]),
+          'which is no ledger'
+        ),
+        refuses(
+          citationFaults(record(cell('`x-ledger`, held to `XB1`.')), [
+            ledger([entry('C1-a', 'XB1', ['X1-C1'])])
+          ]),
+          "which is not on the row's roster line"
+        ),
+        refuses(citationFaults(record(), [ledger([])]), 'no entry there names X1-C1'),
+        refuses(
+          citationFaults(record(cell('`x-ledger`, held to `XA1` and `XA2`.')), [ledger()]),
+          'and its entries there are held to XA1'
+        ),
+        refuses(
+          citationFaults(record(), [
+            ledger([...ledger().entries, entry('C1-c', 'XA2', ['X1-C1'])])
+          ]),
+          'and its entries there are held to XA1, XA2'
+        ),
+        refuses(
+          citationFaults(record(cell('`x-ledger`, held to XA1.')), [ledger([])]),
+          'that is not `ledger`, held to `ARM` clauses'
+        ),
+        refuses(
+          citationFaults(record(), [ledger([...ledger().entries, entry('C1-c', 'XA1')])]),
+          'C1-c is held to XA1, which X1-C1 cites, and names no row'
+        ),
+        refuses(
+          citationFaults(record(), [
+            ledger([...ledger().entries, entry('C2-a', 'XB1', ['X1-C2'])])
+          ]),
+          'C2-a names X1-C2, whose cell does not cite x-ledger'
+        ),
+        refuses(
+          citationFaults(record(), [
+            ledger([...ledger().entries, entry('C9-a', 'XB1', ['X9-C9'])])
+          ]),
+          'C9-a names X9-C9, which is no row'
+        ),
+        refuses(
+          citationFaults(record(), [ledger(undefined, [entry('C1-z', 'XA1', ['X1-C1'])])]),
+          'C1-z is retired and names X1-C1'
+        ),
+        refuses(
+          citationFaults(record(), [ledger(), other]),
+          'Y-a names X1-C1, whose cell does not cite y-ledger'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as `C1-b` measures.')), [ledger()]),
+          'names C1-b, an entry of x-ledger'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as `C1-` measures.')), [ledger()]),
+          'names C1-, the entries beginning so of x-ledger'
+        )
+      ],
+      'the checker refuses each fault on its own'
+    ).toEqual(Array.from({ length: 19 }, () => true));
+    expect(
+      citationFaults(
+        record(cell('`x-ledger`, held to `XA1` and `XA2`; `y-ledger`, held to `XA1`.')),
+        [ledger([...ledger().entries, entry('C1-c', 'XA2', ['X1-C1'])]), other]
+      ),
+      'two ledgers, and two arms written with "and", read clean'
+    ).toEqual([]);
   });
 });

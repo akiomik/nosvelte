@@ -119,12 +119,14 @@ export default {
     {
       id: 'C1-the-timer-reports-complete',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe: "the settle timer's outcome says the answer is complete",
       edits: REPORTS_COMPLETE
     },
     {
       id: 'C1-the-wrong-cause',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         'the answer is incomplete, but under `ended` rather than `timeout` — from the timer and from the relay left undetermined alike',
       edits: WRONG_CAUSE
@@ -132,6 +134,7 @@ export default {
     {
       id: 'C1-the-events-dropped',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe: 'an incomplete answer shows none of the events it had',
       edits: [
         {
@@ -144,6 +147,7 @@ export default {
     {
       id: 'C1-no-incomplete-result-error',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe: 'the diagnostics carry no error for an answer that ran out of time',
       edits: [
         {
@@ -156,6 +160,7 @@ export default {
     {
       id: 'C1-the-slot-turns-to-error',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         'an incomplete answer with events renders the error slot instead of the default one',
       edits: [
@@ -169,6 +174,7 @@ export default {
     {
       id: 'C1-the-settle-timer-never-fires',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "the request's own timer is armed for a thousand times its timeout, so a silent relay holds it open",
       edits: [
@@ -389,12 +395,14 @@ export default {
     {
       id: 'C1-the-live-timer-never-armed',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe: 'a live request arms no settle timer, so a silent relay holds its backlog open',
       edits: LIVE_TIMER_NEVER_ARMED
     },
     {
       id: 'C1-the-timer-fires-early',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "the request's timer fires at 50ms whatever the caller asked for — the outcome is right and too soon",
       edits: [
@@ -470,6 +478,7 @@ export default {
     {
       id: 'C1-the-timer-ignores-the-caller',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "the request's timer runs two seconds whatever the caller asked for — the outcome is right and late",
       edits: [
@@ -483,6 +492,7 @@ export default {
     {
       id: 'C1-the-outlet-throws-on-incomplete',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "the component's outlet cannot be derived for an incomplete answer, so the outlet on the screen is the one from before the timeout",
       edits: [
@@ -668,6 +678,7 @@ export default {
     {
       id: 'C1-the-timer-fires-a-fifth-early',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "the request's timer fires at four fifths of what the caller asked for — inside the real clock's margin, outside the fake clock's instant",
       edits: TIMER_TIMES(0.8)
@@ -675,6 +686,7 @@ export default {
     {
       id: 'C1-the-timer-fires-a-fifth-late',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "the request's timer fires at six fifths of what the caller asked for — inside the real clock's margin, outside the fake clock's instant",
       edits: TIMER_TIMES(1.2)
@@ -696,6 +708,7 @@ export default {
     {
       id: 'C7-the-live-timer-never-armed',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe:
         'a live request arms no settle timer, so a relay that sends nothing holds it `loading`',
       edits: LIVE_TIMER_NEVER_ARMED
@@ -703,12 +716,14 @@ export default {
     {
       id: 'C7-the-timer-reports-complete',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe: "a live request's settle timer says its empty answer is complete",
       edits: REPORTS_COMPLETE
     },
     {
       id: 'C7-the-wrong-cause',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe:
         "a live request's timed-out answer is incomplete under `ended` rather than `timeout`",
       edits: WRONG_CAUSE
@@ -716,6 +731,7 @@ export default {
     {
       id: 'C7-the-timer-ends-the-live-leg',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe:
         "a live request's settle timer ends the request, closing the forward leg with the backward",
       edits: [
@@ -729,6 +745,7 @@ export default {
     {
       id: 'C7-the-backward-leg-left-open',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe:
         "a live request's settle timer reports the backlog's end and leaves its backward subscription open beside the forward",
       edits: [
@@ -742,12 +759,14 @@ export default {
     {
       id: 'C7-the-timer-fires-a-fifth-early',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe: "a live request's timer fires at four fifths of what the caller asked for",
       edits: TIMER_TIMES(0.8)
     },
     {
       id: 'C7-the-timer-fires-a-fifth-late',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe: "a live request's timer fires at six fifths of what the caller asked for",
       edits: TIMER_TIMES(1.2)
     },
@@ -761,6 +780,7 @@ export default {
     {
       id: 'C1-the-timer-re-armed-by-each-event',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "each event on the backlog restarts the request's timer, so the deadline counts from the last event rather than from the request's start",
       edits: [
@@ -774,6 +794,7 @@ export default {
     {
       id: 'C1-a-single-event-outlet-errs-on-incomplete',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         'a single-event component renders the error slot for an incomplete answer that holds its event, and a list keeps the default',
       edits: [
@@ -787,6 +808,7 @@ export default {
     {
       id: 'C7-the-timer-closes-the-live-gate',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe:
         "a live request's settle timer stops admitting what arrives on the forward subscription, which stays open on the wire and delivers nothing",
       edits: [
@@ -800,6 +822,7 @@ export default {
     {
       id: 'C1-early-backlog-events-dropped',
       arm: 'ST1',
+      rows: ['A-γ-C1'],
       describe:
         "the backlog's events in the first 40 ms after the request's timer is armed are dropped, so what a relay sends as soon as it is asked is lost",
       edits: [
@@ -819,6 +842,7 @@ export default {
     {
       id: 'C7-the-live-gate-shut-for-a-moment',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe:
         "a live request's settle timer shuts the forward gate for 25 ms and opens it again, so an event the relay sends as the timeout passes is lost while the subscription stays open and later ones arrive",
       edits: [
@@ -832,6 +856,7 @@ export default {
     {
       id: 'C7-the-live-gate-shut-for-a-millisecond',
       arm: 'ST2',
+      rows: ['A-γ-C7'],
       describe:
         "a live request's settle timer shuts the forward gate for a millisecond and opens it again, so an event the relay sends in the millisecond the timer fires is lost",
       edits: [

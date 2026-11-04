@@ -118,6 +118,7 @@ export default {
     {
       id: 'C3-the-stored-set-counts-as-an-answer',
       arm: 'TH1',
+      rows: ['C5-C3'],
       describe:
         'an expired event still counts: the state stays `streaming` over nothing, with nothing running and a failure recorded',
       edits: [
@@ -131,6 +132,7 @@ export default {
     {
       id: 'C3-a-recorded-failure-is-never-the-state',
       arm: 'TH1',
+      rows: ['C5-C3'],
       requires: ['TH2'],
       describe: 'a failure over a value stays on the diagnostics, however little there is to show',
       edits: [{ file: ENGINE, from: ERROR_BRANCH, to: '  if (false as boolean) {' }]
@@ -138,6 +140,7 @@ export default {
     {
       id: 'C3-a-failure-always-takes-the-state',
       arm: 'TH1',
+      rows: ['C5-C3'],
       requires: ['TH2'],
       describe:
         'a control, not this Then: the failure takes the state while events are on screen, which `TH1` reads before the deadline and `TH2` on the next event',
@@ -146,6 +149,7 @@ export default {
     {
       id: 'C3-the-state-carries-a-copy',
       arm: 'TH1',
+      rows: ['C5-C3'],
       describe: 'the error state and the diagnostics carry two objects',
       edits: [
         {
@@ -158,6 +162,7 @@ export default {
     {
       id: 'C3-the-state-ignores-the-clock',
       arm: 'TH1',
+      rows: ['C5-C3'],
       describe: 'the deadline moves nothing the state reads, so the event never leaves',
       edits: [
         {
@@ -170,6 +175,7 @@ export default {
     {
       id: 'C5-a-failed-attempt-resolves-complete',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'the legacy bug: `complete` for an attempt that threw, however far it got',
       edits: [
         {
@@ -182,6 +188,7 @@ export default {
     {
       id: 'C5-a-partial-attempt-resolves-complete',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe:
         'the race: `complete` when the throw came after an event, `error` when it came first',
       edits: [
@@ -195,6 +202,7 @@ export default {
     {
       id: 'C5-a-partial-attempt-resolves-incomplete',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'the other success: `incomplete` when the throw came after an event',
       edits: [
         {
@@ -207,6 +215,7 @@ export default {
     {
       id: 'C5-the-waiter-never-reads-the-failure',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'a thrown attempt leaves the waiter nothing to answer with',
       edits: [
         { file: STREAMED, from: WAITER, to: '      const outcome = outcomeOf(data, undefined);' }
@@ -215,6 +224,7 @@ export default {
     {
       id: 'C5-the-outcome-carries-a-copy',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'the outcome is an Error of its own, not the one the diagnostics carry',
       edits: [
         {
@@ -227,6 +237,7 @@ export default {
     {
       id: 'C5-a-foreign-error-is-kept',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'the record keeps what the accumulator threw rather than the library’s copy',
       edits: [
         {
@@ -244,6 +255,7 @@ export default {
     {
       id: 'C5-the-failure-is-a-generic-one',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'an owned Error, and not a copy of what was thrown, once something has been kept',
       edits: [
         {
@@ -256,6 +268,7 @@ export default {
     {
       id: 'C5-the-failure-empties-the-value',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'the event that folded goes with the failure, so `(2)` reads as `(1)`',
       edits: [
         {
@@ -268,6 +281,7 @@ export default {
     {
       id: 'C5-the-attempt-outlives-its-throw',
       arm: 'TH2',
+      rows: ['C5-C5'],
       describe: 'the fold’s throw is recorded and the attempt runs on, so the activity stays on',
       edits: [
         {
@@ -280,12 +294,14 @@ export default {
     {
       id: 'C7-the-record-logs-the-failure',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'the legacy bug: the stream error goes to `console.error`',
       edits: [{ file: EVENTSET, from: RECORD, to: `  console.error(error);\n${RECORD}` }]
     },
     {
       id: 'C7-a-retry-logs-the-failure',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'only a failure over a failure writes, so the first attempt reads clean',
       edits: [
         {
@@ -298,6 +314,7 @@ export default {
     {
       id: 'C7-a-debug-line-on-the-catch',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'a method nobody reads in a console, at the query function’s catch',
       edits: [
         {
@@ -310,6 +327,7 @@ export default {
     {
       id: 'C7-a-write-bound-at-load',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe:
         'a method bound as the module loads, which is what a watch put on after the imports cannot see',
       edits: [
@@ -323,24 +341,28 @@ export default {
     {
       id: 'C7-a-write-at-load',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'the module writes as it loads, before any request was made',
       edits: [{ file: OWN, from: TERMINAL, to: `console.warn('loaded');\n${TERMINAL}` }]
     },
     {
       id: 'C7-a-write-as-the-request-is-built',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'a write before the attempt, which a control run after the build cleared',
       edits: [{ file: STREAMED, from: QUERY_BUILT, to: `${QUERY_BUILT}  console.warn('built');\n` }]
     },
     {
       id: 'C7-a-write-on-release',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'a write as the request goes, after the attempts have ended',
       edits: [{ file: STREAMED, from: RELEASE, to: `${RELEASE}    console.warn('released');\n` }]
     },
     {
       id: 'I-C7-the-watch-is-one-method',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'the watch spies on `error` alone, which a list compared with itself cannot see',
       edits: [
         {
@@ -353,18 +375,21 @@ export default {
     {
       id: 'I-C7-the-watch-records-nothing',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'the spies stop recording, so nothing is written whatever is written',
       edits: [{ file: WATCH, from: RECORDING, to: '' }]
     },
     {
       id: 'I-C7-the-text-of-a-write-throws',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe: 'the spy throws at a value `String()` refuses, which the control writes',
       edits: [{ file: WATCH, from: 'args.map(textOf)', to: 'args.map(String)' }]
     },
     {
       id: 'I-C7-the-console-lists-nothing',
       arm: 'TH3',
+      rows: ['C5-C7'],
       describe:
         'no method is listed, so the named six are all that is watched, and one of them is written through',
       edits: [
@@ -379,6 +404,7 @@ export default {
     {
       id: 'C6-the-rejection-is-a-derivation-again',
       arm: 'RA1',
+      rows: ['C5-C6'],
       describe:
         'the write this row was found by: a released handle reads a `$derived` of its root, on a path `RA1` drives',
       edits: [
@@ -393,18 +419,21 @@ export default {
     {
       id: 'C6-a-disposed-provider-logs',
       arm: 'RA1',
+      rows: ['C5-C6'],
       describe: 'a path no public row reaches writes: the failure of a provider that went',
       edits: [{ file: OWN, from: DISPOSED, to: `  console.error(message);\n${DISPOSED}` }]
     },
     {
       id: 'C6-a-recorded-failure-logs',
       arm: 'RA1',
+      rows: ['C5-C6'],
       describe: 'the accumulator’s failures write, through the seam a consumer does not have',
       edits: [{ file: EVENTSET, from: RECORD, to: `  console.info(error);\n${RECORD}` }]
     },
     {
       id: 'C6-a-write-bound-at-load',
       arm: 'RA1',
+      rows: ['C5-C6'],
       describe:
         'a method bound as the module loads, which is what a watch put on after the imports cannot see',
       edits: [
@@ -418,6 +447,7 @@ export default {
     {
       id: 'C6-an-unreadable-seam-logs',
       arm: 'RX6',
+      rows: ['C5-C6'],
       describe: 'a path a supporting arm drives writes, and that arm is the one that fails',
       edits: [
         {
@@ -430,6 +460,7 @@ export default {
     {
       id: 'I-C6-the-watch-goes-early',
       arm: 'RA1',
+      rows: ['C5-C6'],
       describe: 'the file-wide watch is gone before the first arm runs',
       edits: [
         {
@@ -442,6 +473,7 @@ export default {
     {
       id: 'I-C6-a-path-stopped-running',
       arm: 'RA1',
+      rows: ['C5-C6'],
       describe: 'a path the file used to drive does not run, and watched nothing',
       edits: [
         {
@@ -454,6 +486,7 @@ export default {
     {
       id: 'C8-the-rejection-is-a-derivation-again',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe:
         'the defect: `state` and `diagnostics` read a `$derived` of a root that has gone, and Svelte writes to the console',
       edits: [
@@ -468,6 +501,7 @@ export default {
     {
       id: 'C8-a-released-handle-asks-the-plan',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe:
         'the defect’s other half: `activity` runs the plan of a consumer that has gone, and its `$derived` writes',
       edits: [
@@ -481,6 +515,7 @@ export default {
     {
       id: 'C8-the-release-waits-for-the-effects',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'a root gone before its effects ran is never marked released',
       edits: [
         {
@@ -493,6 +528,7 @@ export default {
     {
       id: 'C8-a-released-handle-forgets-it-was-live',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'the kept `live` is lost, so a released live request answers `refreshing`',
       edits: [
         {
@@ -505,6 +541,7 @@ export default {
     {
       id: 'C8-the-kept-live-is-the-one-built',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe:
         'a released handle says what the options were last built from, which is not what it read',
       edits: [
@@ -523,6 +560,7 @@ export default {
     {
       id: 'C8-the-options-stop-writing-once-read',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe:
         'a released handle says what the consumer last read, older than the plan it went with',
       edits: [
@@ -546,6 +584,7 @@ export default {
     {
       id: 'C8-the-diagnostic-is-built-at-its-reader',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe:
         'an incomplete answer’s `lastError` is a new Error at each read, which only identity can see',
       edits: [
@@ -559,6 +598,7 @@ export default {
     {
       id: 'C8-a-released-handle-answers-idle',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe:
         'the correction `A12-C5` declines: a released handle stops saying what it last saw on the activity axis',
       edits: [
@@ -572,6 +612,7 @@ export default {
     {
       id: 'C8-a-released-handle-drops-the-value',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'a read after the release answers from nothing rather than the entry it last saw',
       edits: [
         {
@@ -584,6 +625,7 @@ export default {
     {
       id: 'C8-a-refusal-logs',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'a refused request writes as it is published',
       edits: [
         {
@@ -596,6 +638,7 @@ export default {
     {
       id: 'C8-a-missing-provider-logs',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'the path with no provider writes, alone among the refusals',
       edits: [
         {
@@ -608,24 +651,28 @@ export default {
     {
       id: 'C8-a-partial-answer-logs',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'an answer that is partial writes, which no refusal does',
       edits: [{ file: ENGINE, from: INCOMPLETE, to: `${INCOMPLETE}    console.info('partial');\n` }]
     },
     {
       id: 'C8-a-leg-end-logs',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'a relay ending the live leg writes, on the one code that reaches nothing else',
       edits: [{ file: EVENTSET, from: LEG_END, to: `  console.warn('leg ended');\n${LEG_END}` }]
     },
     {
       id: 'C8-a-disposed-provider-logs',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'the code a consumer reaches by a root of its own writes as it is refused',
       edits: [{ file: OWN, from: DISPOSED, to: `  console.error(message);\n${DISPOSED}` }]
     },
     {
       id: 'C8-a-write-bound-at-load',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'a method bound as the module loads, on the public row',
       edits: [
         {
@@ -638,12 +685,14 @@ export default {
     {
       id: 'C8-a-write-at-load',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'the module writes as it loads, on the public row',
       edits: [{ file: OWN, from: TERMINAL, to: `console.warn('loaded');\n${TERMINAL}` }]
     },
     {
       id: 'C8-a-released-call-logs',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'a call on a released handle is answered and written about',
       edits: [
         {
@@ -656,6 +705,7 @@ export default {
     {
       id: 'C5-the-key-forgets-the-source',
       arm: 'TH4',
+      rows: ['C5-C5'],
       describe: 'another object at the same count, which a reset leaves, reads as the last report',
       edits: [
         {
@@ -668,6 +718,7 @@ export default {
     {
       id: 'C5-the-key-forgets-the-count',
       arm: 'TH4',
+      rows: ['C5-C5'],
       describe: 'error, success, error with the same object comes back to one key, and goes stale',
       edits: [
         {
@@ -680,12 +731,14 @@ export default {
     {
       id: 'C5-a-copy-per-read',
       arm: 'TH4',
+      rows: ['C5-C5'],
       describe: 'the memo is off, so one report is a new object at every read',
       edits: [{ file: STREAMED, from: REJECTION_KEY, to: '    if (true as boolean) {' }]
     },
     {
       id: 'I-C8-a-code-out-of-place',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'a code is on the library’s list and on neither of this arm’s',
       edits: [
         {
@@ -698,6 +751,7 @@ export default {
     {
       id: 'I-C8-the-dead-derived-is-never-read',
       arm: 'CW2',
+      rows: ['C5-C8'],
       describe:
         'the effect stops reading the `$derived`, so nothing is written and no line says which build ran',
       edits: [
@@ -711,6 +765,7 @@ export default {
     {
       id: 'C9-the-options-go-on-reading-the-plan',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe:
         'the options are built past the provider: the plan is read, and a new entry runs an attempt on a revoked capability',
       edits: [{ file: STREAMED, from: LAST_OPTIONS, to: '' }]
@@ -718,6 +773,7 @@ export default {
     {
       id: 'C9-the-options-are-a-new-object-to-the-adapter',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe:
         'the object kept is not the one the adapter saw, so its own defaulting makes a new one past the provider',
       edits: [{ file: STREAMED, from: DEFAULTED, to: '    lastOptions = built;\n' }]
@@ -725,6 +781,7 @@ export default {
     {
       id: 'C9-activity-asks-the-plan',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: '`activity` reads `live` off the plan of a request whose provider has gone',
       edits: [
         {
@@ -737,6 +794,7 @@ export default {
     {
       id: 'C9-refresh-asks-the-plan',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: '`refresh()` goes on to read the plan of a request whose provider has gone',
       edits: [
         {
@@ -749,6 +807,7 @@ export default {
     {
       id: 'C9-a-plan-not-asking-answers-as-disposed',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: 'a plan that was not asking loses its answer when the provider goes',
       edits: [
         {
@@ -761,6 +820,7 @@ export default {
     {
       id: 'C9-a-refused-plan-answers-as-disposed',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: 'a plan the boundary refused loses its refusal when the provider goes',
       edits: [
         {
@@ -773,6 +833,7 @@ export default {
     {
       id: 'C9-the-plan-kept-is-the-first',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: 'what `refresh()` answers from is the plan as it was first read',
       edits: [
         {
@@ -785,6 +846,7 @@ export default {
     {
       id: 'C9-the-mark-is-not-a-signal',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe:
         'the mark moves no reader, so an effect that read the plan keeps it as a dependency and Svelte reads it',
       edits: [
@@ -798,12 +860,14 @@ export default {
     {
       id: 'C9-nobody-is-told',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: 'the listener on the lease marks nothing',
       edits: [{ file: STREAMED, from: TOLD, to: '    void 0;\n' }]
     },
     {
       id: 'C9-told-a-turn-late',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: 'the mark moves a turn after the revocation, so a flush between reads the plan',
       edits: [
         {
@@ -816,6 +880,7 @@ export default {
     {
       id: 'C9-a-last-read-as-the-provider-goes',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: 'the listener takes a last `live` off the plan, in the teardown itself',
       edits: [
         {
@@ -828,6 +893,7 @@ export default {
     {
       id: 'C9-the-events-go-with-the-provider',
       arm: 'CW3',
+      rows: ['C5-C9'],
       describe: 'the state past the provider holds nothing of what it had settled on',
       edits: [
         {
@@ -840,6 +906,7 @@ export default {
     {
       id: 'C9-a-plan-stops-being-followed-as-the-options-are-kept',
       arm: 'CW2',
+      rows: ['C5-C9'],
       describe: 'the options stop at the first object, so a provider that stands asks nothing new',
       edits: [
         {
@@ -852,12 +919,14 @@ export default {
     {
       id: 'C10-the-listener-stays-on-the-lease',
       arm: 'RL4',
+      rows: ['C5-C10'],
       describe: 'a request gone under a provider that stands is still told when it goes',
       edits: [{ file: STREAMED, from: '    unwatched?.();\n', to: '' }]
     },
     {
       id: 'I-C8-a-path-dropped',
       arm: 'CW1',
+      rows: ['C5-C8'],
       describe: 'the path with no provider is taken off the list, and the code goes unplaced',
       edits: [
         {

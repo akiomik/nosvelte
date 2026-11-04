@@ -149,8 +149,13 @@ A row landed during the trial writes four things in its Evidence cell:
 
 - what is read;
 - where and when it is read;
-- the ledger entries that matter;
+- the ledger, and the arms the row's entries in it are held to;
 - the limitations.
+
+**From G2, which entries are the row's is said in the ledger and not in the cell**: each entry names
+the rows it is evidence of, in its `rows`, and the cell writes
+``**Ledger:** `ledger`, held to `ARM` and `ARM`.`` and names no entry anywhere. `CAT45` holds the
+cell against the ledger and the roster both ways. The cells landed in G1 are rewritten to that form.
 
 **Aim for under 1 500 characters.** How the cell was reached — earlier arrangements, reviewers'
 edits, dates — goes in the PR body. Cells landed before the trial are left as they are.
