@@ -376,7 +376,7 @@ const planOf = (retain: Retain, live: boolean, namespace: string): ReqPlan => ({
 describe('B5: which revision of a coordinate a consumer holds', () => {
   // @contracts B5-C11
   it(
-    'RP1: a consumer holds the revision that wins, as it was sent, in every order the revisions arrive in, on either leg, bounded or not, at each kind where a class that replaces begins or ends',
+    'RP1: a consumer holds the revision that wins, as it was sent, in every order the revisions arrive in, on either leg, bounded or not, and unbounded at each kind where a class that replaces begins or ends',
     async () => {
       // Each case is its own request on its own relay, all at once. The relay
       // sends the case's backlog in order, then `EOSE`, and the consumer's
