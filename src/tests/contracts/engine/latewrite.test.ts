@@ -24,6 +24,7 @@ import {
   streamedQueryAccumulator
 } from '$lib/v1/accumulate.js';
 import { createAttemptRegistry } from '$lib/v1/attempt.js';
+import type { ReqEvent } from '$lib/v1/event.js';
 import type { CachedEventSet } from '$lib/v1/eventset.js';
 import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
@@ -70,6 +71,24 @@ const within = (clock: Clock, done: () => boolean, ms = 3000): Promise<boolean> 
 /** Let the work outstanding run out, on `clock`'s own time. */
 const runOut = (clock: Clock): Promise<unknown> =>
   clock.fake ? vi.advanceTimersByTimeAsync(RUN_OUT_MS.fake) : delay(RUN_OUT_MS.real);
+
+/**
+ * The event a case delivers `at`-th: the same on every run, so that what the
+ * control holds is read against what was delivered and not only counted.
+ */
+const eventAt = (at: number) =>
+  fakeEvent({ id: `lw-${String(at)}`, created_at: at, content: `delivered ${String(at)}` });
+
+/** An event by the fields it is delivered with, and none the library adds. */
+const asDelivered = ({ id, pubkey, created_at, kind, tags, content, sig }: ReqEvent) => ({
+  id,
+  pubkey,
+  created_at,
+  kind,
+  tags,
+  content,
+  sig
+});
 
 /** The subscription a request's leg was asked under, by the leg's suffix. */
 const legOf = (server: WS, leg: 'b' | 'f'): string | undefined =>
@@ -147,12 +166,18 @@ const caseName = ({ delivery, events }: Case): string =>
  * once the work outstanding has run out:
  *
  * - `taken`: how many events the accumulator took;
- * - `held`: how many events the request's entry holds at the end, or `'none'`
- *   when there is no entry for its key;
- * - `added`: how many times the cache announced an entry for the request's
- *   key **from that entry's removal on**, counted by a listener put on the
- *   cache before the teardown — a reading taken only at the end would pass an
- *   entry recreated and collected again, which `gcTime` 0 does at once;
+ * - `held`: the events the request's entry holds at the end, oldest first and
+ *   each by the fields it was delivered with, or `'none'` when there is no
+ *   entry for its key — **what it holds and not how many**, since an
+ *   accumulator that folds a copy it altered keeps the count;
+ * - `added`: how many entries the cache announced under the request's key
+ *   **other than the request's own**, counted by a listener put on the cache
+ *   before the teardown — a reading taken only at the end would pass an entry
+ *   recreated and collected again, which `gcTime` 0 does at once. The cache
+ *   can add another only once the request's has gone, so the count needs no
+ *   order between this listener and the removal: one put on before it can add
+ *   an entry inside the removal's own notification, before this one hears of
+ *   the removal;
  * - `byHand`: the count's own control — an entry written by hand under the key
  *   once the rest has run out: whether it is there at once, whether it has
  *   gone once the work has run out again, and how many additions the listener
@@ -207,25 +232,25 @@ async function delivered(inner: StreamAccumulator, clock: Clock, each: Case) {
     const [entry] = client.getQueryCache().getAll();
     if (entry === undefined) return 'the request made no entry';
     const key: QueryKey = entry.queryKey;
-    const send = (): void => {
-      server.send(['EVENT', legOf(server, 'f'), fakeEvent()]);
+    const send = (at: number): void => {
+      server.send(['EVENT', legOf(server, 'f'), eventAt(at)]);
     };
     let removed = false;
     let added = 0;
     client.getQueryCache().subscribe((event) => {
       if (event.query.queryHash !== entry.queryHash) return;
-      if (event.type === 'removed') removed = true;
-      if (event.type === 'added' && removed) added += 1;
+      if (event.type === 'removed' && event.query === entry) removed = true;
+      if (event.type === 'added' && event.query !== entry) added += 1;
     });
     if (each.delivery === 'while the request stands') {
       for (let at = 1; at <= each.events; at += 1) {
-        send();
+        send(at);
         await within(clock, () => taken >= at);
       }
     } else if (each.delivery === 'after the entry is collected') {
       destroy();
       if (!(await within(clock, () => removed))) return 'the entry was never collected';
-      send();
+      send(1);
     } else {
       // **Torn down the moment the accumulator has handled its last take**:
       // when it comes back for the next chunk, so whatever it does at once
@@ -235,13 +260,19 @@ async function delivered(inner: StreamAccumulator, clock: Clock, each: Case) {
         if (count === each.events) queueMicrotask(destroy);
       };
       for (let at = 1; at <= each.events; at += 1) {
-        send();
+        send(at);
         await within(clock, () => taken >= at);
       }
       if (!(await within(clock, () => removed))) return 'the entry was never collected';
     }
     await runOut(clock);
-    const held = client.getQueryData<CachedEventSet>(key)?.entries.size ?? 'none';
+    const set = client.getQueryData<CachedEventSet>(key);
+    const held =
+      set === undefined
+        ? 'none'
+        : [...set.entries.values()]
+            .map((packet) => asDelivered(packet.event))
+            .sort((one, other) => one.created_at - other.created_at);
     const before = added;
     const present = (): boolean => client.getQueryCache().find({ queryKey: key }) !== undefined;
     client.setQueryData<unknown>(key, { written: 'by hand' });
@@ -268,7 +299,7 @@ const expected = ({ delivery, events }: Case) =>
   delivery === 'while the request stands'
     ? {
         taken: events,
-        held: events,
+        held: Array.from({ length: events }, (_, index) => asDelivered(eventAt(index + 1))),
         added: 0,
         byHand: { atOnce: true, after: true, counted: 0 }
       }
