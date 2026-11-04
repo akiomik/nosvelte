@@ -3186,8 +3186,11 @@ ${negatives}
       // quieter green. **The third call waits for both of the pair**, not the
       // one the case awaited: a wrapper that keeps a promise once its last
       // caller is answered is asked while the pair is pending otherwise. The
-      // record counts the pairs these helpers ask, and a `refresh()` called
-      // outside them is not counted.
+      // third promise comes back in a holder, so that awaiting the holder does
+      // not await it: a third call refused as a promise handed out before fails
+      // the case where it is asked, not while the case waits on a `REQ` that a
+      // promise kept from before never sends. The record counts the pairs these
+      // helpers ask, and a `refresh()` called outside them is not counted.
       const paths = new Map<string, 'paired' | 'asked again' | 'ends a lifetime'>();
       const ending = new Map<string, string>();
       const pairs = new Map<string, Promise<unknown>>();
@@ -3210,11 +3213,14 @@ ${negatives}
         seconds.push([name, second]);
         return first;
       };
-      const askAgain = async <T>(path: string, call: () => Promise<T>): Promise<T> => {
+      const askAgain = async <T>(
+        path: string,
+        call: () => Promise<T>
+      ): Promise<{ later: Promise<T> }> => {
         expect(paths.get(path), `the premise: ${path}, its pair asked first`).toBe('paired');
         paths.set(path, 'asked again');
         await pairs.get(path);
-        return bare(call(), `${path}: what refresh() returns once its pair settled`);
+        return { later: bare(call(), `${path}: what refresh() returns once its pair settled`) };
       };
       const outcomeOf = (outcome: RefreshOutcome): unknown => ({
         kind: outcome.kind,
@@ -3236,7 +3242,7 @@ ${negatives}
         call: () => Promise<unknown>,
         code: string
       ): Promise<void> => {
-        const later = await settled(askAgain(path, call));
+        const later = await settled((await askAgain(path, call)).later);
         expect(
           (later?.thrown as { code?: unknown } | undefined)?.code,
           `${path}: rejected under the pair’s code, once its pair settled`
@@ -3349,7 +3355,9 @@ ${negatives}
         expect(complete.kind, 'the premise: complete').toBe('complete');
         expect(sameComplete, 'the premise: two callers, one object').toBe(complete);
         check('a refresh, complete', complete);
-        const completeAgain = askAgain('the engine: complete', () => held.value.refresh());
+        const { later: completeAgain } = await askAgain('the engine: complete', () =>
+          held.value.refresh()
+        );
         respondWithEose(server, await nextReqOf(server));
         await answeredAgain('the engine: complete', completeAgain, complete);
 
@@ -3363,7 +3371,9 @@ ${negatives}
         const incomplete = await timedOut;
         expect(incomplete.kind, 'the premise: incomplete').toBe('incomplete');
         check('a refresh, incomplete', incomplete);
-        const incompleteAgain = askAgain('the engine: incomplete', () => held.value.refresh());
+        const { later: incompleteAgain } = await askAgain('the engine: incomplete', () =>
+          held.value.refresh()
+        );
         await nextReqOf(server);
         await answeredAgain('the engine: incomplete', incompleteAgain, incomplete);
 
@@ -3397,7 +3407,7 @@ ${negatives}
         check('a refresh, not started because the handle was released', after);
         await answeredAgain(
           'the engine: not-started, released',
-          askAgain('the engine: not-started, released', () => held.value.refresh()),
+          (await askAgain('the engine: not-started, released', () => held.value.refresh())).later,
           after
         );
       }
@@ -3462,7 +3472,7 @@ ${negatives}
         check('a refresh, error', outcome);
         await answeredAgain(
           'the engine: error',
-          askAgain('the engine: error', () => first.value.refresh()),
+          (await askAgain('the engine: error', () => first.value.refresh())).later,
           outcome
         );
         return { first, second };
@@ -3542,7 +3552,7 @@ ${negatives}
         check('a refresh, not started on a server', outcome);
         await answeredAgain(
           'the engine: not-started, server',
-          askAgain('the engine: not-started, server', () => asked.value.refresh()),
+          (await askAgain('the engine: not-started, server', () => asked.value.refresh())).later,
           outcome
         );
         refused.destroy();
@@ -3575,7 +3585,7 @@ ${negatives}
         check('a refresh, not started because the plan is deferred', outcome);
         await answeredAgain(
           'the engine: not-started, deferred',
-          askAgain('the engine: not-started, deferred', () => held.value.refresh()),
+          (await askAgain('the engine: not-started, deferred', () => held.value.refresh())).later,
           outcome
         );
         held.destroy();
@@ -3825,7 +3835,9 @@ ${negatives}
         const refreshed = await outcome;
         expect(refreshed.kind, 'the premise: through useReq(), incomplete').toBe('incomplete');
         check('a refresh through useReq(), incomplete', refreshed);
-        const refreshedAgain = askAgain('useReq(): incomplete', () => request.value.refresh());
+        const { later: refreshedAgain } = await askAgain('useReq(): incomplete', () =>
+          request.value.refresh()
+        );
         await nextOf(server, 'REQ');
         await answeredAgain('useReq(): incomplete', refreshedAgain, refreshed);
         // **And refused, through the entry's own hook**: `useReq()`'s
@@ -3876,7 +3888,7 @@ ${negatives}
         check('a refresh through useReq(), not started because the plan is deferred', notStarted);
         await answeredAgain(
           'useReq(): not-started, deferred',
-          askAgain('useReq(): not-started, deferred', () => heldBack.value.refresh()),
+          (await askAgain('useReq(): not-started, deferred', () => heldBack.value.refresh())).later,
           notStarted
         );
         heldBack.destroy();
@@ -3968,7 +3980,11 @@ ${negatives}
         check('a refresh, not started with no readable relay', unasked);
         await answeredAgain(
           'the engine: not-started, no-readable-relay',
-          askAgain('the engine: not-started, no-readable-relay', () => nowhere.value.refresh()),
+          (
+            await askAgain('the engine: not-started, no-readable-relay', () =>
+              nowhere.value.refresh()
+            )
+          ).later,
           unasked
         );
 
