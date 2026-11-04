@@ -3,9 +3,10 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * The mutation ledger of which revision of a coordinate a consumer holds, read
- * through the published entry: `RP1`, the supporting arm of `B5-C1`, `B5-C2`
- * and `B5-C4`. Their landings, `ES28`, `ES5` and `ES6d`, call the fold and the
- * bound directly. Before `RP1`, the first entry below (#193) passed the whole
+ * through the published entry: `RP1`, the landing of `B5-C11`, the consumer's
+ * half of `B5-C1`, `B5-C2` and `B5-C4`, and a supporting arm of those three.
+ * Their landings, `ES28`, `ES5` and `ES6d`, call the fold and the bound
+ * directly. Before `RP1`, the first entry below (#193) passed the whole
  * suite, as the seeded-defect baseline in `docs/process/phase-2-trial.md`
  * records, and `C2-the-incumbent-kept-at-an-equal-created-at`, which an outside
  * reviewer wrote, passed `identity.test.ts`, `bounded.test.ts` and
@@ -26,15 +27,28 @@
  * ended; it passed that. `C1-a-live-revision-replaces-what-it-meets` is its
  * mirror. It fails `RP1` at both of its live readings, and passes a copy of the
  * arm without the delivery turn before `CLOSED` (measured).
+ * `C11-the-replaceable-class-begins-past-10000` is a defect an outside reviewer
+ * seeded after G1 without reading the tests, and `RP1` passed it while its
+ * cases were at two kinds alone, 10002 and 30023.
  *
- * An id begins with the row it is read against: `C<n>-` for `B5-C<n>`, and
- * `B6-C1-` for `B6-C1`'s ordering at a tie, which `RP1` reads and does not
- * land, since `B6-C1` has no landing yet.
+ * An id begins with the row it is read against: `C1-`, `C2-` and `C4-` for the
+ * halves of `B5-C1`, `B5-C2` and `B5-C4` that `B5-C11` holds, `C11-` for the
+ * edges of the classes, which only `B5-C11` names, and `B6-C1-` for
+ * `B6-C1`'s ordering at a tie, which `RP1` reads and does not land, since
+ * `B6-C1` has no landing yet. Each `C11-` entry moves one edge of a class
+ * that replaces by one kind, drops a special kind or makes its neighbour one,
+ * wherever a request can name the kind on the other side; the two it cannot,
+ * 20000 and 29999, are ephemeral, and only `B5-C7` reads them.
  */
 import type { Ledger } from '../ledger.ts';
 
 const HOOK = 'src/lib/v1/useStreamedReq.svelte.ts';
 const EVENTSET = 'src/lib/v1/eventset.ts';
+
+/** The lines of `classifyKind` that decide a class that replaces. */
+const SPECIALS = "  if (kind === 0 || kind === 3) return 'replaceable';";
+const REPLACEABLE = "  if (kind >= 10000 && kind < 20000) return 'replaceable';";
+const ADDRESSABLE = "  if (kind >= 30000 && kind < 40000) return 'addressable';";
 
 /** The hook's fold of an event chunk, the last thing `collect` does. */
 const EVENT_FOLD = '  return retainNewest(foldEvent(base, chunk.packet), options);\n}';
@@ -44,7 +58,7 @@ const LAST_EVENTSET_IMPORT = "  retainNewest\n} from './eventset.js';";
 export default {
   name: 'b5-replacement',
   subject:
-    "`B5-C1`, `B5-C2` and `B5-C4` (which revision of a coordinate a consumer holds) through the hook, and `B6-C1`'s ordering at a tie: their supporting arm `RP1`",
+    "`B5-C11` (which revision of a coordinate a consumer holds, the consumer's half of `B5-C1`, `B5-C2` and `B5-C4`) through the hook, and `B6-C1`'s ordering at a tie: `RP1`, `B5-C11`'s landing",
   files: ['src/tests/contracts/engine/replacement.test.ts'],
   calibration: {
     measured:
@@ -327,6 +341,122 @@ export default {
             '    return retainNewest({ ...base, entries }, options);\n' +
             '  }\n' +
             `${EVENT_FOLD}`
+        }
+      ]
+    },
+    {
+      id: 'C11-kind-0-not-replaceable',
+      arm: 'RP1',
+      describe:
+        "kind 0 is not replaceable, so an author's earlier metadata is held beside the later",
+      edits: [{ file: EVENTSET, from: SPECIALS, to: "  if (kind === 3) return 'replaceable';" }]
+    },
+    {
+      id: 'C11-kind-3-not-replaceable',
+      arm: 'RP1',
+      describe:
+        "kind 3 is not replaceable, so an author's earlier follow list is held beside the later",
+      edits: [{ file: EVENTSET, from: SPECIALS, to: "  if (kind === 0) return 'replaceable';" }]
+    },
+    {
+      id: 'C11-kind-2-replaceable',
+      arm: 'RP1',
+      describe: 'kind 2 is replaceable, as the special kind beside it is',
+      edits: [
+        {
+          file: EVENTSET,
+          from: SPECIALS,
+          to: "  if (kind === 0 || (kind >= 2 && kind <= 3)) return 'replaceable';"
+        }
+      ]
+    },
+    {
+      id: 'C11-kind-4-replaceable',
+      arm: 'RP1',
+      describe: 'kind 4 is replaceable, as the special kind beside it is',
+      edits: [
+        {
+          file: EVENTSET,
+          from: SPECIALS,
+          to: "  if (kind === 0 || (kind >= 3 && kind <= 4)) return 'replaceable';"
+        }
+      ]
+    },
+    {
+      id: 'C11-the-replaceable-class-begins-past-10000',
+      arm: 'RP1',
+      describe:
+        'the replaceable range begins one past 10000, so two revisions at kind 10000 are both held',
+      edits: [
+        {
+          file: EVENTSET,
+          from: REPLACEABLE,
+          to: "  if (kind > 10000 && kind < 20000) return 'replaceable';"
+        }
+      ]
+    },
+    {
+      id: 'C11-the-replaceable-class-begins-at-9999',
+      arm: 'RP1',
+      describe:
+        'the replaceable range begins at 9999, so two events of one author at that regular kind are one coordinate',
+      edits: [
+        {
+          file: EVENTSET,
+          from: REPLACEABLE,
+          to: "  if (kind >= 9999 && kind < 20000) return 'replaceable';"
+        }
+      ]
+    },
+    {
+      id: 'C11-the-replaceable-class-ends-before-19999',
+      arm: 'RP1',
+      describe:
+        'the replaceable range ends before 19999, so two revisions at kind 19999 are both held',
+      edits: [
+        {
+          file: EVENTSET,
+          from: REPLACEABLE,
+          to: "  if (kind >= 10000 && kind < 19999) return 'replaceable';"
+        }
+      ]
+    },
+    {
+      id: 'C11-the-addressable-class-begins-past-30000',
+      arm: 'RP1',
+      describe:
+        'the addressable range begins one past 30000, so two revisions at kind 30000 are both held',
+      edits: [
+        {
+          file: EVENTSET,
+          from: ADDRESSABLE,
+          to: "  if (kind > 30000 && kind < 40000) return 'addressable';"
+        }
+      ]
+    },
+    {
+      id: 'C11-the-addressable-class-ends-before-39999',
+      arm: 'RP1',
+      describe:
+        'the addressable range ends before 39999, so two revisions at kind 39999 are both held',
+      edits: [
+        {
+          file: EVENTSET,
+          from: ADDRESSABLE,
+          to: "  if (kind >= 30000 && kind < 39999) return 'addressable';"
+        }
+      ]
+    },
+    {
+      id: 'C11-the-addressable-class-takes-40000',
+      arm: 'RP1',
+      describe:
+        'the addressable range takes 40000, so two events of one author there under one `d` are one coordinate',
+      edits: [
+        {
+          file: EVENTSET,
+          from: ADDRESSABLE,
+          to: "  if (kind >= 30000 && kind <= 40000) return 'addressable';"
         }
       ]
     }

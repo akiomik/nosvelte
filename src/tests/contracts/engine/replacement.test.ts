@@ -3,8 +3,9 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * Which revision of a coordinate a consumer holds, and what it holds of it,
- * read through the published entry: `RP1`, a supporting arm of `B5-C1`,
- * `B5-C2` and `B5-C4`.
+ * read through the published entry: `RP1`, the landing of `B5-C11`, the
+ * consumer's half of `B5-C1`, `B5-C2` and `B5-C4`, and a supporting arm of
+ * those three.
  *
  * **Their landings sit below the hook.** `ES28`, `ES5` and `ES6d` call the
  * fold and the bound directly, and a consumer's request folds through the
@@ -294,6 +295,43 @@ const DISTINCT: readonly Case[] = (
   }));
 });
 
+/**
+ * **Each kind where a class that replaces begins or ends, and the regular
+ * kinds beside them** (`B5-C11`): two revisions of one coordinate at 0, 3,
+ * 10000, 19999, 30000 and 39999, of which the newer is held, and two events of
+ * one author at 2, 4, 9999 and 40000, both held, in both orders. The class is
+ * written out here rather than taken from the library, the 40000 pair with the
+ * `d` tag an addressable pair would carry. Without a bound, since bounded to
+ * one a regular pair is cut to its newer event and reads as a replacement.
+ * The kinds beside the other two edges, 20000 and 29999, are ephemeral, which
+ * a request does not keep, and only `B5-C7` reads them, on the classifier.
+ */
+const EDGES: readonly Case[] = (
+  [
+    [0, [], true],
+    [3, [], true],
+    [10000, [], true],
+    [19999, [], true],
+    [30000, [['d', 'an-edge']], true],
+    [39999, [['d', 'an-edge']], true],
+    [2, [], false],
+    [4, [], false],
+    [9999, [], false],
+    [40000, [['d', 'an-edge']], false]
+  ] as const
+).flatMap(([kind, tags, replaced]) => {
+  const both = [
+    { name: 'older', event: signedAs(kind, `kind ${String(kind)}: older`, 1000, tags) },
+    { name: 'newer', event: signedAs(kind, `kind ${String(kind)}: newer`, 2000, tags) }
+  ];
+  return [both, [...both].reverse()].map((backlog) => ({
+    name: `two kind-${String(kind)} events of one author, ${replaced ? 'one coordinate' : 'not one coordinate'}, ${sentAs(backlog)}`,
+    retain: 'unbounded' as const,
+    backlog,
+    held: replaced ? ['newer'] : ['newer', 'older']
+  }));
+});
+
 /** The fields an event's id and signature commit to, in one order. */
 const committed = ({ id, pubkey, created_at, kind, tags, content, sig }: ReqEvent): string =>
   JSON.stringify({ id, pubkey, created_at, kind, tags, content, sig });
@@ -317,7 +355,7 @@ const nameIn =
 const planOf = (retain: Retain, live: boolean, namespace: string): ReqPlan => ({
   kind: 'request',
   descriptor: {
-    filters: [{ kinds: [1, 10002, 30023] }],
+    filters: [{ kinds: [0, 1, 2, 3, 4, 9999, 10000, 10002, 19999, 30000, 30023, 39999, 40000] }],
     live,
     retain,
     namespace,
@@ -326,8 +364,9 @@ const planOf = (retain: Retain, live: boolean, namespace: string): ReqPlan => ({
 });
 
 describe('B5: which revision of a coordinate a consumer holds', () => {
+  // @contracts B5-C11
   it(
-    'RP1: a consumer holds the revision NIP-01 says wins, as it was sent, in every order the revisions arrive in, on either leg, bounded or not',
+    'RP1: a consumer holds the revision NIP-01 says wins, as it was sent, in every order the revisions arrive in, on either leg, bounded or not, at each kind where a class that replaces begins or ends',
     async () => {
       // Each case is its own request on its own relay, all at once. The relay
       // sends the case's backlog in order, then `EOSE`, and the consumer's
@@ -337,8 +376,8 @@ describe('B5: which revision of a coordinate a consumer holds', () => {
       // which of the case's events the answer holds, by the names the case
       // gives them, sorted, since the order a list is shown in is `B6`'s and
       // not this arm's.
-      const cases = [...PAIRS, ...BETWEEN, ...TIED, ...LIVE, ...DISTINCT];
-      expect(cases, 'the cases this arm reads').toHaveLength(132);
+      const cases = [...PAIRS, ...BETWEEN, ...TIED, ...LIVE, ...DISTINCT, ...EDGES];
+      expect(cases, 'the cases this arm reads').toHaveLength(152);
       const readings = await Promise.all(
         cases.map((each, at) => {
           const relay = relayAt(nextUrl());
