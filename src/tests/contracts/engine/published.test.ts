@@ -58,7 +58,7 @@ import {
   setNostrContext
 } from '$lib/v1/context.svelte.js';
 import { useRelayDiagnostics } from '$lib/v1/diagnostics.svelte.js';
-import { IncompleteResultError, type ReqHandle } from '$lib/v1/engine.js';
+import { IncompleteResultError, type RefreshOutcome, type ReqHandle } from '$lib/v1/engine.js';
 import { beginAttempt, emptyEventSet, noteFailure } from '$lib/v1/eventset.js';
 import * as Entry from '$lib/v1/index.js';
 import { UnsupportedFilterError, validateFilter } from '$lib/v1/key.js';
@@ -454,6 +454,7 @@ const POPULATION = [
   'useReq(), refused',
   'a refresh through useReq(), incomplete',
   'a refresh through useReq(), refused',
+  'a refresh through useReq(), not started because the plan is deferred',
   'useRelayDiagnostics()',
   'useRelayDiagnostics(), a notice cut',
   'useRelayDiagnostics(), a notice that was not text',
@@ -518,6 +519,30 @@ const REFRESH_REJECTIONS = [
 const everyRejectionListed: (typeof REFRESH_REJECTIONS)[number] =
   null as unknown as RefreshRejection['code'];
 void everyRejectionListed;
+
+/**
+ * Every `refresh()` path `PB13` drives, at the entrance it drives it through:
+ * the engine's hook, and `useReq()`, which forwards to it. Each is asked again
+ * once its pair has settled, but for a cancellation, which ends a lifetime. At
+ * the engine, a rejection under every code of `REFRESH_REJECTIONS`, and
+ * `invalid-descriptor` at both its doors.
+ */
+const REFRESH_PATHS = [
+  'the engine: complete',
+  'the engine: incomplete',
+  'the engine: error',
+  'the engine: cancelled, consumer-released',
+  'the engine: cancelled, provider-disposed',
+  'the engine: not-started, released',
+  'the engine: not-started, server',
+  'the engine: not-started, deferred',
+  'the engine: not-started, no-readable-relay',
+  ...REFRESH_REJECTIONS.map((code) => `the engine: rejected, ${code}`),
+  'the engine: rejected, invalid-descriptor, refused before the boundary',
+  'useReq(): incomplete',
+  'useReq(): not-started, deferred',
+  'useReq(): rejected, relay-not-in-scope'
+];
 
 /**
  * The discipline's controls: each rule, over a value built to break it and
@@ -3134,20 +3159,105 @@ ${negatives}
         seconds.push([name, second]);
         return first;
       };
-      const rejectionOf = async (call: () => Promise<unknown>): Promise<unknown> => {
-        const settled = async (
-          pending: Promise<unknown>
-        ): Promise<{ thrown: unknown } | undefined> => {
-          try {
-            await pending;
-          } catch (thrown) {
-            return { thrown };
-          }
-          return undefined;
-        };
-        const [first, second] = await Promise.all(
-          twice(call, 'what a rejected refresh() returns').map(settled)
+      const settled = async (
+        pending: Promise<unknown>
+      ): Promise<{ thrown: unknown } | undefined> => {
+        try {
+          await pending;
+        } catch (thrown) {
+          return { thrown };
+        }
+        return undefined;
+      };
+      // **And once its pair has settled** (#149). A promise handed to a later
+      // caller after it settled is one two callers hold, as one handed while
+      // pending is, and a pair asked while pending cannot see it: a wrapper
+      // that keeps the settled promise answers every pair with two. So every
+      // path that can repeat is asked a third time once its pair has settled,
+      // at the entrance its pair was asked at and while its arrangement
+      // stands — `bare` comparing the promise with every one handed out before
+      // — and what it settles with is read: the pair's outcome, or a rejection
+      // under the pair's code. A path that ends a lifetime cannot repeat: the
+      // call after a cancellation is another path's, whose pair is the one
+      // that says no caller was handed the cancelled promise. Every path is
+      // named by the helper that asks its pair — `pairOf`, `freshOf` or
+      // `rejectionOf` — and compared at the end with `REFRESH_PATHS`, so a path
+      // asked no third time is a name missing from the record rather than a
+      // quieter green. **The third call waits for both of the pair**, not the
+      // one the case awaited: a wrapper that keeps a promise once its last
+      // caller is answered is asked while the pair is pending otherwise. The
+      // third promise comes back in a holder, so that awaiting the holder does
+      // not await it: a third call refused as a promise handed out before fails
+      // the case where it is asked, not while the case waits on a `REQ` that a
+      // promise kept from before never sends. The record counts the pairs these
+      // helpers ask, and a `refresh()` called outside them is not counted.
+      const paths = new Map<string, 'paired' | 'asked again' | 'ends a lifetime'>();
+      const ending = new Map<string, string>();
+      const pairs = new Map<string, Promise<unknown>>();
+      const paired = (path: string, pair: Promise<unknown>[]): void => {
+        expect(paths.has(path), `${path}: one case per path`).toBe(false);
+        paths.set(path, 'paired');
+        pairs.set(path, Promise.allSettled(pair));
+      };
+      const pairOf = <T>(
+        path: string,
+        call: () => Promise<T>,
+        name: string
+      ): [Promise<T>, Promise<T>] => {
+        const pair = twice(call, name);
+        paired(path, pair);
+        return pair;
+      };
+      const freshOf = <T>(path: string, call: () => Promise<T>, name: string): Promise<T> => {
+        const [first, second] = pairOf(path, call, name);
+        seconds.push([name, second]);
+        return first;
+      };
+      const askAgain = async <T>(
+        path: string,
+        call: () => Promise<T>
+      ): Promise<{ later: Promise<T> }> => {
+        expect(paths.get(path), `the premise: ${path}, its pair asked first`).toBe('paired');
+        paths.set(path, 'asked again');
+        await pairs.get(path);
+        return { later: bare(call(), `${path}: what refresh() returns once its pair settled`) };
+      };
+      const outcomeOf = (outcome: RefreshOutcome): unknown => ({
+        kind: outcome.kind,
+        reason: (outcome as { reason?: unknown }).reason
+      });
+      const answeredAgain = async (
+        path: string,
+        later: Promise<RefreshOutcome>,
+        pair: RefreshOutcome
+      ): Promise<void> => {
+        const outcome = await later;
+        expect(outcomeOf(outcome), `${path}: the pair’s outcome, once its pair settled`).toEqual(
+          outcomeOf(pair)
         );
+        againOf(`${path}, once its pair settled`, outcome);
+      };
+      const rejectedAgain = async (
+        path: string,
+        call: () => Promise<unknown>,
+        code: string
+      ): Promise<void> => {
+        const later = await settled((await askAgain(path, call)).later);
+        expect(
+          (later?.thrown as { code?: unknown } | undefined)?.code,
+          `${path}: rejected under the pair’s code, once its pair settled`
+        ).toBe(code);
+        againOf(`${path}, once its pair settled`, later?.thrown);
+      };
+      const endsALifetime = (path: string, next: string): void => {
+        expect(paths.get(path), `the premise: ${path}, its pair asked first`).toBe('paired');
+        paths.set(path, 'ends a lifetime');
+        ending.set(path, next);
+      };
+      const rejectionOf = async (path: string, call: () => Promise<unknown>): Promise<unknown> => {
+        const pair = twice(call, 'what a rejected refresh() returns');
+        paired(path, pair);
+        const [first, second] = await Promise.all(pair.map(settled));
         if (first === undefined || second === undefined)
           throw new Error('the premise: refresh() rejects, each call');
         againOf('what a rejected refresh() rejects with', second.thrown);
@@ -3235,21 +3345,43 @@ ${negatives}
         check('its event outlet', outlet(held.value, true, 'event'), engine(held.value));
 
         // Two callers of one refresh hold one object (C15), so it is checked once.
-        const [asked, askedAgain] = twice(() => held.value.refresh(), 'what refresh() returns');
+        const [asked, askedAgain] = pairOf(
+          'the engine: complete',
+          () => held.value.refresh(),
+          'what refresh() returns'
+        );
         respondWithEose(server, await nextReqOf(server));
         const [complete, sameComplete] = await Promise.all([asked, askedAgain]);
         expect(complete.kind, 'the premise: complete').toBe('complete');
         expect(sameComplete, 'the premise: two callers, one object').toBe(complete);
         check('a refresh, complete', complete);
+        const { later: completeAgain } = await askAgain('the engine: complete', () =>
+          held.value.refresh()
+        );
+        respondWithEose(server, await nextReqOf(server));
+        await answeredAgain('the engine: complete', completeAgain, complete);
 
         // Nobody answers, and the settle timeout closes it incomplete.
-        const timedOut = fresh(() => held.value.refresh(), 'what refresh() returns');
+        const timedOut = freshOf(
+          'the engine: incomplete',
+          () => held.value.refresh(),
+          'what refresh() returns'
+        );
         await nextReqOf(server);
         const incomplete = await timedOut;
         expect(incomplete.kind, 'the premise: incomplete').toBe('incomplete');
         check('a refresh, incomplete', incomplete);
+        const { later: incompleteAgain } = await askAgain('the engine: incomplete', () =>
+          held.value.refresh()
+        );
+        await nextReqOf(server);
+        await answeredAgain('the engine: incomplete', incompleteAgain, incomplete);
 
-        const released = fresh(() => held.value.refresh(), 'what refresh() returns');
+        const released = freshOf(
+          'the engine: cancelled, consumer-released',
+          () => held.value.refresh(),
+          'what refresh() returns'
+        );
         await nextReqOf(server);
         held.destroy();
         const cancelled = await released;
@@ -3258,12 +3390,26 @@ ${negatives}
           reason: 'consumer-released'
         });
         check('a refresh, cancelled because its consumer released it', cancelled);
-        const after = await fresh(() => held.value.refresh(), 'what refresh() returns');
+        // Released for good, so the call after it is the next path's.
+        endsALifetime(
+          'the engine: cancelled, consumer-released',
+          'the engine: not-started, released'
+        );
+        const after = await freshOf(
+          'the engine: not-started, released',
+          () => held.value.refresh(),
+          'what refresh() returns'
+        );
         expect(after, 'the premise: a released handle').toEqual({
           kind: 'not-started',
           reason: 'released'
         });
         check('a refresh, not started because the handle was released', after);
+        await answeredAgain(
+          'the engine: not-started, released',
+          (await askAgain('the engine: not-started, released', () => held.value.refresh())).later,
+          after
+        );
       }
 
       // An answer with nothing in it.
@@ -3317,9 +3463,18 @@ ${negatives}
         expect(first.value.state.status, 'the premise: a failed attempt').toBe('error');
         reached('unspecified', (first.value.state as { error?: unknown }).error);
         check('an attempt that failed', first.value, engine(first.value));
-        const outcome = await fresh(() => first.value.refresh(), 'what refresh() returns');
+        const outcome = await freshOf(
+          'the engine: error',
+          () => first.value.refresh(),
+          'what refresh() returns'
+        );
         expect(outcome.kind, 'the premise: error').toBe('error');
         check('a refresh, error', outcome);
+        await answeredAgain(
+          'the engine: error',
+          (await askAgain('the engine: error', () => first.value.refresh())).later,
+          outcome
+        );
         return { first, second };
       })();
 
@@ -3338,7 +3493,9 @@ ${negatives}
         check('a refused descriptor', first.value, engine(first.value));
         check('its error outlet', outlet(first.value, false, 'error'), engine(first.value));
         reached('unsupported-filter', (first.value.state as { error?: unknown }).error);
-        const rejected = await rejectionOf(() => first.value.refresh());
+        const rejected = await rejectionOf('the engine: rejected, unsupported-filter', () =>
+          first.value.refresh()
+        );
         // **Not the object the state carries**: `refresh()` resolves the
         // descriptor again, and the refusal it throws is built on that call —
         // the same class and words, and a published value of its own, so it is
@@ -3352,6 +3509,11 @@ ${negatives}
         );
         rejectedWith('unsupported-filter', rejected);
         check('a refresh, rejected with unsupported-filter', rejected);
+        await rejectedAgain(
+          'the engine: rejected, unsupported-filter',
+          () => first.value.refresh(),
+          'unsupported-filter'
+        );
         return { first, second };
       })();
 
@@ -3381,9 +3543,18 @@ ${negatives}
           useStreamedReq(options('pb13-server', rxNostr, { environment: 'server' }))
         );
         await settle();
-        const outcome = await fresh(() => asked.value.refresh(), 'what refresh() returns');
+        const outcome = await freshOf(
+          'the engine: not-started, server',
+          () => asked.value.refresh(),
+          'what refresh() returns'
+        );
         expect(outcome, 'the premise: a server').toEqual({ kind: 'not-started', reason: 'server' });
         check('a refresh, not started on a server', outcome);
+        await answeredAgain(
+          'the engine: not-started, server',
+          (await askAgain('the engine: not-started, server', () => asked.value.refresh())).later,
+          outcome
+        );
         refused.destroy();
         asked.destroy();
       }
@@ -3400,7 +3571,8 @@ ${negatives}
         // **What a command returns is the platform's `Promise`, the caller's
         // own**: a fresh one each call, so a write to one reaches no other
         // caller. What it settles with is this library's, checked below.
-        const [asked, askedAgain] = twice(
+        const [asked, askedAgain] = pairOf(
+          'the engine: not-started, deferred',
           () => held.value.refresh(),
           'what the engine’s refresh() returns'
         );
@@ -3411,6 +3583,11 @@ ${negatives}
           reason: 'deferred'
         });
         check('a refresh, not started because the plan is deferred', outcome);
+        await answeredAgain(
+          'the engine: not-started, deferred',
+          (await askAgain('the engine: not-started, deferred', () => held.value.refresh())).later,
+          outcome
+        );
         held.destroy();
       }
 
@@ -3486,9 +3663,11 @@ ${negatives}
           } else unshared.push(`${code}${door}`);
           twin.destroy();
           if (code !== 'accumulator-contract') {
-            const rejected = await rejectionOf(() => hook.value.refresh());
+            const path = `the engine: rejected, ${code}${door}`;
+            const rejected = await rejectionOf(path, () => hook.value.refresh());
             rejectedWith(code, rejected);
             check(`a refresh, rejected with ${code}${door}`, rejected);
+            await rejectedAgain(path, () => hook.value.refresh(), code);
           }
           hook.destroy();
         }
@@ -3647,11 +3826,20 @@ ${negatives}
         check('its events outlet, over useReq()’s handle', outlet(request.value, false, 'events'), [
           [request.value, REQ_HANDLE]
         ]);
-        const outcome = fresh(() => request.value.refresh(), 'what useReq()’s refresh() returns');
+        const outcome = freshOf(
+          'useReq(): incomplete',
+          () => request.value.refresh(),
+          'what useReq()’s refresh() returns'
+        );
         await nextOf(server, 'REQ');
         const refreshed = await outcome;
         expect(refreshed.kind, 'the premise: through useReq(), incomplete').toBe('incomplete');
         check('a refresh through useReq(), incomplete', refreshed);
+        const { later: refreshedAgain } = await askAgain('useReq(): incomplete', () =>
+          request.value.refresh()
+        );
+        await nextOf(server, 'REQ');
+        await answeredAgain('useReq(): incomplete', refreshedAgain, refreshed);
         // **And refused, through the entry's own hook**: `useReq()`'s
         // `refresh` forwards the engine's promise, and this is the case that
         // asks the forwarded one on the error path — a wrapper that built its
@@ -3670,10 +3858,40 @@ ${negatives}
         await settle(150);
         reached('relay-not-in-scope', (outOfScope.value.state as { error?: unknown }).error);
         check('useReq(), refused', outOfScope.value, [[outOfScope.value, REQ_HANDLE]]);
-        const refusedThrough = await rejectionOf(() => outOfScope.value.refresh());
+        const refusedThrough = await rejectionOf('useReq(): rejected, relay-not-in-scope', () =>
+          outOfScope.value.refresh()
+        );
         rejectedWith('relay-not-in-scope', refusedThrough);
         check('a refresh through useReq(), refused', refusedThrough);
+        await rejectedAgain(
+          'useReq(): rejected, relay-not-in-scope',
+          () => outOfScope.value.refresh(),
+          'relay-not-in-scope'
+        );
         outOfScope.destroy();
+        // **And a plan that is not asking**, through the wrapper: what the
+        // engine answers for it is one frozen value, and the promise each call
+        // is handed is the wrapper's to keep fresh.
+        const heldBack = mount(() => useReq(() => ({ kind: 'deferred' })));
+        await settle();
+        const [notAsked, notAskedAgain] = pairOf(
+          'useReq(): not-started, deferred',
+          () => heldBack.value.refresh(),
+          'what useReq()’s refresh() returns'
+        );
+        await notAskedAgain;
+        const notStarted = await notAsked;
+        expect(notStarted, 'the premise: through useReq(), deferred').toEqual({
+          kind: 'not-started',
+          reason: 'deferred'
+        });
+        check('a refresh through useReq(), not started because the plan is deferred', notStarted);
+        await answeredAgain(
+          'useReq(): not-started, deferred',
+          (await askAgain('useReq(): not-started, deferred', () => heldBack.value.refresh())).later,
+          notStarted
+        );
+        heldBack.destroy();
 
         const diagnostics = mount(() => useRelayDiagnostics());
         const row = Object.values(diagnostics.value.relays)[0];
@@ -3750,12 +3968,25 @@ ${negatives}
             settleTimeoutMs: 300
           }))
         );
-        const unasked = await fresh(() => nowhere.value.refresh(), 'what refresh() returns');
+        const unasked = await freshOf(
+          'the engine: not-started, no-readable-relay',
+          () => nowhere.value.refresh(),
+          'what refresh() returns'
+        );
         expect(unasked, 'the premise: nowhere to ask').toEqual({
           kind: 'not-started',
           reason: 'no-readable-relay'
         });
         check('a refresh, not started with no readable relay', unasked);
+        await answeredAgain(
+          'the engine: not-started, no-readable-relay',
+          (
+            await askAgain('the engine: not-started, no-readable-relay', () =>
+              nowhere.value.refresh()
+            )
+          ).later,
+          unasked
+        );
 
         const outliving = mount(() =>
           useStreamedReq(() => ({
@@ -3767,7 +3998,11 @@ ${negatives}
         );
         respondWithEose(server, String(((await nextOf(server, 'REQ')) as unknown[])[1]));
         await settle();
-        const inFlight = fresh(() => outliving.value.refresh(), 'what refresh() returns');
+        const inFlight = freshOf(
+          'the engine: cancelled, provider-disposed',
+          () => outliving.value.refresh(),
+          'what refresh() returns'
+        );
         await nextOf(server, 'REQ');
         request.destroy();
         diagnostics.destroy();
@@ -3780,9 +4015,21 @@ ${negatives}
           reason: 'provider-disposed'
         });
         check('a refresh, cancelled because the provider was disposed', disposed);
-        const rejected = await rejectionOf(() => outliving.value.refresh());
+        // Disposed for good, so the call after it is the next path's.
+        endsALifetime(
+          'the engine: cancelled, provider-disposed',
+          'the engine: rejected, provider-disposed'
+        );
+        const rejected = await rejectionOf('the engine: rejected, provider-disposed', () =>
+          outliving.value.refresh()
+        );
         rejectedWith('provider-disposed', rejected);
         check('a refresh, rejected because the provider was disposed', rejected);
+        await rejectedAgain(
+          'the engine: rejected, provider-disposed',
+          () => outliving.value.refresh(),
+          'provider-disposed'
+        );
         outliving.destroy();
         const abandoned = await unanswered;
         expect(
@@ -3982,9 +4229,12 @@ ${negatives}
           expect(Object.keys(readers), `an Error, ${code}: the readers`).toEqual(READERS);
           sharedAndKept(`an Error, ${code}, two hooks share`, readers);
           twin.destroy();
-          const rejected = await rejectionOf(() => hook.value.refresh());
+          const rejected = await rejectionOf(`the engine: rejected, ${code}`, () =>
+            hook.value.refresh()
+          );
           rejectedWith(code, rejected);
           check(`a refresh, rejected with ${code}`, rejected);
+          await rejectedAgain(`the engine: rejected, ${code}`, () => hook.value.refresh(), code);
           hook.destroy();
         }
         expect(
@@ -4148,6 +4398,17 @@ ${negatives}
       }
 
       for (const [name, second] of seconds) againOf(name, await second);
+      expect([...paths.keys()].sort(), 'every refresh() path, at its entrance').toEqual(
+        [...REFRESH_PATHS].sort()
+      );
+      expect(
+        [...paths].filter(([, how]) => how === 'paired').map(([path]) => path),
+        'every refresh() path asked again once its pair settled, or ending a lifetime'
+      ).toEqual([]);
+      expect(
+        [...ending].map(([path, next]) => `${path}: ${String(paths.get(next))}`),
+        'and the path after each that ends a lifetime, asked again itself'
+      ).toEqual([...ending.keys()].map((path) => `${path}: asked again`));
       expect([...roster].sort(), 'the population, case by case').toEqual([...POPULATION].sort());
       expect([...codes].sort(), 'an Error under every code a hook publishes one with').toEqual(
         [...new Set([...REQ_ERROR_CODES, ...RELAY_REFUSAL_CODES, 'missing-randomness'])].sort()

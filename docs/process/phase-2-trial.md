@@ -226,6 +226,8 @@ bring back every step the trial removed.
 | What follows G1's cost failure                                                          | G2; **taken 2026-11-04**, below          |
 | The ledger ids in Evidence cells, which G1's four landings left unchecked               | G2; **taken 2026-11-04**, below          |
 | Whether a request kept past its provider is a supported arrangement (#202)              | G2; **taken 2026-11-04**, below          |
+| How a late delivery through the accumulation seam is held (#87)                         | G2's plan; **taken 2026-11-04**, below   |
+| Whether G2's two PRs are folded into one                                                | G2's plan; **taken 2026-11-04**, below   |
 
 **Taken on 2026-10-27, before G1's plan:**
 
@@ -270,6 +272,18 @@ bring back every step the trial removed.
   come back as owed and `internal`, and they are reported as reopened, apart from delivery.
   `A-ε-C16` is re-accepted as `internal` and lands on that arm. `0004`'s "In v1 there is no
   entrance" is corrected. All of it lands in G2.
+
+**Taken on 2026-11-04, on G2's plan**, each with the plan's review and one second opinion:
+
+- **#87. A row of its own reads the provider's cache, and the library does not change.** `A11-C19`
+  holds that a delivery through either of the library's two accumulators after its request's entry
+  was collected adds no entry for that key, counted as the cache announces each addition. The seam
+  lends the provider's client and does not revoke it, so an accumulator that keeps the client past
+  its return can still write through it, and that is the row's limitation. Each of the two was
+  asked to weigh the other's answer, and both recommended this one. It lands in G2's unmount PR.
+- **G2 stays two PRs.** One PR would have kept the repair rounds at four. The maintainer kept two,
+  on the second opinion that fewer containers is not a cheaper process, and G2's cost is recorded
+  as it comes: it is expected to meet the third failure condition.
 
 ## Trial record
 

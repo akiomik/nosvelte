@@ -1000,6 +1000,13 @@ export function beginAttempt(set: CachedEventSet, attemptId: AttemptId): CachedE
   // the value's other guards cover.
   const current = set.running?.attemptId ?? set.backlog?.attemptId;
   if (current !== undefined && isOlderAttempt(attemptId, current)) return set;
+  // **A second begin of the attempt already current changes nothing.** The
+  // engine begins an attempt twice now: at the query function's entry, and
+  // again at the stream's first `fresh` chunk, which `collect` still begins
+  // from. Without this the second begin emptied the records the first had
+  // opened, so `begin(A)`, a refusal on A, then `begin(A)` dropped the refusal.
+  // An equality, so the order reader above is still the only one here.
+  if (current === attemptId) return set;
   return {
     ...set,
     running: { attemptId, refusals: [] },
