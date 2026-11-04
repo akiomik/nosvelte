@@ -1106,22 +1106,24 @@ with a deferred plan making **no key for the question it would have asked, no at
 it occupies **one inert entry per client**, shared by every deferred hook, which is a price stated
 rather than a promise of none — reporting `loading` with `activity: 'idle'`, resolving `refresh()`
 as `{ kind: 'not-started', reason: 'deferred' }`, applying the ordinary mount triggers when it
-becomes a request, and releasing the observer without deleting the entry when it goes back. It is
-repeated here in an indented block rather than a fenced one because the fenced declarations — the
-`useReq` signature above and `ReqPlan` beside `ReqDescriptor` below — are the ones `LK13` holds.
-`filters: []` and `authors: []` are **not** the encoding — they stay `B8`'s genuine empty-set
-questions, which is also what stops a descriptor being validated for a question nobody is asking.
-There is no `cancel()`: `refresh()` closes and re-opens, which is the opposite. And an abort is
-therefore not something a consumer raises at all — it is the teardown's, a consumer holds no signal,
-and since ruling 5 it resolves `cancelled` rather than rejecting. The cancel is a v1 omission rather
-than an oversight: it is a handle operation whose interaction with the query layer's own lifetime
-nobody has decided. **Per-relay selection was the fourth, and it is no longer an omission
-(ruling 3)**: the relay set was the provider's prop alone, so two relay sets on one page meant two
-providers, which `C6` says share nothing — two connections, two caches, the same event twice. That
-was the one `req` use case the descriptor did not cover, and `C3`'s falsifier names exactly that
-shape; it was recorded here as a known gap for a reviewer to rule on, and the ruling added
-`ReqDescriptor.relays`, a target set resolved inside the provider's readable scope. The passage is
-kept as the state that ruling answered.
+becomes a request, and releasing the observer without deleting the entry when it goes back. **Both
+transitions are a request whose provider stands.** A request a consumer keeps past its provider
+stops reading its plan, so a plan already deferred goes on answering as above and a later change,
+deferral included, is not applied (`C5-C9`). It is repeated here in an indented block rather than a
+fenced one because the fenced declarations — the `useReq` signature above and `ReqPlan` beside
+`ReqDescriptor` below — are the ones `LK13` holds. `filters: []` and `authors: []` are **not** the
+encoding — they stay `B8`'s genuine empty-set questions, which is also what stops a descriptor being
+validated for a question nobody is asking. There is no `cancel()`: `refresh()` closes and re-opens,
+which is the opposite. And an abort is therefore not something a consumer raises at all — it is the
+teardown's, a consumer holds no signal, and since ruling 5 it resolves `cancelled` rather than
+rejecting. The cancel is a v1 omission rather than an oversight: it is a handle operation whose
+interaction with the query layer's own lifetime nobody has decided. **Per-relay selection was the
+fourth, and it is no longer an omission (ruling 3)**: the relay set was the provider's prop alone,
+so two relay sets on one page meant two providers, which `C6` says share nothing — two connections,
+two caches, the same event twice. That was the one `req` use case the descriptor did not cover, and
+`C3`'s falsifier names exactly that shape; it was recorded here as a known gap for a reviewer to
+rule on, and the ruling added `ReqDescriptor.relays`, a target set resolved inside the provider's
+readable scope. The passage is kept as the state that ruling answered.
 
 **And the fifth is not an omission of an option but of a direction — sending — and v1 publishes it
 as an operation rather than as the connection (ruling 17).** Today's surface exports `app`, a
@@ -2572,7 +2574,9 @@ not.
 // attempt and no REQ; it reports `loading` with `activity: 'idle'`; `refresh()`
 // resolves `{ kind: 'not-started', reason: 'deferred' }`. Becoming a request
 // applies the ordinary mount triggers; going back releases the observer without
-// deleting the entry. **What it does occupy is one inert entry per client**,
+// deleting the entry. Both transitions are a request whose provider stands: one
+// kept past its provider stops reading its plan, so a later change is not applied
+// (`C5-C9`). **What it does occupy is one inert entry per client**,
 // shared by every deferred hook, because the query library builds an entry when
 // an observer is constructed — a price, stated, rather than a promise of none.
 type ReqPlan = { kind: 'deferred' } | { kind: 'request'; descriptor: ReqDescriptor };
@@ -3480,9 +3484,10 @@ deferred plan makes **no key for the question it would have asked, no attempt an
 occupies **one inert entry per client** shared by every deferred hook; it reports `loading` with
 `activity: 'idle'`; `refresh()` resolves `{ kind: 'not-started', reason: 'deferred' }`; becoming a
 request applies the ordinary mount triggers; going back releases the observer without deleting the
-entry. `filters: []` and `authors: []` are **not** the encoding — they stay `B8`'s genuine empty-set
-questions — and making the plan a discriminated union also removes the ordering question of
-validating a descriptor nobody is asking with.
+entry; and both transitions are a request whose provider stands (`C5-C9`). `filters: []` and
+`authors: []` are **not** the encoding — they stay `B8`'s genuine empty-set questions — and making
+the plan a discriminated union also removes the ordering question of validating a descriptor nobody
+is asking with.
 
 ### 5. The idiomatic retry button produces an unhandled rejection
 

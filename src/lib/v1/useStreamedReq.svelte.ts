@@ -416,7 +416,7 @@ export interface UseStreamedReqOpts {
    * no REQ; it reports `loading` with `activity: 'idle'`; `refresh()` resolves
    * `{ kind: 'not-started', reason: 'deferred' }`. Becoming a request applies
    * the ordinary mount triggers, and going back releases the observer without
-   * deleting the entry.
+   * deleting the entry, both while the provider stands (`C5-C9`).
    *
    * **What it does occupy is one inert entry, shared by every deferred hook on
    * a client, and that is a price rather than a promise.** The query library
@@ -783,6 +783,9 @@ function readSeam<T>(read: () => T): { read: true; value: T } | { read: false } 
  * and so `removeQueries({ queryKey: ['nosvelte'] })` still reaches it.
  */
 const DEFERRED_KEY: QueryKey = ['nosvelte', 'deferred'];
+
+/** What `refresh()` answers for a plan that is not asking. */
+const NOT_ASKING = Object.freeze({ kind: 'not-started', reason: 'deferred' } as const);
 
 /**
  * How long a recovery waits, per consecutive attempt, in seconds.
@@ -1816,19 +1819,41 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * and that nothing is written during a derivation and read from a getter. So
    * it is gone, and this is a function of the query's state alone.
    *
-   * **Derived once per state, because the value it is not true of is the one it
-   * exists for.** Every rejection of the query function is this library's now
+   * **Once per state, because the value it is not true of is the one it exists
+   * for.** Every rejection of the query function is this library's now
    * ({@link rejectsWithOurs}), and the one left is the query library's own: a
    * cancellation that does not revert, which query-core writes to `error`
    * without the query function throwing it. A function called by each reader
    * copied that once per read, so `state.error` was a different object every
-   * time it was read and never `diagnostics.lastError`. A `$derived` is
-   * recomputed whenever the query's status or error moves — error, success,
-   * error with the same object is three states, not a key — so it cannot go
-   * stale the way the memo did, and every reader of one state is handed one
-   * value.
+   * time it was read and never `diagnostics.lastError`. So every reader of one
+   * state is handed one value.
+   *
+   * **A memo again, keyed on the state this time, because a `$derived` cannot
+   * be read after its root.** This was a `$derived`, and one belongs to the
+   * effect that made it. A handle outlives that effect (`A12-C5`), and reading
+   * one then makes Svelte write `derived_inert` to the console, in production
+   * too, on every read of `state` and `diagnostics`, for a request that never
+   * failed: the query adapter rewrites every key on every update, so the
+   * derivation reads as changed with nothing moved (`C5-C8`). The memo removed
+   * above could go stale because its key was the rejected value, so error,
+   * success, error with the same object came back to one key. `errorUpdateCount`
+   * moves on every rejection, which makes those two keys, and what is written
+   * here is a copy of a function of its key rather than a second source for the
+   * fact: the query is read at each read, which is also what `A12-C5` says a
+   * released handle does. The key is as good as that count: only a direct write
+   * of the cache entry can put one object back at a count it had, and v1 does
+   * not publish the query or its client.
    */
-  const rejectedWith = (): ReqStateError | undefined => queryRejection;
+  let rejection: { source: unknown; count: number; value: ReqStateError } | undefined;
+  const rejectedWith = (): ReqStateError | undefined => {
+    if (query.status !== 'error') return undefined;
+    const source = query.error;
+    const count = query.errorUpdateCount;
+    if (rejection === undefined || rejection.source !== source || rejection.count !== count) {
+      rejection = { source, count, value: terminalFailure(capture(source, 'unspecified')) };
+    }
+    return rejection.value;
+  };
 
   /**
    * The plan the query is running under, as opposed to the one this moment
@@ -1849,7 +1874,46 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    */
   let planned: RequestPlan = 'open';
 
-  const queryOptions = () => {
+  /**
+   * The last `live` this handle read, for a reader that may not ask.
+   *
+   * `activity` maps the fetch status through the caller's `live`, and reading
+   * that runs the caller's plan. A plan that reads a `$derived` of its component
+   * is the ordinary one, and once the component has gone that read is Svelte's
+   * `derived_inert` on the console, so a released handle answers from here
+   * (`C5-C8`). Written by both that ask, the options and `activity`, because a
+   * plan can change between the two: read by `activity` alone, a handle could
+   * say `live` and then, once released, what the options were last built from.
+   */
+  let lastLive = false;
+
+  /**
+   * Whether the provider has gone, which is when this request stops reading its
+   * plan (`C5-C9`).
+   *
+   * **A restriction, and it costs the consumer their plan.** The plan can go on
+   * changing, and a change to `deferred` or to one the boundary refuses needs no
+   * transport, but finding that out is a read, and the read is the harm. The
+   * `$derived` it reads may have gone with the provider, which is `derived_inert`
+   * on the console, and an options evaluation then reaches an emptied cache,
+   * builds a new entry and runs an attempt on a revoked capability, which
+   * published `unspecified` for a plan that had only changed. So a later plan is
+   * not applied or refused, what is held goes on answering the earlier one, and
+   * nothing says so: that is #202's to decide.
+   *
+   * **`$state`, because a reader that stops reading has to run to stop.** A
+   * reaction that read the plan depends on it until it next runs, and Svelte's
+   * dirty check reads a dead `$derived` for that dependency without calling
+   * this module at all. So this has to move every reader of the plan. Only a
+   * provider's capability writes it: a standalone request's is never revoked,
+   * and its plan is also where its client comes from.
+   */
+  let providerGone = $state(false);
+
+  /** What `refresh()` answers from once it may not ask, the way {@link lastLive} is for `activity`. */
+  let lastPlan: Pick<ReturnType<typeof resolveRequest>, 'deferred' | 'rejection'> | undefined;
+
+  const buildOptions = () => {
     // **This destructure is a read of the caller's object too**, and it runs
     // before `requestOf()` does — so a `scope` getter that throws threw here,
     // one line above the guard written for it. Everything the boundary
@@ -1970,6 +2034,8 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
         ? 'open'
         : planRequest(descriptor, targets.length);
     planned = plan;
+    lastLive = descriptor?.live ?? false;
+    lastPlan = { deferred, rejection };
 
     // **Handed the attempt rather than taking one.** This used to call
     // `attempts.begin()` itself, and that made the attempt boundary the *stream
@@ -2762,16 +2828,33 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
     };
   };
 
+  let lastOptions: ReturnType<typeof buildOptions> | undefined;
+
+  /**
+   * The options, and the same object once the provider has gone.
+   *
+   * **The same object, because a new one runs an attempt.** {@link providerGone}
+   * moving has to re-evaluate this, since that is what drops the plan from the
+   * adapter's dependencies. The adapter passes a value it has not seen to
+   * `observer.setOptions`, and over the cache the teardown emptied that builds
+   * an entry and fetches it. So nothing new may come out, and what the adapter
+   * makes of this has to be what it made of it before: `defaultQueryOptions`
+   * answers a defaulted object with itself and copies any other, which is why
+   * they are defaulted here rather than there. That is query-core's behaviour
+   * and not a promise of its, and `CW3` is what notices it going.
+   */
+  const queryOptions = (): ReturnType<typeof buildOptions> => {
+    if (providerGone && lastOptions !== undefined) return lastOptions;
+    const built = buildOptions();
+    lastOptions = ownedClient().defaultQueryOptions(built) as typeof built;
+    return lastOptions;
+  };
+
   // The client, named. `createQuery` falls back to the ambient context when the
   // second argument is left out, which is how A15's client came to reach no
   // request at all: the provider built one and nothing installed it. See
   // {@link UseStreamedReqOpts.client}.
   const query = createQuery(queryOptions, ownedClient);
-  // What the query rejected with, derived once per state: {@link rejectedWith}.
-  const queryRejection = $derived(
-    query.status === 'error' ? terminalFailure(capture(query.error, 'unspecified')) : undefined
-  );
-
   // **Read once here so that it is read at all.** The query library notifies a
   // subscriber only about properties that subscriber has *touched* — the first
   // read of any property switches the observer from "tell me everything" to
@@ -2866,12 +2949,22 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
    * runs on every one of those — which would report a release per re-render.
    * This one reads nothing, so Svelte destroys it exactly when the root does.
    *
-   * A plain `let` rather than `$state`: nothing renders from it, and the one
-   * reader is `refresh()`, which a consumer calls from a handler.
+   * **`$effect.pre`, because that one runs as it is declared.** An `$effect`
+   * registers its cleanup when it first runs, after the root has mounted, so a
+   * root torn down before that left this `false` for good, and `refresh()` on
+   * the handle answered `cancelled` rather than `not-started` (`C5-C8`).
+   *
+   * A plain `let` rather than `$state`: nothing renders from it, and its two
+   * readers are `refresh()`, which a consumer calls from a handler, and
+   * `activity`, which reads it for what a released handle may not ask.
    */
   let released = false;
-  $effect(() => () => {
+  const unwatched = inputs?.transport?.onRevoke(() => {
+    providerGone = true;
+  });
+  $effect.pre(() => () => {
     released = true;
+    unwatched?.();
   });
 
   /**
@@ -2977,10 +3070,8 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // Guarded like every other read of the caller's object: this one is
       // inside a **published getter**, so a `live` getter that throws would
       // throw at whoever reads `activity` rather than being refused.
-      return deriveActivity(
-        safely(() => getOpts().live) ?? false,
-        query.fetchStatus === 'fetching'
-      );
+      if (!released && !providerGone) lastLive = safely(() => getOpts().live) ?? false;
+      return deriveActivity(lastLive, query.fetchStatus === 'fetching');
     },
     /** The shared mapping, so both accumulators answer with the same function. */
     get state(): ReqState {
@@ -3056,6 +3147,51 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // reason with no remedy, which is exactly right — the thing that would
       // act on the answer is gone.
       if (released) return Object.freeze({ kind: 'not-started', reason: 'released' } as const);
+
+      // **The owner going away is a failure of the call, and this is the only
+      // place it is published.** A provider that is destroyed revokes its
+      // capability *before* it cancels attempts and *before* it disposes the
+      // client, so from that instant nothing can start a request against it and
+      // nothing can observe the disposal any other way — which is what lets
+      // `provider-disposed` be a rejection rather than a state (`lease.ts`).
+      //
+      // Read off the capability rather than by asking the client, because asking
+      // the client is a check-then-use: the helper this replaced answered `true`
+      // only once the dependency had already thrown once, and it is deleted —
+      // once the request path stopped holding a client it had no caller left.
+      //
+      // **The call that reaches here is one made *after* the teardown.** A
+      // `refresh()` already in flight when the provider goes away is answered
+      // `cancelled` by step 2 of the linearisation — its attempt is abandoned
+      // *as a disposal* — rather than by this line, so for a round this branch
+      // had no witness at all and a mutation that took it away killed nothing
+      // (`expected: RM4 / actual: (none)`, measured). `RM8` drives both now.
+      //
+      // **And the caller-owned client is not this event.** They were one
+      // condition, so a low-level caller who disposed their own client got
+      // `provider-disposed` from `refresh()` and `invalid-descriptor` from the
+      // initial request — one ownership event with two classifications, which is
+      // the split a reviewer measured. `callerTransport` is never revoked, so
+      // this test is only ever true of a provider that took its client back; the
+      // caller's half is `requestTargets` below, which refuses the seam by name.
+      // A second guard written here for it had no entrance and was deleted
+      // rather than witnessed: `requestTargets` is reached on this path and
+      // publishes the identical refusal, so disabling the guard left `RM4`
+      // green.
+      //
+      // **Above the read of the plan, because a request that has gone may not
+      // make it** (`C5-C9`). What the plan last said is kept, so a plan that was
+      // not asking and one the boundary refused answer as they did, and a plan
+      // changed since is not heard: this answers the earlier one.
+      if (providerGone) {
+        if (lastPlan?.deferred === true) return NOT_ASKING;
+        if (lastPlan?.rejection !== undefined) throw lastPlan.rejection;
+        throw providerDisposed(
+          'nosvelte: the provider connection is terminated, so this request cannot be ' +
+            'refreshed. That is a disposed provider rather than a relay that is down, and ' +
+            'no later attempt will succeed.'
+        );
+      }
       // Same wiring as the verifier, and the same defect before it: the
       // provider detects the environment and put it on the context, and this
       // read never looked there — so `detectEnvironment()` decided nothing that
@@ -3138,7 +3274,7 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // not been made yet is an ordinary thing to write. The reason says which
       // "nothing was asked" this is — `no-readable-relay` is the provider's
       // list, `server` is the side, this is the caller's own plan.
-      if (deferred) return Object.freeze({ kind: 'not-started', reason: 'deferred' } as const);
+      if (deferred) return NOT_ASKING;
 
       // A descriptor this library will not send is a failure of the call, not
       // an attempt that came back partial: nothing was tried, and a caller who
@@ -3159,8 +3295,8 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // **Above the transport, and it stood below it for a round.** A12 says a
       // request on the server is not started and reports not-asked, and the one
       // thing 0004 puts ahead of that is a descriptor the boundary refuses,
-      // which is the check above. Nothing else outranks it, and the disposal
-      // check below did: `isProviderDisposed` answers `true` for a client it
+      // which is the check above. Nothing else outranks it, and a disposal
+      // check here did: `isProviderDisposed` answers `true` for a client it
       // cannot read at all, a *missing* one included, through its own `catch`.
       // A provider rendering on a server has no transport — that is
       // `ServerNostrContext`, not an accident — so a request built from what
@@ -3181,44 +3317,6 @@ export function useStreamedReq(getOpts: () => UseStreamedReqOpts) {
       // disposal is consulted there either.
       if (environment === 'server')
         return Object.freeze({ kind: 'not-started', reason: 'server' } as const);
-
-      // **The owner going away is a failure of the call, and this is the only
-      // place it is published.** A provider that is destroyed revokes its
-      // capability *before* it cancels attempts and *before* it disposes the
-      // client, so from that instant nothing can start a request against it and
-      // nothing can observe the disposal any other way — which is what lets
-      // `provider-disposed` be a rejection rather than a state (`lease.ts`).
-      //
-      // Read off the capability rather than by asking the client, because asking
-      // the client is a check-then-use: the helper this replaced answered `true`
-      // only once the dependency had already thrown once, and it is deleted —
-      // once the request path stopped holding a client it had no caller left.
-      //
-      // **The call that reaches here is one made *after* the teardown.** A
-      // `refresh()` already in flight when the provider goes away is rejected by
-      // step 2 of the linearisation — its attempt is abandoned *as a disposal* —
-      // rather than by this line, so for a round this branch had no witness at
-      // all and a mutation that took it away killed nothing (`expected: RM4 /
-      // actual: (none)`, measured). `RM8` drives both now.
-      //
-      // **And the caller-owned client is not this event.** They were one
-      // condition, so a low-level caller who disposed their own client got
-      // `provider-disposed` from `refresh()` and `invalid-descriptor` from the
-      // initial request — one ownership event with two classifications, which is
-      // the split a reviewer measured. `callerTransport` is never revoked, so
-      // this test is only ever true of a provider that took its client back; the
-      // caller's half is `requestTargets` below, which refuses the seam by name.
-      // A second guard written here for it had no entrance and was deleted
-      // rather than witnessed: `requestTargets` is reached on this path and
-      // publishes the identical refusal, so disabling the guard left `RM4`
-      // green.
-      if (transport.revoked) {
-        throw providerDisposed(
-          'nosvelte: the provider connection is terminated, so this request cannot be ' +
-            'refreshed. That is a disposed provider rather than a relay that is down, and ' +
-            'no later attempt will succeed.'
-        );
-      }
 
       // The scope's, not the client's: this call is about the request, and the
       // request is the one keyed under that scope. A client that has drifted has

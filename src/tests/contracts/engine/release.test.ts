@@ -3,9 +3,10 @@
  * @copyright 2023 Akiomi Kamakura
  *
  * What a request lets go of when each leg ends: the landings of `A5-C21`
- * (`RL1`), `A5-C23` (`RL2`) and `A5-C24` (`RL3`).
+ * (`RL1`), `A5-C23` (`RL2`) and `A5-C24` (`RL3`), and what it lets go of when it
+ * ends, the landing of `C5-C10` (`RL4`).
  *
- * **Through the published entry**, all three: `NostrApp` with `relays` only, and
+ * **Through the published entry**, all four: `NostrApp` with `relays` only, and
  * one consumer's `useReq` under it, mounted while the arm says so
  * (`MountedRequest`). The consumer is torn down with the provider still
  * mounted, so its connection outlives the request and a `CLOSE` read after
@@ -58,7 +59,7 @@ import { Observable } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
-import { transportOf } from './helpers/relay.js';
+import { leaseOf, transportOf } from './helpers/relay.js';
 import {
   ARM_TIMEOUT_MS,
   delivered,
@@ -412,6 +413,62 @@ describe('A5: what a request lets go of when each leg ends', () => {
         readings,
         'the library itself releases the backlog’s subscription, once, and not the live one'
       ).toEqual(expected);
+    },
+    ARM_TIMEOUT_MS
+  );
+
+  // @contracts C5-C10
+  it(
+    'RL4: a request torn down under a provider that stands is no longer told the provider went',
+    async () => {
+      // A request listens for its provider from the moment it is made, and one
+      // provider outlives any number of requests, so a listener left behind is
+      // a request kept. **Read on the listener rather than on the call that
+      // removes it**: the arm wraps the lease so the request's listener is
+      // counted when it runs, and the provider going at the end of `published`
+      // is what would run it. The arm's own listener, which it never gives
+      // back, is the control that the going reached the lease.
+      const readings = await onEachClock(
+        [true, false],
+        (live) => (live ? 'live' : 'not live'),
+        async (clock, live) => {
+          const relay = relayAt(nextUrl());
+          const heard = { registered: 0, request: 0, own: 0 };
+          const reading = await published(
+            relay,
+            planned('rl4', live, 'unbounded', clock),
+            clock,
+            async (consumer) => {
+              await consumer.mount();
+              const asked = await clock.promptly(() => relay.asked('backward').length === 1);
+              await consumer.tearDown();
+              return { asked };
+            },
+            (context) => {
+              const lease = leaseOf(context);
+              const onRevoke = lease.onRevoke.bind(lease);
+              lease.onRevoke = (listener) => {
+                heard.registered += 1;
+                return onRevoke(() => {
+                  heard.request += 1;
+                  listener();
+                });
+              };
+              onRevoke(() => {
+                heard.own += 1;
+              });
+            }
+          );
+          return { reading, heard };
+        }
+      );
+      expect(readings, 'a request torn down has given back its place').toEqual(
+        expectedOnEachClock(
+          [true, false],
+          (live) => (live ? 'live' : 'not live'),
+          () => ({ reading: { asked: true }, heard: { registered: 1, request: 0, own: 1 } })
+        )
+      );
     },
     ARM_TIMEOUT_MS
   );

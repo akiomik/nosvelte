@@ -15,6 +15,10 @@
  * observation of exactly that code there, and an empty cell by the same
  * observation not carrying it.
  *
+ * `RA1` lands `C5-C6` too, on that population and the supporting arms': the
+ * console is watched from before the library is imported, and read after every
+ * arm, so the first arm to fail is the one whose path wrote.
+ *
  * Port band 9100-9139 (`RA1`) and 9250-9289 (the supporting arms).
  */
 import { readFileSync } from 'node:fs';
@@ -26,7 +30,7 @@ import type { RxNostr } from 'rx-nostr';
 import { createRxForwardReq } from 'rx-nostr';
 import { QueryClient } from 'tanstack-svelte-query-v6';
 import ts from 'typescript';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WS from 'vitest-websocket-mock';
 
 import type { StreamAccumulator } from '$lib/v1/accumulate.js';
@@ -44,6 +48,7 @@ import { useStreamedReq } from '$lib/v1/useStreamedReq.svelte.js';
 
 import Outlets from './fixtures/Outlets.svelte';
 import { propsTypeOf } from './helpers/components.js';
+import { NOTHING_WRITTEN } from './helpers/console.js';
 import { exportsOf } from './helpers/declarations.js';
 import {
   againstEmitted,
@@ -86,6 +91,20 @@ let client: QueryClient;
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+});
+
+// **For `C5-C6`, the whole file's.** The hook is the first declared, so it runs
+// after the cleanup below it and reads what that wrote too, and a failure here
+// is the failure of the arm that just ran.
+const watch = await vi.hoisted(async () => {
+  const { watchConsole } = await import('./helpers/console.js');
+  return watchConsole();
+});
+
+afterEach(() => {
+  expect(watch.reading(), 'nothing written on this arm, and every method watched').toEqual(
+    NOTHING_WRITTEN
+  );
 });
 
 afterEach(() => {
@@ -262,6 +281,7 @@ const unobserved = (name: string): string[] =>
     .filter((witness) => !(observedBy.get(name)?.has(witness) ?? false));
 
 afterAll(() => {
+  watch.release();
   // **Every witness an arm is listed for, observed by it**, for every arm that
   // passed: one arm holds thirteen witnesses, and one claim does not stand for
   // twelve the arm never drove.
@@ -354,7 +374,7 @@ const MODULE_OF: Readonly<Record<string, string>> = {
 };
 
 describe('which failure code reaches which surface, and what a consumer compiles against it', () => {
-  // @contracts B5-C10
+  // @contracts B5-C10 C5-C6
   it(
     'RA1: every failure surface is typed as the set its paths produce, every code reaches exactly its cells, and a consumer branches on `code` and writes nothing',
     { timeout: 90_000 },

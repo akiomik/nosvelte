@@ -48,7 +48,7 @@
  *    operation handed out earlier refuses too**, and the subscriptions this
  *    capability opened are stopped,
  * 2. running attempts are cancelled,
- * 3. any `refresh()` still in flight is rejected with `provider-disposed`,
+ * 3. any `refresh()` still in flight resolves `cancelled` for `provider-disposed`,
  * 4. and only then is the client disposed.
  *
  * Nothing can observe step 4 through a capability, because step 1 already
