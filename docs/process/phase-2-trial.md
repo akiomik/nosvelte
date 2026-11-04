@@ -156,9 +156,11 @@ A row landed during the trial writes four things in its Evidence cell:
 the rows it is evidence of, in its `rows` — it breaks the row's promise, or a control or an
 instrument the landing reads by — and the cell writes ``**Ledger:** `ledger`, held to `ARM` and `ARM`.``,
 naming every arm those entries are held to, the ones they `require` included, and no entry
-anywhere. `CAT45` holds the cell against the ledger and the roster both ways. It refuses an entry's
-id, or a prefix of one, anywhere in a trial cell's text, and a label, a row or a table it cannot
-read as one; entries described in words are the review's to see. The cells landed in G1 are
+anywhere. `CAT45` holds the cell against the ledger and the roster both ways. It refuses, anywhere
+in a trial cell's text, an entry's id, a prefix of one that ends in `-`, and a prefix of two words
+or more that ends where one of the id's words does, unless it is a row's id, which is read as the
+row; and a label, a row or a table it cannot read as one. A family written as one word without its
+hyphen (`C3`) and entries described in words are the review's to see. The cells landed in G1 are
 rewritten to that form.
 
 **Aim for under 1 500 characters.** How the cell was reached — earlier arrangements, reviewers'

@@ -16,7 +16,7 @@
  * row's Then, or whether an entry a row names breaks its promise rather than a
  * control or an instrument the landing reads by. Those are judgements about
  * mutations, and they are the review's. Nor does it read a description of
- * entries in words, or a family written without its hyphen (`C7`).
+ * entries in words, or a family written as one word without its hyphen (`C7`).
  */
 import * as markdown from 'prettier/plugins/markdown';
 
@@ -215,8 +215,9 @@ const armsOf = (entry: CitedEntry): string[] => [entry.arm, ...(entry.requires ?
  * What is wrong between the record's citations and the ledgers: the record is
  * read whole ({@link implementationCells}); every trial cell — one with a label
  * of §5 — has a readable ledger part and names no entry anywhere in its text, by
- * its id, by a prefix ending in `-`, or by a prefix that ends where one of the
- * id's words does and is not itself a row's id; each ledger it names exists, is
+ * its id, by a prefix ending in `-`, or by a prefix of two words or more that
+ * ends where one of the id's words does and is not itself a row's id; each
+ * ledger it names exists, is
  * named once, and has entries naming the row, held to exactly the arms the cell
  * names — each entry's `arm` and the ones it `requires` — each on the row's
  * roster line; every entry of a cited ledger held to a cited arm names a row;
