@@ -14,7 +14,9 @@
  * - `B-η-C7` on `ES21`, with `ES22`, `ES23`, `ES26` and `ES27`.
  *
  * An id begins with the arm its entry is held to, and each entry names its row
- * in `rows`. Every entry edits the library.
+ * in `rows`. Every entry edits the library but the two ending
+ * `-no-first-answer`, which edit the instrument: they take away the premise
+ * `SB2` and `SB3` read before the plan moves, the first descriptor's answer.
  */
 import type { Edit, Ledger } from '../ledger.ts';
 
@@ -24,6 +26,7 @@ const MACHINE = 'src/lib/v1/machine.ts';
 const STREAM = 'src/lib/v1/stream.ts';
 const CONTEXT = 'src/lib/v1/context.svelte.ts';
 const ATTEMPT = 'src/lib/v1/attempt.ts';
+const ARMS = 'src/tests/contracts/engine/subscriptions.test.ts';
 
 /** Every invocation of the hook leaves the signal it was handed unread. */
 const SIGNAL_UNREAD: Edit = {
@@ -31,6 +34,15 @@ const SIGNAL_UNREAD: Edit = {
   from: '      consumeSignal = true,',
   to: '      consumeSignal = false,'
 };
+/** The instrument's premise: the first descriptor answered before the plan moves. */
+const NO_FIRST_ANSWER: Edit = {
+  file: ARMS,
+  from: "    relay.sendBacklog(1, 'first');\n",
+  to: ''
+};
+/** The attempt's start, written where the query function begins. */
+const START =
+  '          if (!invocation.signal.aborted) {\n            client.setQueryData<Collected>(key, (previous) =>\n              previous === undefined ? undefined : beginAttempt(previous, attemptId)\n            );\n          }\n';
 /** A leg's name, from the request's base and its attempt. */
 const ATTEMPT_NAME = '      reqIdBase: `${reqIdBase}-${attemptId}`,';
 /** The registry's origin token, drawn from the platform's randomness. */
@@ -46,13 +58,13 @@ export default {
   ],
   calibration: {
     measured:
-      'each arm alone and passing, process start included, one run at a time on a shared 10-core machine, on the tree that added this ledger',
+      'each arm alone and passing, process start included, one run at a time on a shared 10-core machine, on the tree that added this ledger; `SB4` and `SB5` again once their readings changed',
     seconds: {
       SB1: 3.1,
       SB2: 2.9,
       SB3: 2.9,
-      SB4: 1.8,
-      SB5: 3.2,
+      SB4: 2.1,
+      SB5: 3.5,
       SB6: 1.9,
       ES16: 1.5,
       ES21: 1.5,
@@ -72,7 +84,7 @@ export default {
       edits: [
         {
           file: ENGINE,
-          from: '          if (!invocation.signal.aborted) {\n            client.setQueryData<Collected>(key, (previous) =>\n              previous === undefined ? undefined : beginAttempt(previous, attemptId)\n            );\n          }\n',
+          from: START,
           to: ''
         }
       ]
@@ -163,6 +175,33 @@ export default {
       ]
     },
     {
+      id: 'SB1-the-events-withdrawn-at-the-start',
+      arm: 'SB1',
+      rows: ['B-η-C5'],
+      describe: 'a new attempt’s start withdraws the events on show with the records',
+      edits: [
+        {
+          file: ENGINE,
+          from: START,
+          to: '          if (!invocation.signal.aborted) {\n            client.setQueryData<Collected>(key, (previous) =>\n              previous === undefined\n                ? undefined\n                : { ...beginAttempt(previous, attemptId), entries: new Map() }\n            );\n          }\n'
+        }
+      ]
+    },
+    {
+      id: 'SB1-the-start-written-as-a-fetch-result',
+      arm: 'SB1',
+      rows: ['B-η-C5'],
+      describe:
+        'a new attempt’s start is written to the cache entry as a fetch’s result, which marks the request idle while it asks',
+      edits: [
+        {
+          file: ENGINE,
+          from: START,
+          to: '          if (!invocation.signal.aborted) {\n            const entry = client.getQueryCache().find<Collected>({ queryKey: key, exact: true });\n            const previous = entry?.state.data;\n            if (previous !== undefined) entry?.setData(beginAttempt(previous, attemptId));\n          }\n'
+        }
+      ]
+    },
+    {
       id: 'SB2-the-first-forward-left-open',
       arm: 'SB2',
       rows: ['A5-C30'],
@@ -191,6 +230,14 @@ export default {
       ]
     },
     {
+      id: 'SB2-no-first-answer',
+      arm: 'SB2',
+      rows: ['A5-C30'],
+      describe:
+        'the instrument: the first descriptor is never answered, so there is no first event for the move to lose',
+      edits: [NO_FIRST_ANSWER]
+    },
+    {
       id: 'SB3-the-first-answer-shown-after-the-move',
       arm: 'SB3',
       rows: ['B2-C3'],
@@ -217,6 +264,14 @@ export default {
       ]
     },
     {
+      id: 'SB3-no-first-answer',
+      arm: 'SB3',
+      rows: ['B2-C3'],
+      describe:
+        'the instrument: the first descriptor is never answered, so there is no first event for the move to lose',
+      edits: [NO_FIRST_ANSWER]
+    },
+    {
       id: 'SB4-the-forward-asked-twice',
       arm: 'SB4',
       rows: ['A6-C5'],
@@ -237,6 +292,38 @@ export default {
       edits: [{ file: STREAM, from: ATTEMPT_NAME, to: '      reqIdBase,' }]
     },
     {
+      id: 'SB4-the-legs-named-alike',
+      arm: 'SB4',
+      rows: ['A6-C5'],
+      describe: 'an attempt’s forward leg is asked under the name its backward leg is',
+      edits: [
+        {
+          file: MACHINE,
+          from: '    const forwardReq = createRxForwardReq(`${reqIdBase}-f`);',
+          to: '    const forwardReq = createRxForwardReq(`${reqIdBase}-b`);'
+        }
+      ]
+    },
+    {
+      id: 'SB4-a-forward-name-per-relay',
+      arm: 'SB4',
+      rows: ['A6-C5'],
+      describe:
+        'a live request opens its forward leg once per relay, each under a name of its own, rather than one name fanned out to its relays',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  if (live) {\n    const forwardReq = createRxForwardReq(`${reqIdBase}-f`);',
+          to: '  if (live) for (const [index, url] of [...targetUrls].entries()) {\n    const forwardReq = createRxForwardReq(`${reqIdBase}-f:r${String(index)}`);'
+        },
+        {
+          file: MACHINE,
+          from: '    const forwardStream = transport.use(forwardReq, routeToTargets);',
+          to: '    const forwardStream = transport.use(forwardReq, { on: { relays: [url] } });'
+        }
+      ]
+    },
+    {
       id: 'SB5-names-drawn-from-six-digits',
       arm: 'SB5',
       rows: ['A6-C8'],
@@ -251,6 +338,77 @@ export default {
       ]
     },
     {
+      id: 'SB5-names-drawn-from-a-captured-random',
+      arm: 'SB5',
+      rows: ['A6-C8'],
+      describe:
+        'a request’s subscriptions are named by six digits drawn from `Math.random` as the module took it when it was evaluated (#95)',
+      edits: [
+        {
+          file: STREAM,
+          from: "import { canonicalUrl } from './scope.svelte.js';\n",
+          to: "import { canonicalUrl } from './scope.svelte.js';\n\nconst drawName = Math.random;\n"
+        },
+        {
+          file: STREAM,
+          from: ATTEMPT_NAME,
+          to: "      reqIdBase: `r${String(Math.floor(drawName() * 1e6)).padStart(6, '0')}`,"
+        }
+      ]
+    },
+    {
+      id: 'SB5-answers-in-one-map',
+      arm: 'SB5',
+      rows: ['A6-C8'],
+      describe:
+        'the fold writes an event into the value’s own map rather than a copy, so every request that starts from the empty value holds the others’ events',
+      edits: [
+        {
+          file: EVENT_SET,
+          from: '  const entries = new Map(set.entries);',
+          to: '  const entries = set.entries;'
+        }
+      ]
+    },
+    {
+      id: 'SB5-filters-kept-per-relay-set',
+      arm: 'SB5',
+      rows: ['A6-C8'],
+      describe:
+        'a request is asked under the filters the first request on its relays was, kept per relay set for the module',
+      edits: [
+        {
+          file: MACHINE,
+          from: 'export async function* referenceStream({',
+          to: 'const filtersFor = new Map<string, Nostr.Filter[]>();\n\nexport async function* referenceStream({'
+        },
+        {
+          file: MACHINE,
+          from: '  const routeToTargets = { on: { relays: [...targetUrls] } };\n',
+          to: "  const routeToTargets = { on: { relays: [...targetUrls] } };\n  const routeKey = [...targetUrls].join(' ');\n  if (!filtersFor.has(routeKey)) filtersFor.set(routeKey, filters);\n  filters = filtersFor.get(routeKey) ?? filters;\n"
+        }
+      ]
+    },
+    {
+      id: 'SB5-forward-filters-taken-from-the-last-written',
+      arm: 'SB5',
+      rows: ['A6-C8'],
+      describe:
+        'a live request’s forward leg takes its filters from a list the requests under the module share, at the end the last one wrote, a microtask after it opens',
+      edits: [
+        {
+          file: MACHINE,
+          from: 'export async function* referenceStream({',
+          to: 'const forwardFilters: Nostr.Filter[][] = [];\n\nexport async function* referenceStream({'
+        },
+        {
+          file: MACHINE,
+          from: '    forwardReq.emit(\n      forwardLimitZero ? filters.map((filter) => ({ ...filter, limit: 0 })) : filters\n    );\n  }',
+          to: '    forwardFilters.push(filters);\n    queueMicrotask(() => {\n      const taken = forwardFilters.pop() ?? filters;\n      forwardReq.emit(\n        forwardLimitZero ? taken.map((filter) => ({ ...filter, limit: 0 })) : taken\n      );\n    });\n  }'
+        }
+      ]
+    },
+    {
       id: 'SB6-a-socket-per-request',
       arm: 'SB6',
       rows: ['C6-C10'],
@@ -260,6 +418,37 @@ export default {
           file: CONTEXT,
           from: '    get transport() {\n      return context.transportLease;\n    },',
           to: '    get transport() {\n      return context.transportLease === undefined\n        ? undefined\n        : ownTransport(createLiveTransport(undefined)).capability;\n    },'
+        }
+      ]
+    },
+    {
+      id: 'SB6-the-relay-subset-dropped',
+      arm: 'SB6',
+      rows: ['C6-C10'],
+      describe: 'a request is routed to every relay its provider has, not the subset it names',
+      edits: [
+        {
+          file: MACHINE,
+          from: '  const routeToTargets = { on: { relays: [...targetUrls] } };',
+          to: '  const routeToTargets = {};'
+        }
+      ]
+    },
+    {
+      id: 'SB6-one-pool-for-the-page',
+      arm: 'SB6',
+      rows: ['C6-C10'],
+      describe: 'every provider on the page is handed one connection pool, the first one built',
+      edits: [
+        {
+          file: CONTEXT,
+          from: 'function createLiveTransport(harness: HarnessOverrides | undefined): RxNostr {\n  return createRxNostr({',
+          to: 'let pagePool: RxNostr | undefined;\nfunction createLiveTransport(harness: HarnessOverrides | undefined): RxNostr {\n  return (pagePool ??= createRxNostr({'
+        },
+        {
+          file: CONTEXT,
+          from: '    skipValidateFilterMatching: true\n  });\n}',
+          to: '    skipValidateFilterMatching: true\n  }));\n}'
         }
       ]
     },

@@ -29,6 +29,42 @@ import { box, flush } from './helpers/runes.svelte.js';
 // The provider reads the framework's own context, not the setup's stand-in.
 vi.unmock('svelte');
 
+/**
+ * **The platform's randomness, fixed on demand from before this file's imports
+ * are evaluated** (`SB5`). A spy put on later replaces the property and leaves
+ * a function the library took when its module was evaluated as it was:
+ * `const draw = Math.random`, taken then, drew at random under one.
+ * `Math.random`, `crypto.getRandomValues` and `crypto.randomUUID` are replaced
+ * here, before anything is imported, by functions that draw as the platform
+ * does until `randomness.fixed` is set and one value each while it is, so a
+ * function taken from them at any time after is fixed with them.
+ */
+const randomness = vi.hoisted(() => {
+  const state = { fixed: false };
+  const random = Math.random.bind(Math);
+  Math.random = () => (state.fixed ? 0.5 : random());
+  const platform = globalThis.crypto;
+  const getRandomValues = platform.getRandomValues.bind(platform);
+  const randomUUID = platform.randomUUID.bind(platform);
+  Object.defineProperties(platform, {
+    getRandomValues: {
+      configurable: true,
+      writable: true,
+      value: <T extends ArrayBufferView | null>(array: T): T => {
+        if (!state.fixed) return getRandomValues(array as never) as T;
+        if (array !== null) new Uint8Array(array.buffer).fill(7);
+        return array;
+      }
+    },
+    randomUUID: {
+      configurable: true,
+      writable: true,
+      value: () => (state.fixed ? '77777777-7777-4777-8777-777777777777' : randomUUID())
+    }
+  });
+  return state;
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   WS.clean();
@@ -65,6 +101,9 @@ const readingOf = (handle: ReqHandle) => ({
       : handle.state.events.map((event) => event.content).sort(),
   refusals: handle.diagnostics.refusals.map((each) => `${each.leg}:${each.reason}`)
 });
+
+/** That reading, and whether the request is asking: the activity an attempt's start must not move. */
+const withActivity = (handle: ReqHandle) => ({ ...readingOf(handle), activity: handle.activity });
 
 const failed = (error: unknown) => ({
   failed: error instanceof Error ? error.message : String(error)
@@ -135,11 +174,15 @@ const framesFrom = (relay: Relay, from: number): string[] =>
 
 /**
  * A consumer's own request answered on `kinds: [1]`, whose plan then moves to
- * `kinds: [7]` with the consumer still mounted: what the relay is sent when it
- * moves, every reading published from then on, and the answer once the second
- * descriptor's backlog has settled. On a live request, the relay then sends an
- * event on the first descriptor's forward subscription.
+ * `kinds: [7]` with the consumer still mounted: the answer before the move —
+ * the premise that there is a first event to lose — what the relay is sent
+ * when it moves, every reading published from then on, and the answer once the
+ * second descriptor's backlog has settled. On a live request, the relay then
+ * sends an event on the first descriptor's forward subscription.
  */
+/** The premise both readings of {@link movedOnce} rest on: the first descriptor answered. */
+const first = { status: 'settled', causes: undefined, events: ['first-0'], refusals: [] };
+
 async function movedOnce(isLive: boolean) {
   const relay = relayAt(nextUrl());
   const plan = box(request(isLive, [1]));
@@ -153,6 +196,7 @@ async function movedOnce(isLive: boolean) {
     relay.answerBacklog();
     await until(() => one.handle().state.status === 'settled');
     await delay(A_TURN_MS);
+    const beforeTheMove = readingOf(one.handle());
     const firstForward = relay.asked('forward')[0];
     const sent = relay.server.messages.length;
     const published = one.publications.length;
@@ -175,6 +219,7 @@ async function movedOnce(isLive: boolean) {
     await until(() => one.publications.slice(published).some((each) => each.status === 'settled'));
     await delay(A_TURN_MS);
     return {
+      beforeTheMove,
       whenItMoved,
       closedTheFirst,
       afterTheMove: [
@@ -196,11 +241,13 @@ describe('B-η: when an attempt’s refusals stop being published', () => {
     // **The start is read while the new attempt is silent**: its REQs are on
     // the wire and no relay has answered them, which is the instant a
     // withdrawal made at the first chunk misses. Then at its first chunk and at
-    // its end. **Two relays**, one refusing both legs and the other silent or
-    // answered, so that the first attempt's backlog either never ended — both
-    // of its records are withdrawn at the start — or ended under the refusal,
-    // whose backward record goes on explaining the answer on show until the
-    // next backlog replaces it.
+    // its end. **Two relays**, one refusing both legs and the other sending
+    // one event, its backlog then left open or ended, so that the first
+    // attempt's backlog either never ended — both of its records are withdrawn
+    // at the start — or ended under the refusal, whose backward record goes on
+    // explaining the answer on show until the next backlog replaces it. The
+    // event and the activity are read beside them, since the start moves
+    // neither.
     const withdrawn = async (ended: boolean) => {
       const refusing = relayAt(nextUrl());
       const other = relayAt(nextUrl());
@@ -214,12 +261,14 @@ describe('B-η: when an attempt’s refusals stop being published', () => {
         refusing.server.send(['CLOSED', refusing.asked('backward')[0], 'blocked: not here']);
         refusing.server.send(['CLOSED', refusing.asked('forward')[0], 'blocked: not here']);
         await until(() => one.handle().diagnostics.refusals.length === 2);
+        other.sendBacklog(1, 'old');
+        await until(() => readingOf(one.handle()).events.includes('old-0'));
         if (ended) {
           other.answerBacklog();
           await until(() => one.handle().state.status === 'incomplete');
         }
         await delay(A_TURN_MS);
-        const before = readingOf(one.handle());
+        const before = withActivity(one.handle());
         const running = one.handle().refresh();
         await until(() =>
           [refusing, other].every(
@@ -227,15 +276,21 @@ describe('B-η: when an attempt’s refusals stop being published', () => {
           )
         );
         await delay(A_TURN_MS);
-        const atItsStart = readingOf(one.handle());
+        const atItsStart = withActivity(one.handle());
         refusing.sendBacklog(1, 'fresh');
         await until(() => readingOf(one.handle()).events.includes('fresh-0'));
-        const atItsFirstChunk = readingOf(one.handle());
+        const atItsFirstChunk = withActivity(one.handle());
         refusing.answerBacklog();
         other.answerBacklog();
         const outcome = await Promise.race([running, delay(3000)]);
         await delay(A_TURN_MS);
-        return { before, atItsStart, atItsFirstChunk, outcome, atItsEnd: readingOf(one.handle()) };
+        return {
+          before,
+          atItsStart,
+          atItsFirstChunk,
+          outcome,
+          atItsEnd: withActivity(one.handle())
+        };
       } catch (error) {
         return failed(error);
       } finally {
@@ -273,31 +328,44 @@ describe('B-η: when an attempt’s refusals stop being published', () => {
       'refused after the end': await late(true),
       'refused before the end': await late(false)
     };
+    // The first attempt's event, `old-0`, is on show before the `refresh()` and
+    // stays at its start, and the activity does not move: the start withdraws
+    // the records named and nothing else.
     const both = ['backward:blocked', 'forward:blocked'];
+    const old = ['old-0'];
+    const kept = ['fresh-0', 'old-0'];
     expect(runs).toEqual({
       'a backlog that never ended': {
-        before: { status: 'streaming', events: [], refusals: both },
-        atItsStart: { status: 'streaming', events: [], refusals: [] },
-        atItsFirstChunk: { status: 'streaming', events: ['fresh-0'], refusals: [] },
+        before: { status: 'streaming', events: old, refusals: both, activity: 'live' },
+        atItsStart: { status: 'streaming', events: old, refusals: [], activity: 'live' },
+        atItsFirstChunk: { status: 'streaming', events: kept, refusals: [], activity: 'live' },
         outcome: { kind: 'complete' },
-        atItsEnd: { status: 'settled', events: ['fresh-0'], refusals: [] }
+        atItsEnd: { status: 'settled', events: kept, refusals: [], activity: 'live' }
       },
       'a backlog that ended': {
-        before: { status: 'incomplete', causes: ['refused'], events: [], refusals: both },
+        before: {
+          status: 'incomplete',
+          causes: ['refused'],
+          events: old,
+          refusals: both,
+          activity: 'live'
+        },
         atItsStart: {
           status: 'incomplete',
           causes: ['refused'],
-          events: [],
-          refusals: ['backward:blocked']
+          events: old,
+          refusals: ['backward:blocked'],
+          activity: 'live'
         },
         atItsFirstChunk: {
           status: 'incomplete',
           causes: ['refused'],
-          events: ['fresh-0'],
-          refusals: ['backward:blocked']
+          events: kept,
+          refusals: ['backward:blocked'],
+          activity: 'live'
         },
         outcome: { kind: 'complete' },
-        atItsEnd: { status: 'settled', events: ['fresh-0'], refusals: [] }
+        atItsEnd: { status: 'settled', events: kept, refusals: [], activity: 'live' }
       },
       'refused after the end': { status: 'settled', events: [], refusals: ['backward:restricted'] },
       'refused before the end': {
@@ -329,11 +397,13 @@ describe('A5 and B2: a plan that moves while its consumer stays mounted', () => 
       'not live': { ...runs['not live'], late: late(runs['not live']) }
     }).toEqual({
       live: expect.objectContaining({
+        beforeTheMove: first,
         whenItMoved: ['CLOSE forward', 'REQ backward [7]', 'REQ forward [7]'],
         closedTheFirst: true,
         late: false
       }),
       'not live': expect.objectContaining({
+        beforeTheMove: first,
         whenItMoved: ['REQ backward [7]'],
         closedTheFirst: false,
         late: false
@@ -348,6 +418,7 @@ describe('A5 and B2: a plan that moves while its consumer stays mounted', () => 
     // being asked, and not after it — and the settled answer is the second's.
     const runs = { live: await movedOnce(true), 'not live': await movedOnce(false) };
     const second = {
+      beforeTheMove: first,
       afterTheMove: ['second'],
       answer: { status: 'settled', events: ['second'], refusals: [] }
     };
@@ -366,20 +437,26 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
     // under one name — the shape the first v1 hook had — is on the wire to be
     // counted. The id is per leg per attempt and is fanned out, so one name on
     // both relays is the expected shape and one relay asked twice is the defect.
+    // **Each attempt is read two turns after its first `REQ` on each relay**,
+    // not once both legs have come: a leg is read off its name, and two legs
+    // under one name are one subscription the dependency sends once, so a wait
+    // for each leg would run out where the readings below say what was sent.
+    // Four names on each relay across the two attempts is what says the legs
+    // share none.
     const relays = [relayAt(nextUrl()), relayAt(nextUrl())];
     const one = consumerOn(relays, () => live());
-    const asked = (count: number) =>
-      relays.every(
-        (relay) => relay.asked('backward').length >= count && relay.asked('forward').length >= count
-      );
+    const askedAfter = async (before: number[]) => {
+      await until(() => relays.every((relay, at) => reqsOf(relay).length > (before[at] ?? 0)));
+      await delay(A_TURN_MS * 2);
+    };
     try {
-      await until(() => asked(1));
+      await askedAfter([0, 0]);
       for (const relay of relays) relay.answerBacklog();
-      await until(() => one.handle().state.status === 'settled');
+      await within(() => one.handle().state.status === 'settled', 1000);
       await delay(A_TURN_MS);
       const first = relays.map(reqsOf);
       const running = one.handle().refresh();
-      await until(() => asked(2));
+      await askedAfter(first.map((reqs) => reqs.length));
       for (const relay of relays) relay.answerBacklog();
       const outcome = await Promise.race([running, delay(3000)]);
       await delay(A_TURN_MS);
@@ -391,10 +468,6 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
         firstAttempt: first.map((reqs) => reqs.map((each) => each.leg).sort()),
         bothAttempts: both.map((reqs) => reqs.map((each) => each.leg).sort()),
         noNameTwiceToOneRelay: both.map((reqs) => new Set(reqs.map((each) => each.subId)).size),
-        legsShareNoName: both.map(
-          (reqs) =>
-            names(reqs, 'backward').filter((name) => names(reqs, 'forward').includes(name)).length
-        ),
         sameForwardOnBothRelays: [0, 1].map(
           (attempt) =>
             names(both[0] ?? [], 'forward')[attempt] === names(both[1] ?? [], 'forward')[attempt]
@@ -412,7 +485,6 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
           ['backward', 'backward', 'forward', 'forward']
         ],
         noNameTwiceToOneRelay: [4, 4],
-        legsShareNoName: [0, 0],
         sameForwardOnBothRelays: [true, true],
         newForwardIsNotTheLast: true
       });
@@ -426,21 +498,16 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
   it('SB5: two requests at once on one relay are each asked under names of their own, and each answer is its own, under randomness fixed to one value too', async () => {
     // **#95's collision is a draw**, so two ordinary requests pass under a
     // random six-digit name as well: the platform's randomness fixed to one
-    // value — `Math.random`, `getRandomValues` and `randomUUID` — is what makes
-    // two names drawn at random the same name. Live and not, under either.
+    // value — `Math.random`, `getRandomValues` and `randomUUID`, through
+    // `randomness` above — is what makes two names drawn at random the same
+    // name. Live and not, under either. **Each leg is answered**: the
+    // backward subscription that asks for a request's kinds, and on a live
+    // request the forward one as well, so that a forward subscription carrying
+    // the other request's filter under its own name is read by the answer it
+    // hands on, where the kinds each leg asks for, counted together, are the
+    // same.
     const run = async (isLive: boolean, fixed: boolean) => {
-      if (fixed) {
-        vi.spyOn(Math, 'random').mockReturnValue(0.5);
-        vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(
-          <T extends ArrayBufferView | null>(array: T): T => {
-            if (array !== null) new Uint8Array(array.buffer).fill(7);
-            return array;
-          }
-        );
-        vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
-          '77777777-7777-4777-8777-777777777777'
-        );
-      }
+      randomness.fixed = fixed;
       vi.stubGlobal('WebSocket', MockWebSocket);
       vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
       const relay = relayAt(nextUrl());
@@ -474,6 +541,16 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
           1000
         );
         await delay(A_TURN_MS);
+        for (const kind of isLive ? [1, 7] : []) {
+          const forward = reqs.find((each) => each.leg === 'forward' && each.kinds?.[0] === kind);
+          if (forward === undefined) continue;
+          relay.server.send([
+            'EVENT',
+            forward.subId,
+            signed(`forward kind ${String(kind)}`, 2000, kind)
+          ]);
+        }
+        await delay(A_TURN_MS);
         const legs = isLive ? ['backward', 'forward'] : ['backward'];
         return {
           namesPerLeg: legs.map(
@@ -492,7 +569,7 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
         return failed(error);
       } finally {
         view.unmount();
-        vi.restoreAllMocks();
+        randomness.fixed = false;
         vi.unstubAllGlobals();
       }
     };
@@ -510,8 +587,8 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
             [1, 7]
           ]
         : [[1, 7]],
-      first: ['kind 1'],
-      second: ['kind 7']
+      first: isLive ? ['forward kind 1', 'kind 1'] : ['kind 1'],
+      second: isLive ? ['forward kind 7', 'kind 7'] : ['kind 7']
     });
     expect(runs).toEqual({
       'live, random': own(true),
@@ -527,7 +604,9 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
     // one `NostrApp`, naming overlapping subsets of its relays — one both, one
     // the shared relay alone, each by kinds of its own so the other relay's
     // frames say whose they are — and then a second `NostrApp` on the shared
-    // relay, with a request of its own so that it connects.
+    // relay, with a request of its own so that it connects. The waits are for
+    // at least the frames the row expects, so that a relay asked more is read
+    // by what it was asked rather than by a wait that ran out.
     vi.stubGlobal('WebSocket', MockWebSocket);
     vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 404 })));
     const shared = relayAt(nextUrl());
@@ -546,7 +625,7 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
     let second: { unmount: () => void } | undefined;
     try {
       await until(
-        () => shared.asked('backward').length === 2 && other.asked('backward').length === 1
+        () => shared.asked('backward').length >= 2 && other.asked('backward').length >= 1
       );
       await delay(A_TURN_MS);
       const inOneProvider = {
@@ -562,7 +641,7 @@ describe('A6 and C6: the subscriptions two attempts, two requests and two provid
         seen: () => {},
         published: () => {}
       });
-      await until(() => shared.asked('backward').length === 3);
+      await until(() => shared.asked('backward').length >= 3);
       await delay(A_TURN_MS);
       expect({ inOneProvider, withASecondProvider: shared.sockets() }).toEqual({
         inOneProvider: { sharedAsked: [1, 7], sharedSockets: 1, otherAsked: [1] },
