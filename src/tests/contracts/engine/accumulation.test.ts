@@ -221,7 +221,9 @@ describe('A11-C10: nothing an invocation handed out outlives it', () => {
     // — the iterator never closed — and the request is live, so the forward
     // leg is the subscription that would survive a producer nobody closed.
     // Two shapes: the pull awaited, leaving the generator parked at a `yield`,
-    // and the pull left in flight. The consumer stays mounted and the settle
+    // and the pull left in flight — **unanswered**, so that it is still
+    // outstanding when the invocation ends, which the reading reads rather
+    // than assumes. The consumer stays mounted and the settle
     // timer is far off, so nothing but the invocation's end can close
     // anything: not the accumulator, which never asks, and not query-core,
     // whose signal is read in the reading to say it never fired.
@@ -233,13 +235,16 @@ describe('A11-C10: nothing an invocation handed out outlives it', () => {
         releaseTheInvocation = done;
       });
       let queryCore: AbortSignal | undefined;
+      let pullLanded = false;
       const accumulator: StreamAccumulator =
         ({ initialValue, streamFn }) =>
         async (context) => {
           queryCore = context.signal;
           const iterator = streamFn(context)[Symbol.asyncIterator]();
-          if (awaited) await iterator.next();
-          else void iterator.next();
+          const pull = iterator.next().then(() => {
+            pullLanded = true;
+          });
+          if (awaited) await pull;
           await released;
           // Returns without closing the iterator.
           return initialValue;
@@ -262,15 +267,17 @@ describe('A11-C10: nothing an invocation handed out outlives it', () => {
       );
       try {
         const backward = await nextBackward(server);
-        // Answers the awaited pull; the one in flight takes it or not, and
-        // neither shape folds it.
-        respondWithEvent(server, backward, fakeEvent({ id: name, created_at: 1 }));
+        // Answers the awaited pull, which does not fold it; the one in flight
+        // is left waiting on the relay.
+        if (awaited) respondWithEvent(server, backward, fakeEvent({ id: name, created_at: 1 }));
         await settle();
         const askedWhileItRan = legsAsked(server);
+        const pullAtTheEnd = pullLanded ? 'answered' : 'outstanding';
         releaseTheInvocation();
         await settle(200);
         readings[name] = {
           askedWhileItRan,
+          pullAtTheEnd,
           open: openAmong(heard(server)),
           queryCoreCancelled: queryCore?.aborted,
           ...stateOf(held.value)
@@ -284,10 +291,11 @@ describe('A11-C10: nothing an invocation handed out outlives it', () => {
       'both legs asked while it ran, none open after its end, and query-core never cancelled'
     ).toEqual(
       Object.fromEntries(
-        ['ls1-awaited', 'ls1-in-flight'].map((name) => [
-          name,
+        (['awaited', 'in-flight'] as const).map((shape) => [
+          `ls1-${shape}`,
           {
             askedWhileItRan: ['backward', 'forward'],
+            pullAtTheEnd: shape === 'awaited' ? 'answered' : 'outstanding',
             open: [],
             queryCoreCancelled: false,
             status: 'error',

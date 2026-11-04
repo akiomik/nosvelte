@@ -39,6 +39,17 @@ const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
 /** A wait long enough for a request to have put what it asks on the wire. */
 const A_TURN_MS = 200;
 
+/**
+ * Whether `message` offers the provider and the option as alternatives — an
+ * "Either" and then both, joined by "or", in either order and within one
+ * sentence — rather than only naming both, which a refusal that denies one of
+ * them does too.
+ */
+const offersBoth = (message: string): boolean =>
+  /\bEither\b[^.]*(?:`NostrApp`[^.]*\bor\b[^.]*`verifyEvent`|`verifyEvent`[^.]*\bor\b[^.]*`NostrApp`)/.test(
+    message
+  );
+
 /** The `REQ`s a relay was sent. */
 const reqsTo = (server: WS): unknown[][] =>
   (server.messages as unknown[][]).filter((frame) => frame[0] === 'REQ');
@@ -84,15 +95,18 @@ describe('A-ε-C16: a request built with neither a verifier nor a provider is re
       expect({
         asked: reqsTo(server).length,
         status: state.status,
-        namesTheProvider: message.includes('`NostrApp`'),
-        namesTheOption: message.includes('`verifyEvent`'),
+        offersBoth: offersBoth(message),
+        // **The reading's control**: a refusal that names both and denies one.
+        refusesTheDenial: offersBoth(
+          'You must pass `verifyEvent` even inside a `NostrApp` provider.'
+        ),
         // **The instrument's control**: the count covers four invocations.
         invocations: entry()?.fetchFailureCount
       }).toEqual({
         asked: 0,
         status: 'error',
-        namesTheProvider: true,
-        namesTheOption: true,
+        offersBoth: true,
+        refusesTheDenial: false,
         invocations: 4
       });
     } finally {
