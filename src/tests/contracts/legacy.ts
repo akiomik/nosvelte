@@ -42,13 +42,15 @@ export interface LegacyLine {
   readonly left: string;
 }
 
-interface Node {
+/** A node of the Markdown parser's tree, as far as these readers look. */
+export interface Node {
   readonly type: string;
   readonly value?: string;
   readonly children?: readonly Node[];
 }
 
-const inline = (node: Node): string =>
+/** A node's inline text, with code spans and emphasis kept in their Markdown spelling. */
+export const inline = (node: Node): string =>
   node.type === 'inlineCode'
     ? `\`${node.value ?? ''}\``
     : node.type === 'text'

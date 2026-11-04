@@ -40,6 +40,7 @@ export default {
     {
       id: 'C3-the-relays-document-is-not-read',
       arm: 'CP1',
+      rows: ['A5-C3'],
       describe:
         "the provider's client skips the relay's NIP-11 document, so the cap is never known and both requests go out at once",
       edits: [
@@ -53,6 +54,7 @@ export default {
     {
       id: 'C3-the-timer-reports-complete',
       arm: 'CP1',
+      rows: ['A5-C3'],
       describe:
         'a request whose deadline passes while it is held back says its empty answer is complete, though nothing was asked',
       edits: [
@@ -66,6 +68,7 @@ export default {
     {
       id: 'D3-the-queue-never-moves-on',
       arm: 'CP1',
+      rows: ['A5-C3'],
       describe:
         "the dependency's queue for a capped relay does not move on when a subscription is dropped, so a request held back stays held after the first finishes — staged in the ledger's copy of rx-nostr 3.7.6's ESM build",
       edits: [

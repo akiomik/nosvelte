@@ -149,8 +149,19 @@ A row landed during the trial writes four things in its Evidence cell:
 
 - what is read;
 - where and when it is read;
-- the ledger entries that matter;
+- the ledger, and the arms the row's entries in it are held to;
 - the limitations.
+
+**From G2, which entries are the row's is said in the ledger and not in the cell**: each entry names
+the rows it is evidence of, in its `rows` — it breaks the row's promise, or a control or an
+instrument the landing reads by — and the cell writes ``**Ledger:** `ledger`, held to `ARM` and `ARM`.``,
+naming every arm those entries are held to, the ones they `require` included, and no entry
+anywhere. `CAT45` holds the cell against the ledger and the roster both ways. It refuses, anywhere
+in a trial cell's text, an entry's id, a prefix of one that ends in `-`, and a prefix of two words
+or more that ends where one of the id's words does, unless it is a row's id, which is read as the
+row; and a label, a row or a table it cannot read as one. A family written as one word without its
+hyphen (`C3`) and entries described in words are the review's to see. The cells landed in G1 are
+rewritten to that form.
 
 **Aim for under 1 500 characters.** How the cell was reached — earlier arrangements, reviewers'
 edits, dates — goes in the PR body. Cells landed before the trial are left as they are.
@@ -208,11 +219,13 @@ bring back every step the trial removed.
 | Decision                                                                                | Needed before                            |
 | --------------------------------------------------------------------------------------- | ---------------------------------------- |
 | The routes of `A-ε-C3` (#175) and of `A5-C12`/`A5-C13` (#181)                           | G1's plan; **taken 2026-10-27**, below   |
-| `0002` A16's standalone arm, kept by the code (#167)                                    | G2                                       |
+| `0002` A16's standalone arm, kept by the code (#167)                                    | G2; **taken 2026-11-04**, below          |
 | Refusal text bounds, a send's verifier failure, and `ots` (#156, #157, #164)            | G3                                       |
 | Whether evidence from the landings before the ledgers had a home stands as it is (#148) | any time                                 |
 | A narrow patch of the legacy surface for #163, ahead of v1                              | any time; worth more the sooner it comes |
 | What follows G1's cost failure                                                          | G2; **taken 2026-11-04**, below          |
+| The ledger ids in Evidence cells, which G1's four landings left unchecked               | G2; **taken 2026-11-04**, below          |
+| Whether a request kept past its provider is a supported arrangement (#202)              | G2; **taken 2026-11-04**, below          |
 
 **Taken on 2026-10-27, before G1's plan:**
 
@@ -235,6 +248,28 @@ bring back every step the trial removed.
   opinion. Full reviews, the narrow pass on any other repair, the seed rounds and what makes a group
   complete do not change. G1's measure is not rewritten, and G2's is read as taken under these
   changes.
+
+**Taken on 2026-11-04, before G2's plan**, the three with one second opinion:
+
+- **The ledger ids in Evidence cells.** Each of G1's four landings accepted that nothing checked the
+  entry ids its cells listed, and a fifth in G2 would meet the second failure condition. §5 changes
+  instead: the cell names its ledger and the arms, each entry names its rows, and `CAT45` holds the
+  two against each other and against the roster. G1's 14 cells are rewritten to that form. Whether
+  the entries break every clause of a row's Then, and whether an entry breaks the row's promise or
+  a control or an instrument its landing reads by, is still the review's to judge: `CAT45` reads the
+  citation, not the coverage.
+- **#202. A request lives as long as its provider.** A handle kept past `NostrApp` keeps what it is
+  already promised: the answer it holds; a `refresh()` outstanding at the teardown resolves
+  `cancelled` for `provider-disposed`; a later one rejects with that code (`C11-C17`). Nothing more
+  is promised of it. Its `state` and `activity` are not promised to move again, and a consumer who
+  keeps a request in a root of its own releases it with the provider. `0004` says so in G2's
+  unmount landing, and #202 is disposed of there by this decision.
+- **#167. The standalone arm stays, as an internal seam.** 51 tests in 10 files bring owner inputs
+  and are served by it, and they land or support 17 `internal` rows (measured at `f61f089`). `0002`
+  A16 is reopened to say so, as it provides for. `A16-C2`–`C5`, `A16-C7`, `A12-C7` and `C11-C18`
+  come back as owed and `internal`, and they are reported as reopened, apart from delivery.
+  `A-ε-C16` is re-accepted as `internal` and lands on that arm. `0004`'s "In v1 there is no
+  entrance" is corrected. All of it lands in G2.
 
 ## Trial record
 
