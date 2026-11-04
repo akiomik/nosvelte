@@ -82,7 +82,11 @@ release changes, and the rehearsal is where they stop being a surprise.
   there.
 - **The full review** is one integrated pass by an outside reviewer on a frozen candidate. A second
   reader is added only for a question its prompt names, which the first reader cannot answer.
-- **The repairs** get one narrow pass over the repair diff.
+- **The repairs** get one narrow pass over the repair diff. **From G2**, a repair that is only
+  wording gets none. It is only wording when it changes no code, arm or instrument, nor what a row
+  or a promise says, nor what an Evidence cell says is read. The PR names each such repair.
+- **From G2, the questions on repair directions that one review raises go to the maintainer
+  together**, with one second opinion covering them.
 - **Where the depth goes:**
   - Consumer behaviour, event ownership, admission, and what the package publishes get a review of
     the outcome a consumer sees, whatever the owning row's route is.
@@ -99,7 +103,9 @@ release changes, and the rehearsal is where they stop being a surprise.
 - **(b)** a plausible implementation that breaks a consumer promise through a supported entry or
   environment, and that the group's required witnesses accept.
 
-**Every other finding is fixed if it is cheap.** If it is not, it is written down as an accepted
+**Every other finding is fixed if it is cheap.** **From G2**, the cheap findings of one review are
+fixed together, in one repair round, and a fix is cheap only with the verification it brings counted
+in. If it is not, it is written down as an accepted
 limitation in the PR's **Accepted limitations** section: one line each, naming the instrument or the
 promise it concerns, so that limitations can be counted like issues. It goes into the row as well
 only where it bounds what the row claims.
@@ -206,6 +212,7 @@ bring back every step the trial removed.
 | Refusal text bounds, a send's verifier failure, and `ots` (#156, #157, #164)            | G3                                       |
 | Whether evidence from the landings before the ledgers had a home stands as it is (#148) | any time                                 |
 | A narrow patch of the legacy surface for #163, ahead of v1                              | any time; worth more the sooner it comes |
+| What follows G1's cost failure                                                          | G2; **taken 2026-11-04**, below          |
 
 **Taken on 2026-10-27, before G1's plan:**
 
@@ -218,6 +225,16 @@ bring back every step the trial removed.
   defect, and G1 fixes it.
 - **#181.** `A5-C12` and `A5-C13` are split. The cause clauses stay `public`, and the attribution
   clauses become `internal` rows on the machine seam, as `A5-C18` and `A5-C26` were in #190.
+
+**Taken on 2026-11-04, after G1:**
+
+- **G1 met the third failure condition** (its record, below), and the trial goes on to G2 under
+  three changes, marked "From G2" in §2 and §3: a repair that is only wording gets no narrow pass;
+  the cheap findings of one review are fixed in one repair round, counting the verification a fix
+  brings; and the direction questions of one review go to the maintainer together, with one second
+  opinion. Full reviews, the narrow pass on any other repair, the seed rounds and what makes a group
+  complete do not change. G1's measure is not rewritten, and G2's is read as taken under these
+  changes.
 
 ## Trial record
 
@@ -266,4 +283,143 @@ bring back every step the trial removed.
   15 runs, of which 3 were baselines and 2 were the whole suite. Three more runs of the one arm that
   caught K2, 10 seconds in all, read what it was handed, to rule out a timing accident.
 
-G1, G2 and G3 are added here as each is done.
+**G1: receive, replace, settle, end**, from #197, #198, #201, #203 and G1's closing PR, and the seed
+rounds of 2026-11-04.
+
+| PR      | Sub-operation                  | Rows (net `TBD`) | Reviewer invocations                            | Repair rounds | Ledger, as the body reports | Issues filed | Limitations in the PR |
+| ------- | ------------------------------ | ---------------- | ----------------------------------------------- | ------------- | --------------------------- | ------------ | --------------------- |
+| #197    | replace                        | 0                | 5: full 1, narrow 3, second opinion 1           | 4             | 1.2 min                     | 1 (#196)     | 3                     |
+| #198    | settle                         | −3               | 6: full 2 readers, second opinion 1, narrow 3   | 4             | 22.5 min                    | 0            | 8                     |
+| #201    | end                            | −8               | 4: second opinion 1, full 2 readers, narrow 1   | 3             | 25.1 min                    | 0            | 6                     |
+| #203    | failure                        | −1               | 14: full 2 readers, narrow 4, second opinions 8 | 8             | 45.3 min                    | 1 (#202)     | 17                    |
+| closing | replace, at the public surface | 0                | 5: second opinions 2, full 1, narrow 2          | 3             | 1.6 min                     | 0            | 5                     |
+
+- **The plan** had two more invocations: one full review and one narrow pass.
+- **What the bodies leave out.** #201's body names three invocations and #203's thirteen. Each
+  leaves out one second opinion on a repair direction: #201's on a backward `CLOSED` after `EOSE`,
+  #203's on the design of the memo. One of #203's second opinions was stopped on a false premise and
+  reissued, and both are counted. #203's ledger time is its last runs; with the runs on its earlier
+  candidates it is 96.5 min.
+- **Repair rounds** are counted as passes of repairs, each answering one review or one finding, the
+  maintainer's and the author's own checks included. #203's last two are in one commit, `d2ee9f3`.
+- **The closing PR** adds `B5-C11`, the consumer's half of `B5-C1`, `B5-C2` and `B5-C4`, landed by
+  `RP1`, for the reason under **Detection**. It adds a row and lands it, so the `TBD` count does not
+  move. Its repair rounds are `B5-C11` itself and one answering each pass, and each repair had a
+  narrow pass. It also adds `C5-C9` and `C5-C10` to 0005's list of rows whose port column
+  carries a condition, which they had been missing from since #203 added them; nothing on main reads
+  that list until #187.
+
+**Delivery.**
+
+- **Net `TBD`:** −12, as the plan said. No obligation was reopened.
+- **Legacy gaps:** all five taken read `covered` in 0005's map: #68, #78, #85, #86 and #90. They
+  stay open under the `legacy` label until v1 replaces the code they were filed against.
+- **Issues assigned to G1:** all closed: #193, #179, #186, #177 and #191, and #175 and #181 on the
+  decisions above.
+- **Release checks:** none in G1. The package rehearsal is G3's.
+- **Time:** the plan and the baseline were made on 2026-10-27, and the last of the four landings was
+  ready on 2026-11-01. G1 did not fit its week: the seed rounds and the closing PR came on
+  2026-11-04, with #203 not yet merged.
+
+**Residue: 2 issues and 39 limitations**, by the instrument or promise each names. Where one family
+left more than one:
+
+- a request kept past `NostrApp`: 7 limitations in #203 (a request built after the provider went,
+  one running when it went, the earlier result kept, a later deferral, later validation, no signal
+  that the provider went, and the adapter handed the same object), and #202;
+- the Evidence cells repeating ledger ids nothing checks: 4 (#198, #201, #203, the closing PR);
+- `RP1`'s population: 3 (its delivery turn in #197; one author and two events per coordinate, and
+  the kinds it reads, in the closing PR);
+- the fake clock's readings of a deadline and of live delivery: 3 (#198);
+- the console watch: 2 (#203);
+- `CP1` and the dependency's NIP-11 registry: 2 (#198).
+
+The other 18 are one each: four rows' domain declarations, `CM3` (#196, also an issue), `NW1`/`NW2`'s
+instant, rows landed before the trial keeping their cells, `RJ3`'s window, `DT4`'s task, `OR4`'s
+timer, `A-α-C6`'s source search, `A5-C27`'s forced status, a root kept under a provider that
+stands, a caller-owned request's extra read, `CW3`'s ways, an idle read of `activity`, the
+production run, the placed codes, `TH2`'s message, the ephemeral kinds left to `B5-C7` and `ES7`,
+and the arms `trial-seeds` holds three seeds to. Whether a family leaves residue in two groups
+running is first readable after G2.
+
+**Detection, after G1.**
+
+- **How the seeds were run.** As in the baseline: each defect alone, against G1's required witness
+  files (the plan's lists and the six test files G1 added, 23 files), with no defect applied first.
+  Every catch below is an assertion failure, read against the rows 0005's roster names the arm
+  under at `59fee0b`. The column **Since `B5-C11`** is a second measurement, taken after the closing
+  PR gave the replacement promise a public row: `scripts/ledgers/trial-seeds.ts` at `e207622`, which
+  holds each defect to one arm, killed all 21. The first measurement is not rewritten.
+- **The retained panel**, the baseline's ten seeds and `TIE`, each ported to `59fee0b` with the same
+  lines changed:
+
+| Defect | Caught by, at `59fee0b`                                                                                                         | Since `B5-C11`                                         |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| S1     | **internal assertions only** (`B5-C1`, `B5-C2`, `B5-C4`, `B5-C5`)                                                               | a consumer assertion (`B5-C11`), and the internal ones |
+| S2     | consumer assertions (`A5-C1`, `A5-C10`, `A5-C18`), and internal ones                                                            | as before                                              |
+| S3     | consumer assertions (`A5-C1`, `A5-C16`), and internal ones                                                                      | as before                                              |
+| S4     | consumer assertions (`B-α-C11`, `A5-C1`)                                                                                        | as before                                              |
+| S5     | consumer assertions (`A5-C6`, `A5-C9`, `A5-C10`, `A5-C12`, `A5-C13`, `A5-C15`, `A5-C18`, `A5-C29`, `A-α-C4`), and internal ones | as before                                              |
+| S6     | a consumer assertion (`A-ε-C18`)                                                                                                | as before                                              |
+| S7     | **internal assertions only** (`A-ε-C15`)                                                                                        | as before                                              |
+| K1     | **internal assertions only** (`B5-C1`, `B5-C2`, `B5-C4`, through `RP1`)                                                         | a consumer assertion (`B5-C11`)                        |
+| K2     | consumer assertions (`A-γ-C1`, its own landing, `A-γ-C7`, `A5-C12`, `A5-C16`)                                                   | as before                                              |
+| K3     | a consumer assertion (`A-α-C5`)                                                                                                 | as before                                              |
+| TIE    | **internal assertions only** (`B5-C1`, `B5-C2`, `B5-C4`, through `RP1`)                                                         | a consumer assertion (`B5-C11`)                        |
+
+- **The fresh panel.** An outside reviewer who had read no test and no ledger wrote five defects
+  against G1's promises (`F1`–`F5`) and five against G2's (`H1`–`H5`), at `59fee0b`, each with a
+  probe of its own through the published entry that passed without the defect and failed with it.
+  The test files and the ledgers were not checked out in its tree. **Its blindness had one
+  exception**: after its list and probes were written and validated, a search of 0005 showed it the
+  Evidence cells of eleven rows. It changed no definition after that.
+
+| Defect | Promise | What it breaks                                                 | Caught by, at `59fee0b`                                                                              | Since `B5-C11`                                         |
+| ------ | ------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| F1     | receive | two addressable events under different `d` are two coordinates | **internal assertions only** (`B5-C1`, `B5-C2`, `B5-C4`)                                             | a consumer assertion (`B5-C11`), and the internal ones |
+| F2     | receive | kind 10000 is replaceable                                      | **internal assertions only** (`B5-C1`, `B5-C2`, `B5-C4`, `B5-C5`, `B5-C7`), not `RP1`                | a consumer assertion (`B5-C11`), and the internal ones |
+| F3     | ending  | a backward `CLOSED` ends only the backward leg                 | consumer assertions (`A-α-C2`, `A5-S4`, `A5-C18`, `A5-C29`, `A-ε-C19`, `C5-C8`), and an internal one | as before                                              |
+| F4     | ending  | a relay's refusal is reported as a refusal                     | consumer assertions (`A-ε-C1`, `A5-S4`, `A5-C18`, `A5-C29`), and an internal one                     | as before                                              |
+| F5     | ending  | the settle timer runs to the timeout                           | a consumer assertion (`B-α-C11`)                                                                     | as before                                              |
+
+- **Against G2's promises**, before G2, with the arm files the reviewer named for them: `H1`, a plan
+  read once and kept, consumer assertions (`C5-C8`, `C5-C9`) and internal ones; `H2`, a refresh
+  reusing the ids of the attempt before it, consumer assertions (`A5-C6`, `A5-C20`, `A5-S4`); `H3`, a
+  new attempt keeping the old forward leg, **only arms on no roster line** (`ES14`, `ES16`, `ES18`,
+  `ES19`); `H4`, an unmounted consumer's request not cancelled, a consumer assertion (`A5-C21`) and
+  internal ones; `H5`, the query client not cleared when the provider goes, **internal assertions
+  only** (`C5-C6`, `B5-C10`). These are G2's starting point.
+- **Detection:** no defect survived, so no run of the whole suite was needed. At `59fee0b`, 11 of 11
+  retained defects were caught, 7 by a consumer assertion, and 5 of 5 fresh ones in G1's promises,
+  3 by a consumer assertion. Since `B5-C11`, 10 of the 11 and all 5 are caught by a consumer
+  assertion.
+- **For the replacement promise, the plan's gap closed only with the closing PR.** The plan said it
+  had no consumer witness; #197 added `RP1` through the published entry, and its body said `K1`,
+  `TIE` and `S1` "each fail a consumer assertion (`RP1`)". By this record's rule they did not: `RP1`
+  was a supporting arm of three `internal` rows, so at `59fee0b` every defect in the promise — `S1`,
+  `K1`, `TIE`, `F1`, `F2` — counted as internal, and `F2` was not caught through the published
+  entry at all. The closing PR gave the promise a public row, `B5-C11`, landed by `RP1`, and
+  extended `RP1` to each kind where a class that replaces begins or ends.
+- **The seeds are kept** as `scripts/ledgers/trial-seeds.ts`, each held to an arm that catches it.
+- **Cost of the rounds:** one reviewer invocation to propose the fresh defects and probe them; 9.0
+  minutes of runs for the retained panel and 8.6 for the fresh one, baselines included; and 8.3
+  minutes of `trial-seeds`, its first run on the retained entries and its full run.
+
+**Cost.** **The third failure condition is met.** G1 spent 36 reviewer invocations and 22 repair
+rounds over five landings for a net `TBD` drop of 12, against the baseline's 13 and 5 over two
+landings for a drop of 6: above it per group, which is the condition, and also per landing (7.2 and
+4.4 against 6.5 and 2.5) and per row removed (3.0 and 1.83 against 2.17 and 0.83).
+
+- **13 of the 36 are second opinions**, asked under a rule the maintainer set on 2026-10-28, after
+  the baseline: that a question about a repair direction carries one. The baseline's landings have
+  none. Without them G1's invocations are 23, below the baseline per landing (4.6) and per row
+  (1.92) and above it per group. The repair rounds are above it however they are read, and they
+  drive the narrow passes. The scored figure stays 36.
+- **Ledger time**, as the bodies report it, is 95.7 minutes against the baseline's 13.3, and 146.9
+  with #203's runs on earlier candidates.
+- **The other conditions:** no seeded defect survived, and the legacy gaps G1 took are covered.
+  Whether a family recurs is first readable after G2.
+- **What follows** was decided on 2026-11-04, under "Decisions the trial needs": G2 goes on under
+  three changes to §2 and §3, and this measure is not rewritten.
+
+G2 and G3 are added here as each is done.
