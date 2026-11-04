@@ -153,9 +153,13 @@ A row landed during the trial writes four things in its Evidence cell:
 - the limitations.
 
 **From G2, which entries are the row's is said in the ledger and not in the cell**: each entry names
-the rows it is evidence of, in its `rows`, and the cell writes
-``**Ledger:** `ledger`, held to `ARM` and `ARM`.`` and names no entry anywhere. `CAT45` holds the
-cell against the ledger and the roster both ways. The cells landed in G1 are rewritten to that form.
+the rows it is evidence of, in its `rows` — it breaks the row's promise, or a control or an
+instrument the landing reads by — and the cell writes ``**Ledger:** `ledger`, held to `ARM` and `ARM`.``,
+naming every arm those entries are held to, the ones they `require` included, and no entry
+anywhere. `CAT45` holds the cell against the ledger and the roster both ways. It refuses an entry's
+id, or a prefix of one, anywhere in a trial cell's text, and a label, a row or a table it cannot
+read as one; entries described in words are the review's to see. The cells landed in G1 are
+rewritten to that form.
 
 **Aim for under 1 500 characters.** How the cell was reached — earlier arrangements, reviewers'
 edits, dates — goes in the PR body. Cells landed before the trial are left as they are.
@@ -249,7 +253,8 @@ bring back every step the trial removed.
   entry ids its cells listed, and a fifth in G2 would meet the second failure condition. §5 changes
   instead: the cell names its ledger and the arms, each entry names its rows, and `CAT45` holds the
   two against each other and against the roster. G1's 14 cells are rewritten to that form. Whether
-  the entries break every clause of a row's Then is still the review's to judge: `CAT45` reads the
+  the entries break every clause of a row's Then, and whether an entry breaks the row's promise or
+  a control or an instrument its landing reads by, is still the review's to judge: `CAT45` reads the
   citation, not the coverage.
 - **#202. A request lives as long as its provider.** A handle kept past `NostrApp` keeps what it is
   already promised: the answer it holds; a `refresh()` outstanding at the teardown resolves

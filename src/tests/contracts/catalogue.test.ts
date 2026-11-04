@@ -966,8 +966,8 @@ describe('the production contract bridge', () => {
       );
     expect(citationFaults(CATALOGUE, ledgers), 'the cells, against the ledgers').toEqual([]);
     // **The premise**: the trial's cells were read, and each cites a ledger.
-    const cited = [...implementationCells(CATALOGUE)].flatMap(
-      ([row, cell]) => citationsOf(row, cell).citations
+    const cited = [...implementationCells(CATALOGUE).cells].flatMap(
+      ([row, cell]) => citationsOf(row, cell.markdown).citations
     );
     expect(cited.length, 'the premise: the trial cells were read').toBeGreaterThanOrEqual(14);
 
@@ -991,8 +991,12 @@ describe('the production contract bridge', () => {
         '```',
         ''
       ].join('\n');
-    const entry = (id: string, arm: string, rows?: string[]): CitedEntry =>
-      rows === undefined ? { id, arm } : { id, arm, rows };
+    const entry = (id: string, arm: string, rows?: string[], requires?: string[]): CitedEntry => ({
+      id,
+      arm,
+      ...(rows === undefined ? {} : { rows }),
+      ...(requires === undefined ? {} : { requires })
+    });
     const ledger = (
       entries: CitedEntry[] = [entry('C1-a', 'XA1', ['X1-C1']), entry('C1-b', 'XA1', ['X1-C1'])],
       retired: CitedEntry[] = []
@@ -1089,16 +1093,147 @@ describe('the production contract bridge', () => {
         refuses(
           citationFaults(record(CELL.replace('none.', 'as `C1-` measures.')), [ledger()]),
           'names C1-, the entries beginning so of x-ledger'
+        ),
+        // **Ids a reader reads outside code**: in prose, escaped, in a link's
+        // target and in an image's text; and a prefix ending where a word does.
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as C1-b measures.')), [ledger()]),
+          'names C1-b, an entry of x-ledger'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as C1\\-b measures.')), [ledger()]),
+          'names C1-b, an entry of x-ledger'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as [the run](https://x.test/C1-b) does.')), [
+            ledger()
+          ]),
+          'names C1-b, an entry of x-ledger'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as ![C1-b](https://x.test/a.png) shows.')), [
+            ledger()
+          ]),
+          'names C1-b, an entry of x-ledger'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as `C1-a` measures.')), [
+            ledger([entry('C1-a-b', 'XA1', ['X1-C1'])])
+          ]),
+          'names C1-a, the entries beginning so of x-ledger'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('none.', 'as `C1-a` measures.')), [
+            ledger([entry('C1-a@XA1', 'XA1', ['X1-C1'])])
+          ]),
+          'names C1-a, the entries beginning so of x-ledger'
+        ),
+        // **A trial cell is one with any label**, and is read as one: its
+        // ledger part owed, its text searched.
+        refuses(
+          citationFaults(record('TBD — **Limitations:** none.'), [ledger([])]),
+          'a trial cell with no'
+        ),
+        ((found) =>
+          found.length === 2 &&
+          found.some((one) => one.includes('a trial cell with no')) &&
+          found.some((one) => one.includes('names C1-b, an entry of x-ledger')))(
+          citationFaults(record('TBD — **Where and when:** x, as `C1-b` measures.'), [
+            ledger([entry('C1-b', 'XB1')])
+          ])
+        ),
+        // **The record read whole**, so a citation is not lost to its layout.
+        refuses(
+          citationFaults(
+            record().replace(
+              '| `X1-C2` |',
+              '| `X1-C1` | X1 | behavior | a given | a then | SW3 | TBD |\n| `X1-C2` |'
+            ),
+            [ledger()]
+          ),
+          'X1-C1: a row twice'
+        ),
+        refuses(
+          citationFaults(record('TBD | extra'), [ledger([])]),
+          'X1-C1: a row of 8 cells under 7 headers'
+        ),
+        refuses(
+          citationFaults(
+            `${record()}\n| Promise | Implementation test |\n| --- | --- |\n| \`X1-C3\` | TBD — **Read:** x. |\n`,
+            [ledger()]
+          ),
+          "Read, outside a contract row's Implementation test cell"
+        ),
+        refuses(
+          citationFaults(
+            `${record()}\n| Read: | Implementation test |\n| --- | --- |\n| a | b |\n`,
+            [ledger()]
+          ),
+          "Read, outside a contract row's Implementation test cell"
+        ),
+        refuses(
+          citationFaults(`${record()}\nA paragraph. **Ledger**: \`x-ledger\`, held to \`XA1\`.\n`, [
+            ledger()
+          ]),
+          "Ledger, outside a contract row's Implementation test cell"
+        ),
+        refuses(
+          citationFaults(`#### **Read**: a heading\n\n${record()}`, [ledger()]),
+          "Read, outside a contract row's Implementation test cell"
+        ),
+        refuses(
+          citationFaults(
+            `\`\`\`md\n**Ledger:** \`x-ledger\`, held to \`XA1\`.\n\`\`\`\n\n${record()}`,
+            [ledger()]
+          ),
+          "Ledger, outside a contract row's Implementation test cell"
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('**Read:**', '**Read**:')), [ledger()]),
+          'Read written otherwise than **Read:**'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('**Read:**', '**Read** :')), [ledger()]),
+          'Read written otherwise than **Read:**'
+        ),
+        refuses(
+          citationFaults(record(CELL.replace('**Read:**', '[**Read:**](https://x.test)')), [
+            ledger()
+          ]),
+          'Read written otherwise than **Read:**'
+        ),
+        // **The arms an entry requires** are arms it is held to.
+        refuses(
+          citationFaults(record(), [ledger([entry('C1-a', 'XA1', ['X1-C1'], ['XA2'])])]),
+          'and its entries there are held to XA1, XA2'
+        ),
+        refuses(
+          citationFaults(record(), [
+            ledger([...ledger().entries, entry('C1-c', 'XB1', undefined, ['XA1'])])
+          ]),
+          'C1-c is held to XA1, which X1-C1 cites, and names no row'
         )
       ],
       'the checker refuses each fault on its own'
-    ).toEqual(Array.from({ length: 19 }, () => true));
+    ).toEqual(Array.from({ length: 39 }, () => true));
     expect(
       citationFaults(
-        record(cell('`x-ledger`, held to `XA1` and `XA2`; `y-ledger`, held to `XA1`.')),
-        [ledger([...ledger().entries, entry('C1-c', 'XA2', ['X1-C1'])]), other]
+        record(
+          cell('`x-ledger`, held to `XA1` and `XA2`; `y-ledger`, held to `XA1`.').replace(
+            'none.',
+            'none beyond `X1-C2`, and `subLedger: none`.'
+          )
+        ),
+        [
+          ledger([
+            ...ledger().entries,
+            entry('C1-c', 'XA2', ['X1-C1']),
+            entry('X1-C2-a', 'XA1', ['X1-C1'], ['XA2'])
+          ]),
+          other
+        ]
       ),
-      'two ledgers, and two arms written with "and", read clean'
+      'two ledgers, two arms written with "and", an entry requiring one, a row whose id entries begin with, and a name ending in a label, read clean'
     ).toEqual([]);
   });
 });
