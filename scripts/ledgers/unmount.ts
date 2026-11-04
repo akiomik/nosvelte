@@ -8,15 +8,16 @@
  *   provider is mounted, whatever its relays, and none once it has gone;
  * - `C6-C9` on `UM4`, with `UM5`: no collection timer and no entry left by a
  *   provider torn down, its request settled or in flight;
- * - `A15-C3` on `AM1`, with `AM2`, `AM3` and `AM4`: no module reads a client
- *   it was not handed;
+ * - `A15-C3` on `AM1`, with `AM2` to `AM5`: no module reads a client it was
+ *   not handed, and none is put where a descendant could take it;
  * - `A-ε-C16` on `SA1`, with `SA2`: a standalone request with no verifier is
  *   refused before a relay is asked;
  * - `C11-C18` on `RX4`: a transport the caller disposed is refused as the
  *   caller's.
  *
  * An id begins with the arm its entry is held to, and each entry names its row
- * in `rows`. Every entry edits the library.
+ * in `rows`. Every entry edits the library; `D7-` edits the dependency too,
+ * in the ledger's copy of it.
  */
 import type { Edit, Ledger } from '../ledger.ts';
 
@@ -25,6 +26,17 @@ const CONTEXT = 'src/lib/v1/context.svelte.ts';
 const ENGINE = 'src/lib/v1/useStreamedReq.svelte.ts';
 const PROVIDER = 'src/lib/v1/components/NostrApp.svelte';
 const STREAM = 'src/lib/v1/stream.ts';
+/** The cache of the query-core copy `tanstack-svelte-query-v6` resolves, 5.101.4, as Vitest loads it. */
+const QUERY_CACHE =
+  'node_modules/tanstack-svelte-query-v6/node_modules/@tanstack/query-core/build/modern/queryCache.js';
+
+/** The token a provider puts in the framework's context, as it ships. */
+const TOKEN = "  const token: ProviderToken = Object.freeze({ nosvelte: 'provider' });";
+/** The token, carrying `members` beside its tag. */
+const tokenWith = (members: string): string =>
+  `  const token = Object.freeze({ nosvelte: 'provider', ${members} }) as unknown as ProviderToken;`;
+/** The engine's query, created on the client its accessor hands it. */
+const CREATED = '  const query = createQuery(queryOptions, ownedClient);';
 
 /** The request's query, created on the client the engine resolved. */
 const CREATED_ON_ITS_CLIENT: Edit = {
@@ -65,9 +77,10 @@ export default {
       UM5: 1.9,
       AM1: 2.1,
       AM2: 2.2,
-      AM3: 2.4,
-      AM4: 3.2,
+      AM3: 2.2,
+      AM4: 3.0,
       SA1: 1.8,
+      AM5: 2.0,
       SA2: 1.6,
       RX4: 2.0
     }
@@ -80,6 +93,20 @@ export default {
       rows: ['C6-C3'],
       describe: 'a provider torn down leaves its client mounted, so its two listeners stay',
       edits: [{ file: CLIENT, from: '      client.unmount();\n', to: '' }]
+    },
+    {
+      id: 'UM2-the-client-never-mounted',
+      arm: 'UM2',
+      requires: ['UM3'],
+      rows: ['C6-C3'],
+      describe: 'a provider never mounts its client, so it holds no listener while it stands',
+      edits: [
+        {
+          file: CLIENT,
+          from: '  $effect(() => {\n    client.mount();\n',
+          to: '  $effect(() => {\n'
+        }
+      ]
     },
     {
       id: 'UM2-a-client-per-relay-list',
@@ -122,6 +149,25 @@ export default {
       rows: ['C6-C9'],
       describe: 'a provider torn down does not clear its cache',
       edits: [{ file: CLIENT, from: '      client.clear();\n', to: '' }]
+    },
+    {
+      id: 'D7-the-removal-keeps-its-timer',
+      arm: 'UM4',
+      rows: ['C6-C9'],
+      describe:
+        'the dependency’s cache lets a settled entry go without clearing its collection timer, and the teardown destroys late only the fetches still in flight, so nothing of the library’s clears it either',
+      edits: [
+        {
+          file: QUERY_CACHE,
+          from: '    if (queryInMap) {\n      query.destroy();\n',
+          to: '    if (queryInMap) {\n'
+        },
+        {
+          file: CLIENT,
+          from: '        void query.promise?.finally(() => query.destroy()).catch(() => undefined);\n',
+          to: "        if (query.state.fetchStatus === 'fetching')\n          void query.promise?.finally(() => query.destroy()).catch(() => undefined);\n"
+        }
+      ]
     },
     {
       id: 'AM1-the-ambient-client-consulted',
@@ -174,6 +220,36 @@ export default {
       ]
     },
     {
+      id: 'AM3-the-client-behind-a-deeper-path',
+      arm: 'AM3',
+      rows: ['A15-C3'],
+      describe:
+        'the token holds the client in an object it reaches first six levels down and then from the token itself',
+      edits: [
+        {
+          file: CONTEXT,
+          from: TOKEN,
+          to: `  const services = { client: context.client };\n${tokenWith('debug: { a: { b: { c: { d: { services } } } } }, services')}`
+        }
+      ]
+    },
+    {
+      id: 'AM3-the-token-resolves-the-context',
+      arm: 'AM3',
+      rows: ['A15-C3'],
+      describe: 'the token carries a resolver of the provider’s context in place of the side table',
+      edits: [{ file: CONTEXT, from: TOKEN, to: tokenWith('resolve: () => context') }]
+    },
+    {
+      id: 'AM3-the-client-in-a-map',
+      arm: 'AM3',
+      rows: ['A15-C3'],
+      describe: 'the token carries a `Map` that holds the provider’s client',
+      edits: [
+        { file: CONTEXT, from: TOKEN, to: tokenWith("held: new Map([['client', context.client]])") }
+      ]
+    },
+    {
       id: 'AM1-no-library-defaults',
       arm: 'AM1',
       requires: ['AM2'],
@@ -220,6 +296,49 @@ export default {
       ]
     },
     {
+      id: 'AM4-a-reader-taken-by-element',
+      arm: 'AM4',
+      rows: ['A15-C3'],
+      describe:
+        'a module the library ships reads the query library’s context through a namespace of the framework, its reader taken by element',
+      edits: [
+        {
+          file: CONTEXT,
+          from: "import { getContext, setContext } from 'svelte';",
+          to: "import * as framework from 'svelte';\nimport { getContext, setContext } from 'svelte';\nexport const peek = (): unknown => framework['getContext']('$$_queryClient');"
+        }
+      ]
+    },
+    {
+      id: 'AM4-an-accessor-that-may-hand-no-client',
+      arm: 'AM4',
+      requires: ['AM5'],
+      rows: ['A15-C3'],
+      describe:
+        'the engine hands its query the client a request brings, typed to be absent when it brings none',
+      edits: [
+        {
+          file: ENGINE,
+          from: CREATED,
+          to: '  const query = createQuery(queryOptions, (): QueryClient | undefined => runtime.clientOf());'
+        }
+      ]
+    },
+    {
+      id: 'AM5-the-missing-client-read-from-context',
+      arm: 'AM5',
+      rows: ['A15-C3'],
+      describe:
+        'the engine hands its query the client a request brings, cast to be present, so one that brings none is created on the ambient client',
+      edits: [
+        {
+          file: ENGINE,
+          from: CREATED,
+          to: '  const query = createQuery(queryOptions, () => runtime.clientOf() as QueryClient);'
+        }
+      ]
+    },
+    {
       id: 'SA1-fails-open',
       arm: 'SA1',
       rows: ['A-ε-C16'],
@@ -260,6 +379,19 @@ export default {
       ]
     },
     {
+      id: 'SA1-the-refusal-denies-the-provider',
+      arm: 'SA1',
+      rows: ['A-ε-C16'],
+      describe: 'the refusal names both ways out and denies one of them',
+      edits: [
+        {
+          file: ENGINE,
+          from: NO_VERIFIER_WORDS,
+          to: "      'nosvelte: this request has no signature verifier. You must pass `verifyEvent` even inside a `NostrApp` provider.'"
+        }
+      ]
+    },
+    {
       id: 'SA2-the-providers-verifier-not-carried',
       arm: 'SA2',
       rows: ['A-ε-C16'],
@@ -269,6 +401,20 @@ export default {
           file: ENGINE,
           from: '          verifierOf: () => inputs.verifyEvent,',
           to: '          verifierOf: () => undefined,'
+        }
+      ]
+    },
+    {
+      id: 'RX4-the-disposal-read-as-no-relay',
+      arm: 'RX4',
+      rows: ['C11-C18'],
+      describe:
+        'a `refresh()` reads a transport the caller disposed as one with no relay to ask, and resolves rather than rejects',
+      edits: [
+        {
+          file: ENGINE,
+          from: "      const asked = requestTargets(transport, request.scope);\n      if (planned === 'defer' || asked.length === 0) {",
+          to: "      const asked = safely(() => requestTargets(transport, request.scope)) ?? [];\n      if (planned === 'defer' || asked.length === 0) {"
         }
       ]
     },

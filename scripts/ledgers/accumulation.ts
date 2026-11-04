@@ -11,10 +11,9 @@
  *   on, nothing it was delivered adds an entry for its key.
  *
  * An id begins with the arm its entry is held to, and each entry names its row
- * in `rows`. Every entry edits the library, and three of `A11-C10`'s take away
+ * in `rows`. Every entry edits the library, and two of `A11-C10`'s take away
  * a premise its landing reads by rather than its promise: that the doors
- * delegate at all, that the backlog's marker is queued behind the iterator,
- * and that the abort leaves the queue as it was.
+ * delegate at all, and that the backlog's marker is queued behind the iterator.
  */
 import type { Edit, Ledger } from '../ledger.ts';
 
@@ -38,9 +37,9 @@ const ADAPTER_A =
 /**
  * Adapter A over a client whose writes the `defer` expression decides, given
  * the write and whether the chunk it is for is the first event: deferred
- * writes are made 20 ms later, on the host's timer.
+ * writes are made 20 ms later, on the host's timer, or by `later` when given.
  */
-const adapterADeferring = (defer: string): string =>
+const adapterADeferring = (defer: string, later = 'setTimeout(write, 20)'): string =>
   `export const streamedQueryAccumulator: StreamAccumulator = ({ initialValue, reducer, streamFn }) => {
   let last: string | undefined;
   const helper = experimental_streamedQuery<Chunk, CachedEventSet, QueryKey>({
@@ -61,7 +60,7 @@ const adapterADeferring = (defer: string): string =>
         if (name === 'setQueryData')
           return (...args: Parameters<typeof target.setQueryData>) => {
             const write = () => target.setQueryData(...args);
-            if (${defer}) setTimeout(write, 20);
+            if (${defer}) ${later};
             else write();
           };
         const value: unknown = Reflect.get(target, name, target);
@@ -81,6 +80,20 @@ const adapterADeferring = (defer: string): string =>
 /** Adapter B's write of one chunk. */
 const ADAPTER_B_WRITE =
   '      context.client.setQueryData<CachedEventSet>(context.queryKey, (prev) =>\n        reducer(prev ?? initialValue, chunk)\n      );';
+/**
+ * An accumulator's listener that puts back what the entry held when the cache
+ * lets it go, inside the removal's own notification, and then stops listening.
+ */
+const PUT_BACK = `    const putBack = context.client.getQueryCache().subscribe((event) => {
+      if (event.type !== 'removed') return;
+      if (JSON.stringify(event.query.queryKey) !== JSON.stringify(context.queryKey)) return;
+      putBack();
+      const kept = event.query.state.data as CachedEventSet | undefined;
+      if (kept !== undefined) context.client.setQueryData<CachedEventSet>(context.queryKey, kept);
+    });`;
+/** The set named `set`, its events copies with their content emptied: as many, and not as delivered. */
+const altered = (set: string): string =>
+  `{\n        ...${set},\n        entries: new Map(\n          [...${set}.entries].map(([id, packet]) => [id, { ...packet, event: { ...packet.event, content: '' } }])\n        )\n      }`;
 /** The engine forwarding query-core's cancellation into the invocation. */
 const UNLINKED: Edit = {
   file: ENGINE,
@@ -100,7 +113,7 @@ export default {
     measured:
       'each arm alone and passing, process start included, one run at a time on a shared 10-core machine, on the tree that added this ledger',
     seconds: {
-      LS1: 2.2,
+      LS1: 1.9,
       LS2: 2.2,
       LS3: 2.0,
       LS4: 2.0,
@@ -111,8 +124,8 @@ export default {
       LS9: 1.5,
       LS10: 1.5,
       LS11: 1.8,
-      LW1: 2.4,
-      LW2: 2.3
+      LW1: 2.1,
+      LW2: 2.1
     }
   },
   entries: [
@@ -402,7 +415,7 @@ export default {
       arm: 'LS3',
       rows: ['A11-C10'],
       describe:
-        'the premise: the abort empties the machine’s queue, so the withdrawal is not what refuses the marker',
+        'the abort empties the machine’s queue, so the machine is not left as it was and the withdrawal is not what refuses the marker',
       edits: [
         {
           file: MACHINE,
@@ -428,6 +441,19 @@ export default {
           file: ACCUMULATE,
           from: ADAPTER_A,
           to: adapterADeferring("last === 'event' && events++ > 0")
+        }
+      ]
+    },
+    {
+      id: 'LW1-later-events-not-written',
+      arm: 'LW1',
+      rows: ['A11-C19'],
+      describe: 'adapter A writes the first event and none after it',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: ADAPTER_A,
+          to: adapterADeferring("last === 'event' && events++ > 0", 'void write')
         }
       ]
     },
@@ -478,12 +504,100 @@ export default {
       ]
     },
     {
+      id: 'LW2-later-events-not-written',
+      arm: 'LW2',
+      rows: ['A11-C19'],
+      describe: 'adapter B writes the first event and none after it',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: '    let cancelled = false;\n',
+          to: '    let cancelled = false;\n    let events = 0;\n'
+        },
+        {
+          file: ACCUMULATE,
+          from: ADAPTER_B_WRITE,
+          to: `      if (chunk.type !== 'event' || events++ === 0)\n  ${ADAPTER_B_WRITE.split('\n').join('\n  ')}`
+        }
+      ]
+    },
+    {
       id: 'LW2-the-stream-outlives-the-collection',
       arm: 'LW2',
       rows: ['A11-C19'],
       describe:
         'query-core’s cancellation is not forwarded into the invocation, and adapter B reads past its own',
       edits: [UNLINKED, { file: ACCUMULATE, from: '      if (cancelled) break;\n', to: '' }]
+    },
+    {
+      id: 'LW1-the-removal-written-back',
+      arm: 'LW1',
+      rows: ['A11-C19'],
+      describe:
+        'adapter A puts back what the entry held when the cache lets it go, inside the removal’s own notification',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: ADAPTER_A,
+          to: `export const streamedQueryAccumulator: StreamAccumulator = ({ initialValue, reducer, streamFn }) => {
+  const helper = experimental_streamedQuery<Chunk, CachedEventSet, QueryKey>({
+    refetchMode: 'append',
+    initialValue,
+    reducer,
+    streamFn
+  });
+  return (context) => {
+${PUT_BACK}
+    return helper(context);
+  };
+};`
+        }
+      ]
+    },
+    {
+      id: 'LW2-the-removal-written-back',
+      arm: 'LW2',
+      rows: ['A11-C19'],
+      describe:
+        'adapter B puts back what the entry held when the cache lets it go, inside the removal’s own notification',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: '    const stream = await streamFn(streamContext);\n',
+          to: `    const stream = await streamFn(streamContext);\n${PUT_BACK}\n`
+        }
+      ]
+    },
+    {
+      id: 'LW1-the-events-folded-altered',
+      arm: 'LW1',
+      rows: ['A11-C19'],
+      describe:
+        'adapter A folds copies of the events with their content emptied, as many as were delivered',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: ADAPTER_A,
+          to: ADAPTER_A.replace(
+            '    reducer,\n',
+            `    reducer: (acc: CachedEventSet, chunk: Chunk) => {\n      const next = reducer(acc, chunk);\n      return ${altered('next')};\n    },\n`
+          )
+        }
+      ]
+    },
+    {
+      id: 'LW2-the-events-folded-altered',
+      arm: 'LW2',
+      rows: ['A11-C19'],
+      describe:
+        'adapter B writes copies of the events with their content emptied, as many as were delivered',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: ADAPTER_B_WRITE,
+          to: `      context.client.setQueryData<CachedEventSet>(context.queryKey, (prev) => {\n        const next = reducer(prev ?? initialValue, chunk);\n        return ${altered('next')};\n      });`
+        }
+      ]
     }
   ]
 } satisfies Ledger;
