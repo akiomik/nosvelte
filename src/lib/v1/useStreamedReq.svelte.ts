@@ -552,7 +552,7 @@ function resolveRequest(opts: {
   if (firstIncomplete !== undefined) {
     // **A request with no provider and no owner input of its own refuses as
     // what it is.** This named the first missing input — `client` — with a
-    // remedy from the standalone seam `A16` withdrew: a v1 consumer cannot
+    // remedy from the standalone seam `A16` keeps internal: a v1 consumer cannot
     // spell `client`, cannot "build the hook again bringing no owner input"
     // (they brought none), and was told to fix a field the published descriptor
     // does not have. An adversarial pass read the message against `0004`. The
@@ -1437,10 +1437,9 @@ type OwnerInputs = {
  * input is served by an arm that reads **no field of any provider** — it asks
  * which side it is on, takes the relays the caller's own client carries when
  * no scope is given, treats an absent clock as no expiry judgement, and
- * refuses the four it cannot resolve. `A16` withdrew that arm from v1: nothing
- * published takes an owner input and the port keeps no constructor for one, so
- * what follows is a measurement of this branch rather than a rule a port
- * implements. Requiring all seven was
+ * refuses the four it cannot resolve. `A16` keeps that arm in v1 as an internal
+ * seam that nothing published reaches, so what follows is owed on `A16`'s
+ * internal rows rather than a rule a consumer can reach. Requiring all seven was
  * the first answer and it is the wrong one: it would make a caller write a
  * clock and a scope whose absence has a meaning, and completeness is not what
  * keeps the two apart. Neither arm can read the other's source — the provider
