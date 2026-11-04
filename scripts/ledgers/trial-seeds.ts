@@ -53,23 +53,22 @@ export default {
     'src/tests/contracts/scope.test.ts'
   ],
   calibration: {
-    measured:
-      "one run of each arm's duration in a single Vitest run at the commit that added this ledger, plus 3.5 s for a run's start-up",
+    measured: 'the mean of each run in a full run at e207622, one at a time.',
     seconds: {
-      AH1: 7.5,
-      CS4: 3.5,
-      CW3: 8.2,
-      DT1: 4.4,
-      ES19: 3.5,
-      FL1: 3.9,
-      RJ2: 4.4,
-      RJ5: 4.1,
-      RL1: 8.9,
-      RP1: 4.5,
-      RS4: 7.6,
-      RX8: 3.8,
-      ST1: 14.3,
-      WB1: 9.0
+      AH1: 11.6,
+      CS4: 10.7,
+      CW3: 15.8,
+      DT1: 11.3,
+      ES19: 11.2,
+      FL1: 11.1,
+      RJ2: 38.0,
+      RJ5: 11.1,
+      RL1: 18.7,
+      RP1: 12.8,
+      RS4: 13.7,
+      RX8: 10.7,
+      ST1: 20.2,
+      WB1: 16.5
     }
   },
   entries: [
