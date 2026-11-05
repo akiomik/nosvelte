@@ -40,18 +40,25 @@ const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
 const A_TURN_MS = 200;
 
 /**
- * The sentence that offers the two ways out, each as enough on its own.
- * **Read as one sentence, and not as a pattern of names**: a refusal that names
- * both can still deny one — "you must pass `verifyEvent` even inside
- * `NostrApp`", or an "either … or" whose two arms both ask for the option —
- * and every pattern tried was satisfied by one of those. So the arm supports
- * this wording and refuses every other.
+ * The refusal that offers the two ways out, each as enough on its own, as the
+ * request delivers it: the failure keeps a message's first 200 units and marks
+ * the rest cut.
+ * **Read whole, and not as a pattern of names or a sentence it holds**: a
+ * refusal that names both can still deny one — "you must pass `verifyEvent`
+ * even inside `NostrApp`", an "either … or" whose two arms both ask for the
+ * option, or the offering sentence itself quoted as advice to ignore — and
+ * every pattern tried, the sentence alone among them, was satisfied by one of
+ * those. So the arm supports this message and refuses every other, and those
+ * refusals are the ledger's entries rather than a control here: against one
+ * message, every other reads alike.
  */
-const THE_WAYS_OUT =
-  'Either use it inside a `NostrApp` provider, which supplies one, or pass `verifyEvent` explicitly.';
+const THE_REFUSAL =
+  'nosvelte: this request has no signature verifier, so nothing would check the ' +
+  'events it returns. Either use it inside a `NostrApp` provider, which supplies ' +
+  'one, or pass `verifyEvent` explicitly. Tests … (cut)';
 
-/** Whether `message` offers the two ways out, in {@link THE_WAYS_OUT}'s words. */
-const offersBoth = (message: string): boolean => message.includes(THE_WAYS_OUT);
+/** Whether `message` offers the two ways out, in {@link THE_REFUSAL}'s words. */
+const offersBoth = (message: string): boolean => message === THE_REFUSAL;
 
 /** The `REQ`s a relay was sent. */
 const reqsTo = (server: WS): unknown[][] =>
@@ -99,18 +106,12 @@ describe('A-ε-C16: a request built with neither a verifier nor a provider is re
         asked: reqsTo(server).length,
         status: state.status,
         offersBoth: offersBoth(message),
-        // **The reading's control**: refusals that name both and deny one.
-        refusesTheDenials: [
-          'You must pass `verifyEvent` even inside a `NostrApp` provider.',
-          'Either pass `verifyEvent` explicitly, or use `NostrApp` and still pass `verifyEvent` explicitly.'
-        ].map(offersBoth),
         // **The instrument's control**: the count covers four invocations.
         invocations: entry()?.fetchFailureCount
       }).toEqual({
         asked: 0,
         status: 'error',
         offersBoth: true,
-        refusesTheDenials: [false, false],
         invocations: 4
       });
     } finally {

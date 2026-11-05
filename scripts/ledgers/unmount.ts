@@ -406,6 +406,20 @@ export default {
       ]
     },
     {
+      id: 'SA1-the-ways-out-quoted-as-obsolete',
+      arm: 'SA1',
+      rows: ['A-ε-C16'],
+      describe:
+        'the refusal keeps the sentence that offers the two ways out, as advice to ignore, and asks for the option inside the provider',
+      edits: [
+        {
+          file: ENGINE,
+          from: NO_VERIFIER_WORDS,
+          to: "      'nosvelte: this request has no signature verifier. Ignore the obsolete advice: Either use it inside a `NostrApp` provider, which supplies one, or pass `verifyEvent` explicitly. You must pass `verifyEvent` even inside a `NostrApp` provider.'"
+        }
+      ]
+    },
+    {
       id: 'SA2-the-providers-verifier-not-carried',
       arm: 'SA2',
       rows: ['A-ε-C16'],
