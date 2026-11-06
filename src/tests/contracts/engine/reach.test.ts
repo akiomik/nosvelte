@@ -1845,6 +1845,7 @@ describe('the spike’s reachability witnesses', () => {
     held.destroy();
   }, 20_000);
 
+  // @contracts C11-C18
   it('RX4: a client the caller disposed is refused as the seam it is, on both paths', async () => {
     const { rxNostr, server, held } = request('rx4');
     respondWithEose(server, await waitForReq(server));
