@@ -141,8 +141,15 @@ function counting(
     });
 }
 
-/** How the events reach the request: while it stands, after it has gone, or across its teardown. */
-type Delivery = 'while the request stands' | 'after the entry is collected' | 'across the teardown';
+/**
+ * How the events reach the request: while it stands, after it has gone,
+ * across its teardown, or in hand as its entry is removed.
+ */
+type Delivery =
+  | 'while the request stands'
+  | 'after the entry is collected'
+  | 'across the teardown'
+  | 'in hand as the entry is removed';
 
 interface Case {
   readonly delivery: Delivery;
@@ -154,7 +161,8 @@ const CASES: readonly Case[] = [
   { delivery: 'while the request stands', events: 2 },
   { delivery: 'after the entry is collected', events: 1 },
   { delivery: 'across the teardown', events: 1 },
-  { delivery: 'across the teardown', events: 2 }
+  { delivery: 'across the teardown', events: 2 },
+  { delivery: 'in hand as the entry is removed', events: 1 }
 ];
 
 const caseName = ({ delivery, events }: Case): string =>
@@ -193,10 +201,12 @@ async function delivered(inner: StreamAccumulator, clock: Clock, each: Case) {
   const attempts = createAttemptRegistry();
   let taken = 0;
   let onAsked: ((count: number) => void) | undefined;
+  let onTaken: ((count: number) => void) | undefined;
   const accumulator = counting(
     inner,
     (count) => {
       taken = count;
+      onTaken?.(count);
     },
     (count) => onAsked?.(count)
   );
@@ -252,6 +262,22 @@ async function delivered(inner: StreamAccumulator, clock: Clock, each: Case) {
       destroy();
       if (!(await within(clock, () => removed))) return 'the entry was never collected';
       send(1);
+    } else if (each.delivery === 'in hand as the entry is removed') {
+      // **Torn down as the event is handed over**: the pull has its value
+      // and the accumulator has not yet had it, and the entry is removed in
+      // the same turn — the call the collection itself makes — as a
+      // provider's teardown clears its client. Query-core cancels the fetch
+      // as it destroys the entry, so what is read is what is done with an
+      // event already in hand once the fetch is cancelled: the engine's
+      // forwarding of the cancellation and the accumulator's own stop each
+      // stand between it and the cache here, and each is needed alone.
+      onTaken = (count) => {
+        if (count !== each.events) return;
+        destroy();
+        client.getQueryCache().remove(entry);
+      };
+      send(1);
+      if (!(await within(clock, () => removed))) return 'the entry was never collected';
     } else {
       // **Torn down the moment the accumulator has handled its last take**:
       // when it comes back for the next chunk, so whatever it does at once

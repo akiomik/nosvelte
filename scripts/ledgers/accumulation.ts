@@ -11,7 +11,8 @@
  *   on, nothing it was delivered adds an entry for its key.
  *
  * An id begins with the arm its entry is held to, and each entry names its row
- * in `rows`. Every entry edits the library, and two of `A11-C10`'s take away
+ * in `rows`. Every entry but `D8-` edits the library, and `D8-` edits the
+ * dependency, in the ledger's copy of it. Two of `A11-C10`'s take away
  * a premise its landing reads by rather than its promise: that the doors
  * delegate at all, and that the backlog's marker is queued behind the iterator.
  */
@@ -22,6 +23,9 @@ const ENGINE = 'src/lib/v1/useStreamedReq.svelte.ts';
 const STREAM = 'src/lib/v1/stream.ts';
 const MACHINE = 'src/lib/v1/machine.ts';
 const ACCUMULATE = 'src/lib/v1/accumulate.ts';
+/** The streamed helper of the query-core copy `tanstack-svelte-query-v6` resolves, 5.101.4, as Vitest loads it. */
+const STREAMED_QUERY =
+  'node_modules/tanstack-svelte-query-v6/node_modules/@tanstack/query-core/build/modern/streamedQuery.js';
 
 /** The read the three doors share: the iterator, while the capability is opened. */
 const SHARED_READ =
@@ -547,6 +551,66 @@ export default {
           to: `      if (chunk.type !== 'event' || events++ === 0)\n  ${ADAPTER_B_WRITE.split('\n').join('\n  ')}`
         }
       ]
+    },
+    {
+      id: 'LW1-the-helper-handed-a-signal-nothing-aborts',
+      arm: 'LW1',
+      rows: ['A11-C19'],
+      describe:
+        'adapter A’s helper is handed a signal nothing aborts, so it writes an event it already holds after the fetch is cancelled',
+      edits: [
+        {
+          file: ACCUMULATE,
+          from: ADAPTER_A,
+          to: "export const streamedQueryAccumulator: StreamAccumulator = ({ initialValue, reducer, streamFn }) => {\n  const helper = experimental_streamedQuery<Chunk, CachedEventSet, QueryKey>({\n    refetchMode: 'append',\n    initialValue,\n    reducer,\n    streamFn\n  });\n  return (context) =>\n    helper(\n      Object.defineProperties({} as typeof context, {\n        client: { get: () => context.client },\n        queryKey: { get: () => context.queryKey },\n        meta: { get: () => context.meta },\n        signal: { value: new AbortController().signal }\n      })\n    );\n};"
+        }
+      ]
+    },
+    {
+      id: 'D8-the-helper-writes-before-it-checks',
+      arm: 'LW1',
+      rows: ['A11-C19'],
+      describe:
+        'the dependency’s streamed helper writes each event before it reads whether the fetch was cancelled, so an event it already holds is written after the cancellation',
+      edits: [
+        {
+          file: STREAMED_QUERY,
+          from: '    for await (const chunk of stream) {\n      if (cancelled) {\n        break;\n      }\n      if (isReplaceRefetch) {\n        result = reducer(result, chunk);\n      } else {\n        context.client.setQueryData(\n          context.queryKey,\n          (prev) => reducer(prev === void 0 ? initialValue : prev, chunk)\n        );\n      }\n    }\n',
+          to: '    for await (const chunk of stream) {\n      if (isReplaceRefetch) {\n        result = reducer(result, chunk);\n      } else {\n        context.client.setQueryData(\n          context.queryKey,\n          (prev) => reducer(prev === void 0 ? initialValue : prev, chunk)\n        );\n      }\n      if (cancelled) {\n        break;\n      }\n    }\n'
+        }
+      ]
+    },
+    {
+      id: 'LW2-reads-past-its-own-stop',
+      arm: 'LW2',
+      rows: ['A11-C19'],
+      describe:
+        'adapter B never reads whether the fetch was cancelled, so it writes an event it already holds',
+      edits: [{ file: ACCUMULATE, from: '      if (cancelled) break;\n', to: '' }]
+    },
+    {
+      id: 'LW2-the-check-after-the-write',
+      arm: 'LW2',
+      rows: ['A11-C19'],
+      describe:
+        'adapter B writes each event before it reads whether the fetch was cancelled, so an event it already holds is written after the cancellation',
+      edits: [
+        { file: ACCUMULATE, from: '      if (cancelled) break;\n\n', to: '' },
+        {
+          file: ACCUMULATE,
+          from: ADAPTER_B_WRITE + '\n    }\n',
+          to: ADAPTER_B_WRITE + '\n      if (cancelled) break;\n    }\n'
+        }
+      ]
+    },
+    {
+      id: 'LW2-the-cancellation-not-forwarded',
+      arm: 'LW2',
+      requires: ['LW1'],
+      rows: ['A11-C19'],
+      describe:
+        'query-core’s cancellation is not forwarded into the invocation, so it ends in a failure the engine notes under the request’s key, recreating the entry the removal took',
+      edits: [UNLINKED]
     },
     {
       id: 'LW2-the-stream-outlives-the-collection',
