@@ -41,8 +41,8 @@ const A_TURN_MS = 200;
 
 /**
  * The refusal that offers the two ways out, each as enough on its own, as the
- * request delivers it: the failure keeps a message's first 200 units and marks
- * the rest cut.
+ * request delivers it, which is whole: it is within the 200 units a failure's
+ * message is cut to.
  * **Read whole, and not as a pattern of names or a sentence it holds**: a
  * refusal that names both can still deny one — "you must pass `verifyEvent`
  * even inside `NostrApp`", an "either … or" whose two arms both ask for the
@@ -53,9 +53,9 @@ const A_TURN_MS = 200;
  * message, every other reads alike.
  */
 const THE_REFUSAL =
-  'nosvelte: this request has no signature verifier, so nothing would check the ' +
-  'events it returns. Either use it inside a `NostrApp` provider, which supplies ' +
-  'one, or pass `verifyEvent` explicitly. Tests … (cut)';
+  'nosvelte: this request has no signature verifier. Either use it inside a ' +
+  '`NostrApp` provider, which supplies one, or pass `verifyEvent` explicitly. ' +
+  'Tests can pass `acceptAnyEvent`.';
 
 /** Whether `message` offers the two ways out, in {@link THE_REFUSAL}'s words. */
 const offersBoth = (message: string): boolean => message === THE_REFUSAL;

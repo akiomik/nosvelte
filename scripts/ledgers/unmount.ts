@@ -52,7 +52,7 @@ const DEFAULTED_BY_ITS_CLIENT: Edit = {
 };
 /** The refusal of a request with no verifier, in the words that name both ways out. */
 const NO_VERIFIER_WORDS =
-  "      'nosvelte: this request has no signature verifier, so nothing would check the ' +\n        'events it returns. Either use it inside a `NostrApp` provider, which supplies ' +\n        'one, or pass `verifyEvent` explicitly. Tests that are not about verification ' +\n        'can pass `acceptAnyEvent` from the relay helpers to say so out loud.'";
+  "      'nosvelte: this request has no signature verifier. Either use it inside a ' +\n        '`NostrApp` provider, which supplies one, or pass `verifyEvent` explicitly. ' +\n        'Tests can pass `acceptAnyEvent`.'";
 /** The refusal of a caller's transport that answers no relays, as the stream raises it. */
 const NO_USABLE_CLIENT =
   "    throw ownedByLibrary(\n      new InvalidDescriptorError(\n        'rxNostr',\n        'could not be used — this request has no usable client: either none was supplied ' +\n          'with the other owner inputs, or the one supplied has since been disposed'\n      )\n    );";

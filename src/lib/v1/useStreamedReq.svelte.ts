@@ -143,15 +143,17 @@ const trueReason = (signal: AbortSignal): unknown =>
  * absence is checked where both inputs are known.
  *
  * The message names the two ways out, because a thrown error whose reader has
- * to go and find the fix is half a defect report.
+ * to go and find the fix is half a defect report. **It is kept within the 200
+ * units a failure's message is cut to** (`MAX_RENDERED`): the bound is for
+ * text whose length a caller chooses, and this text is the library's own, so
+ * a sentence past it is one no consumer would ever read.
  */
 function noVerifier(): never {
   throw ownedByLibrary(
     new MissingVerifierError(
-      'nosvelte: this request has no signature verifier, so nothing would check the ' +
-        'events it returns. Either use it inside a `NostrApp` provider, which supplies ' +
-        'one, or pass `verifyEvent` explicitly. Tests that are not about verification ' +
-        'can pass `acceptAnyEvent` from the relay helpers to say so out loud.'
+      'nosvelte: this request has no signature verifier. Either use it inside a ' +
+        '`NostrApp` provider, which supplies one, or pass `verifyEvent` explicitly. ' +
+        'Tests can pass `acceptAnyEvent`.'
     )
   );
 }
